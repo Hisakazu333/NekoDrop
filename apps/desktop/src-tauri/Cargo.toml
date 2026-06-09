@@ -1,0 +1,15 @@
+[package]
+name = "nekodrop-desktop"
+version = "0.1.0"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+nekodrop-core = { path = "../../../crates/nekodrop-core" }
+nekodrop-network = { path = "../../../crates/nekodrop-network" }
+nekodrop-storage = { path = "../../../crates/nekodrop-storage" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+

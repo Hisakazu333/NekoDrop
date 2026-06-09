@@ -1,0 +1,15 @@
+{
+  "name": "nekodrop",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/desktop"
+  ],
+  "scripts": {
+    "dev": "npm --workspace apps/desktop run dev",
+    "build": "npm --workspace apps/desktop run build",
+    "tauri": "npm --workspace apps/desktop run tauri",
+    "check:rust": "cargo check --workspace"
+  }
+}
+

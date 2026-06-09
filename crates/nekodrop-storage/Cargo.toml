@@ -1,0 +1,12 @@
+[package]
+name = "nekodrop-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nekodrop-core = { path = "../nekodrop-core" }
+
+[lib]
+path = "src/lib.rs"
+
