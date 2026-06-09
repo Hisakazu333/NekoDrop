@@ -6,7 +6,11 @@ license.workspace = true
 
 [dependencies]
 nekodrop-core = { path = "../nekodrop-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+nekodrop-storage = { path = "../nekodrop-storage" }
 
 [lib]
 path = "src/lib.rs"
-

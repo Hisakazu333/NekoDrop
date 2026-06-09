@@ -1,0 +1,13 @@
+[package]
+name = "nekodrop-sidecar"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+nekodrop-network = { path = "../../crates/nekodrop-network" }
+nekodrop-service = { path = "../../crates/nekodrop-service" }
+
+[[bin]]
+name = "nekodrop-sidecar"
+path = "src/main.rs"

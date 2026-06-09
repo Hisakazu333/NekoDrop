@@ -27,3 +27,25 @@ export interface TransferDto {
   progress: number;
 }
 
+export interface ManifestItemDto {
+  path: string;
+  kind: "file" | "directory";
+  size: number;
+  modified_at: string | null;
+  sha256: string | null;
+}
+
+export interface TransferSourceFileDto {
+  manifest_path: string;
+  source_path: string;
+  size: number;
+  sha256: string;
+}
+
+export interface TransferPlanDto {
+  root_name: string;
+  file_count: number;
+  total_bytes: number;
+  items: ManifestItemDto[];
+  files: TransferSourceFileDto[];
+}

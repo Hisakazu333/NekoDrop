@@ -1806,6 +1806,7 @@ version = "0.1.0"
 dependencies = [
  "nekodrop-core",
  "nekodrop-network",
+ "nekodrop-service",
  "nekodrop-storage",
  "serde",
  "tauri",
@@ -1817,13 +1818,36 @@ name = "nekodrop-network"
 version = "0.1.0"
 dependencies = [
  "nekodrop-core",
+ "nekodrop-storage",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "nekodrop-service"
+version = "0.1.0"
+dependencies = [
+ "nekodrop-core",
+ "nekodrop-network",
+ "nekodrop-storage",
+]
+
+[[package]]
+name = "nekodrop-sidecar"
+version = "0.1.0"
+dependencies = [
+ "nekodrop-network",
+ "nekodrop-service",
 ]
 
 [[package]]
 name = "nekodrop-storage"
 version = "0.1.0"
 dependencies = [
+ "hex",
  "nekodrop-core",
+ "sha2",
+ "walkdir",
 ]
 
 [[package]]

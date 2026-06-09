@@ -1,14 +1,13 @@
 [package]
-name = "nekodrop-storage"
+name = "nekodrop-service"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
 nekodrop-core = { path = "../nekodrop-core" }
-hex = "0.4"
-sha2 = "0.10"
-walkdir = "2"
+nekodrop-network = { path = "../nekodrop-network" }
+nekodrop-storage = { path = "../nekodrop-storage" }
 
 [lib]
 path = "src/lib.rs"

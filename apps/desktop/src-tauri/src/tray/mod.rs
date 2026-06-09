@@ -6,4 +6,3 @@ pub fn setup_tray(app: &mut tauri::App) -> tauri::Result<()> {
     }
     Ok(())
 }
-

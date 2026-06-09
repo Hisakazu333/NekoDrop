@@ -9,7 +9,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 nekodrop-core = { path = "../../../crates/nekodrop-core" }
 nekodrop-network = { path = "../../../crates/nekodrop-network" }
+nekodrop-service = { path = "../../../crates/nekodrop-service" }
 nekodrop-storage = { path = "../../../crates/nekodrop-storage" }
 serde = { version = "1", features = ["derive"] }
 tauri = { version = "2", features = [] }
-

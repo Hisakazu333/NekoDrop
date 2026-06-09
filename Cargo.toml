@@ -1,9 +1,11 @@
 [workspace]
 resolver = "2"
 members = [
+  "apps/sidecar",
   "apps/desktop/src-tauri",
   "crates/nekodrop-core",
   "crates/nekodrop-network",
+  "crates/nekodrop-service",
   "crates/nekodrop-storage",
 ]
 

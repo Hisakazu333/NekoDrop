@@ -10,7 +10,8 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
             commands::list_nearby_devices,
-            commands::list_transfers
+            commands::list_transfers,
+            commands::create_transfer_plan
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
