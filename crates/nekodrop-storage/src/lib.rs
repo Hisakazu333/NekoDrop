@@ -12,5 +12,5 @@ pub use manifest_builder::{
     TransferSourcePlan,
 };
 pub use receive_dir::safe_join_receive_path;
-pub use received_file::{write_received_file, ReceivedFile};
+pub use received_file::{write_received_file, write_received_file_with_progress, ReceivedFile};
 pub use resume::{ResumeFileState, ResumePlan};

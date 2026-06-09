@@ -17,11 +17,21 @@ It must support:
 
 ## Transport
 
-MVP:
+Current implemented path:
 
 - TCP for transfer sessions
+- connection code contains host and port
+- receiver opens an explicit one-shot receive listener
+- sender sends a transfer offer before any file bytes
+- receiver accepts or declines before file bytes are sent
+- receiver validates every incoming file header against the accepted offer
+- file contents are streamed as binary bytes and verified with SHA-256
+
+Planned LAN product path:
+
 - mDNS for discovery
-- UDP broadcast fallback for discovery
+- UDP broadcast fallback for discovery if mDNS is unreliable
+- trusted pairing before device-to-device offers
 
 Future:
 
@@ -104,6 +114,58 @@ Sent after user confirmation.
 
 ## Transfer Messages
 
+### Current connection-code TCP v1
+
+The current desktop build uses a compact TCP frame format before the full trusted-device protocol is introduced.
+
+Connection code:
+
+```text
+nekodrop-v1://connect?transport=tcp&host=192.168.1.24&port=45821&name=This%20Computer
+```
+
+Transfer offer frame:
+
+```json
+{
+  "protocol": "nekodrop-transfer-v1",
+  "transfer_id": "transfer-1781010000000",
+  "root_name": "Design Assets",
+  "file_count": 2,
+  "total_bytes": 2048,
+  "files": [
+    {
+      "manifest_path": "Design Assets/logo.png",
+      "size": 1024,
+      "sha256": "hex"
+    }
+  ]
+}
+```
+
+Decision frame:
+
+```json
+{
+  "accepted": true,
+  "reason": null
+}
+```
+
+After acceptance, the sender writes:
+
+```text
+u32 file_count
+repeated:
+  u32 json_header_length
+  FileFrameHeader JSON
+  raw file bytes
+```
+
+Each `FileFrameHeader` includes `manifest_path`, `size`, and `sha256`. The receiver rejects mismatched path, size, SHA-256, or file count.
+
+### Target trusted-device messages
+
 ### SEND_OFFER
 
 ```json
@@ -121,7 +183,7 @@ Sent after user confirmation.
         "kind": "file",
         "size": 124932,
         "modified_at": "2026-06-09T14:00:00Z",
-        "sha256": null
+        "sha256": "hex"
       },
       {
         "path": "screenshots",
@@ -132,7 +194,7 @@ Sent after user confirmation.
 }
 ```
 
-`sha256` may be null in the initial offer when hashing has not completed yet. Final verification still requires file hashes.
+The current implementation computes SHA-256 before sending the offer. Later trusted-device flows may introduce a lighter pre-hash offer, but file bytes must still be verified before completion.
 
 ### SEND_ACCEPT
 

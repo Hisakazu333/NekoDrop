@@ -23,6 +23,28 @@ pub fn write_received_file<R: Read>(
     expected_sha256: &str,
     reader: &mut R,
 ) -> NekoDropResult<ReceivedFile> {
+    write_received_file_with_progress(
+        receive_dir,
+        manifest_path,
+        expected_size,
+        expected_sha256,
+        reader,
+        |_| {},
+    )
+}
+
+pub fn write_received_file_with_progress<R, F>(
+    receive_dir: &Path,
+    manifest_path: &str,
+    expected_size: u64,
+    expected_sha256: &str,
+    reader: &mut R,
+    mut on_progress: F,
+) -> NekoDropResult<ReceivedFile>
+where
+    R: Read,
+    F: FnMut(u64),
+{
     if expected_sha256.trim().is_empty() {
         return Err(NekoDropError::Storage(
             "expected SHA-256 checksum cannot be empty".into(),
@@ -86,6 +108,7 @@ pub fn write_received_file<R: Read>(
         hasher.update(&buffer[..read]);
         bytes_written += read as u64;
         remaining -= read as u64;
+        on_progress(bytes_written);
     }
 
     partial_file.flush().map_err(|error| {

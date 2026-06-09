@@ -41,6 +41,8 @@ Exit criteria:
 
 Goal: model transfers before networking.
 
+Status: implemented for the connection-code flow.
+
 Deliverables:
 
 - drag and drop files
@@ -54,9 +56,33 @@ Exit criteria:
 
 - selected files become a transfer manifest
 - UI displays file count and total size
-- transfer state can be simulated
+- transfer state is backed by real scan and checksum data
 
-## Phase 3: LAN Discovery
+## Phase 3: Connection-Code Transfer MVP
+
+Goal: make transfer real before automatic discovery and pairing.
+
+Status: implemented for local TCP connection codes.
+
+Deliverables:
+
+- open receive listener on the desktop app
+- generate a connection code for the other computer
+- send a transfer offer before file bytes
+- accept or decline incoming transfer inside the app
+- stream files over TCP
+- show real progress, speed, ETA, and current file
+- verify incoming files with SHA-256
+- close an idle receive listener
+
+Exit criteria:
+
+- two app instances can transfer files by connection code
+- receiver can reject before any file bytes are sent
+- received files fail if headers do not match the accepted offer
+- no fake devices, fake history, or simulated transfer rows appear in the UI
+
+## Phase 4: LAN Discovery
 
 Goal: show nearby devices.
 
@@ -73,7 +99,7 @@ Exit criteria:
 - two app instances on the same LAN can see each other
 - device name and platform appear correctly
 
-## Phase 4: Pairing
+## Phase 5: Pairing
 
 Goal: trusted device relationship.
 
@@ -90,9 +116,9 @@ Exit criteria:
 - untrusted device cannot receive file offers
 - trusted devices persist after restart
 
-## Phase 5: File Transfer MVP
+## Phase 6: File Transfer Productization
 
-Goal: send files between two computers.
+Goal: move from connection-code transfer to trusted-device transfer.
 
 Deliverables:
 
@@ -100,6 +126,8 @@ Deliverables:
 - receive confirmation
 - TCP chunk streaming
 - progress events
+- speed and ETA display
+- close receive listener
 - cancellation
 - SHA-256 verification
 - reveal received file
@@ -110,7 +138,7 @@ Exit criteria:
 - Windows to Mac file transfer works
 - completed file verifies correctly
 
-## Phase 6: Folder Transfer and Resume
+## Phase 7: Folder Transfer and Resume
 
 Goal: make large practical transfers reliable.
 
@@ -127,7 +155,7 @@ Exit criteria:
 - folder transfer preserves structure
 - interrupted large file can resume from a partial state
 
-## Phase 7: Polish
+## Phase 8: Polish
 
 Goal: make the app feel like a real utility.
 
@@ -157,4 +185,3 @@ Potential later features:
 - local folder sync
 - QR code pairing
 - transfer compression option
-

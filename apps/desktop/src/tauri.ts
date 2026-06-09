@@ -4,7 +4,21 @@ type CommandName =
   | "get_app_snapshot"
   | "list_nearby_devices"
   | "list_transfers"
-  | "create_transfer_plan";
+  | "create_transfer_plan"
+  | "create_transfer_plan_from_text"
+  | "send_paths_to_code"
+  | "select_send_files"
+  | "select_send_folders"
+  | "select_receive_dir"
+  | "open_path"
+  | "start_receive_once"
+  | "stop_receive_once"
+  | "get_receive_status"
+  | "get_receive_session"
+  | "get_last_receive_report"
+  | "get_pending_receive_offer"
+  | "respond_receive_offer"
+  | "get_transfer_status";
 
 export async function invokeCommand<T>(
   command: CommandName,

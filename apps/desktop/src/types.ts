@@ -49,3 +49,61 @@ export interface TransferPlanDto {
   items: ManifestItemDto[];
   files: TransferSourceFileDto[];
 }
+
+export interface ReceiveSessionDto {
+  bind_addr: string;
+  receive_dir: string;
+  connection_code: string;
+}
+
+export interface SentFileDto {
+  manifest_path: string;
+  bytes_sent: number;
+}
+
+export interface SendReportDto {
+  root_name: string;
+  file_count: number;
+  total_bytes: number;
+  sent_files: SentFileDto[];
+}
+
+export interface ReceivedFileDto {
+  path: string;
+  manifest_path: string;
+  bytes_written: number;
+  sha256: string;
+  verified: boolean;
+}
+
+export interface ReceiveReportDto {
+  files: ReceivedFileDto[];
+}
+
+export interface PendingReceiveFileDto {
+  manifest_path: string;
+  size: number;
+  sha256: string;
+}
+
+export interface PendingReceiveOfferDto {
+  transfer_id: string;
+  root_name: string;
+  file_count: number;
+  total_bytes: number;
+  files: PendingReceiveFileDto[];
+}
+
+export interface TransferStatusDto {
+  direction: "send" | "receive" | string;
+  phase: string;
+  root_name: string | null;
+  file_count: number;
+  file_index: number;
+  current_file: string | null;
+  bytes_transferred: number;
+  total_bytes: number;
+  progress: number;
+  message: string;
+  updated_at_ms: number;
+}
