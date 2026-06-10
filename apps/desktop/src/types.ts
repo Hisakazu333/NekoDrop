@@ -54,13 +54,20 @@ export interface DiscoveryStatusDto {
 
 export interface TransferDto {
   id: string;
-  peer_device_id: string;
+  root_name: string;
+  peer_device_id: string | null;
+  peer_name: string | null;
+  target_host: string | null;
   direction: string;
   status: string;
   file_count: number;
   total_bytes: number;
   transferred_bytes: number;
   progress: number;
+  receive_dir: string | null;
+  error_message: string | null;
+  created_at_ms: number;
+  updated_at_ms: number;
 }
 
 export interface ManifestItemDto {

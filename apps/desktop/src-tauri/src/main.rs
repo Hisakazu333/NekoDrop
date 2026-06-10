@@ -3,6 +3,7 @@ mod commands;
 mod device_identity;
 mod discovery;
 mod network;
+mod transfer_history;
 mod tray;
 mod trusted_devices;
 

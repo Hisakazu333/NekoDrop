@@ -13,7 +13,7 @@ use crate::network::primary_lan_ip;
 
 const SERVICE_TYPE: &str = "_nekodrop._tcp.local.";
 const REGISTER_INTERVAL: Duration = Duration::from_secs(2);
-const DEVICE_STALE_AFTER: Duration = Duration::from_secs(12);
+const DEVICE_STALE_AFTER: Duration = Duration::from_secs(90);
 
 pub fn start_discovery(state: &AppState) {
     let device_identity = state.device_identity.clone();

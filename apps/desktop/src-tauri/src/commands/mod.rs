@@ -10,19 +10,15 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nekodrop_core::{
-    Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, NekoDropError,
-    TransferJob,
-};
+use nekodrop_core::{Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind};
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
     TransferProgress,
 };
 use nekodrop_service::{
     accept_incoming_stream, create_transfer_plan as create_service_transfer_plan,
-    endpoint_from_connection_code, send_pairing_request, send_plan_with_progress,
-    IncomingSessionReport, TransferProgressEvent, TransferReceiveReport, TransferSendReport,
-    TransferSourceFile, TransferSourcePlan,
+    send_pairing_request, send_plan_with_progress, IncomingSessionReport, TransferProgressEvent,
+    TransferReceiveReport, TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
 use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
@@ -33,6 +29,9 @@ use crate::app_state::{
     ReceiveDecision, TransferStatusState,
 };
 use crate::network::primary_lan_ip;
+use crate::transfer_history::{
+    new_transfer_history_record, push_transfer_history_record, TransferHistoryRecord,
+};
 use crate::trusted_devices::{
     pairing_code_for_device, pairing_code_for_values, save_trusted_devices, trust_device_record,
     trusted_device_record_from_remote, trusted_record_matches, upsert_trusted_device,
@@ -86,13 +85,20 @@ pub struct TrustedDeviceDto {
 #[derive(Debug, Clone, Serialize)]
 pub struct TransferDto {
     pub id: String,
-    pub peer_device_id: String,
+    pub root_name: String,
+    pub peer_device_id: Option<String>,
+    pub peer_name: Option<String>,
+    pub target_host: Option<String>,
     pub direction: String,
     pub status: String,
     pub file_count: usize,
     pub total_bytes: u64,
     pub transferred_bytes: u64,
     pub progress: f32,
+    pub receive_dir: Option<String>,
+    pub error_message: Option<String>,
+    pub created_at_ms: u128,
+    pub updated_at_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -429,7 +435,10 @@ pub fn respond_pairing_request(state: State<'_, AppState>, accept: bool) -> Resu
 
 #[tauri::command]
 pub fn list_transfers(state: State<'_, AppState>) -> Result<Vec<TransferDto>, String> {
-    let transfers = state.transfers.lock().map_err(|error| error.to_string())?;
+    let transfers = state
+        .transfer_history
+        .lock()
+        .map_err(|error| error.to_string())?;
     Ok(transfers.iter().map(transfer_to_dto).collect())
 }
 
@@ -453,9 +462,14 @@ pub fn send_paths_to_code(
     connection_code: String,
     paths_text: String,
 ) -> Result<SendReportDto, String> {
-    let endpoint =
-        endpoint_from_connection_code(&connection_code).map_err(|error| error.to_string())?;
-    send_paths_to_endpoint(&state, endpoint, paths_text)
+    let ticket = ConnectionTicket::parse(&connection_code).map_err(|error| error.to_string())?;
+    let endpoint = ticket.endpoint.clone();
+    let peer = TransferPeer {
+        device_id: ticket.device_id.clone(),
+        name: ticket.device_name.clone(),
+        target_host: Some(endpoint_label(&endpoint)),
+    };
+    send_paths_to_endpoint(&state, endpoint, paths_text, peer)
 }
 
 #[tauri::command]
@@ -464,27 +478,84 @@ pub fn send_paths_to_device(
     device_id: String,
     paths_text: String,
 ) -> Result<SendReportDto, String> {
-    let endpoint = {
-        let devices = state
-            .nearby_devices
-            .lock()
-            .map_err(|error| error.to_string())?;
-        let device = devices
-            .iter()
-            .find(|item| item.id.as_str() == device_id)
-            .ok_or_else(|| "设备不在线或尚未被自动扫描到".to_string())?;
-        Endpoint::tcp(device.host.clone(), device.port)
-    };
-    send_paths_to_endpoint(&state, endpoint, paths_text)
+    let (endpoint, peer) = endpoint_and_peer_for_device_id(&state, &device_id)?;
+    send_paths_to_endpoint(&state, endpoint, paths_text, peer)
+}
+
+#[derive(Debug, Clone)]
+struct TransferPeer {
+    device_id: Option<String>,
+    name: Option<String>,
+    target_host: Option<String>,
+}
+
+fn endpoint_and_peer_for_device_id(
+    state: &AppState,
+    device_id: &str,
+) -> Result<(Endpoint, TransferPeer), String> {
+    if let Some((endpoint, peer)) = endpoint_and_peer_from_nearby_device(state, device_id)? {
+        return Ok((endpoint, peer));
+    }
+    if let Some((endpoint, peer)) = endpoint_and_peer_from_trusted_device(state, device_id)? {
+        return Ok((endpoint, peer));
+    }
+    Err("设备不在线或尚未被自动扫描到，请确认对方收件开启后重试。".to_string())
+}
+
+fn endpoint_and_peer_from_nearby_device(
+    state: &AppState,
+    device_id: &str,
+) -> Result<Option<(Endpoint, TransferPeer)>, String> {
+    let devices = state
+        .nearby_devices
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(devices
+        .iter()
+        .find(|item| item.id.as_str() == device_id)
+        .map(|device| {
+            let endpoint = Endpoint::tcp(device.host.clone(), device.port);
+            let peer = TransferPeer {
+                device_id: Some(device.id.as_str().to_string()),
+                name: Some(device.name.clone()),
+                target_host: Some(endpoint_label(&endpoint)),
+            };
+            (endpoint, peer)
+        }))
+}
+
+fn endpoint_and_peer_from_trusted_device(
+    state: &AppState,
+    device_id: &str,
+) -> Result<Option<(Endpoint, TransferPeer)>, String> {
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(trusted_devices
+        .iter()
+        .find(|item| item.device_id == device_id)
+        .map(|device| {
+            let endpoint = Endpoint::tcp(device.host.clone(), device.port);
+            let peer = TransferPeer {
+                device_id: Some(device.device_id.clone()),
+                name: Some(device.device_name.clone()),
+                target_host: Some(endpoint_label(&endpoint)),
+            };
+            (endpoint, peer)
+        }))
 }
 
 fn send_paths_to_endpoint(
     state: &AppState,
     endpoint: Endpoint,
     paths_text: String,
+    peer: TransferPeer,
 ) -> Result<SendReportDto, String> {
     let paths = parse_paths_text(&paths_text)?;
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
+    let started_at_ms = now_ms();
+    let transfer_id = format!("send-{started_at_ms}");
     set_transfer_status(
         &state.transfer_status,
         TransferStatusState {
@@ -507,6 +578,7 @@ fn send_paths_to_endpoint(
         }
     })
     .map_err(|error| {
+        let message = friendly_transfer_error(&error.to_string());
         set_transfer_status(
             &state.transfer_status,
             TransferStatusState {
@@ -518,12 +590,29 @@ fn send_paths_to_endpoint(
                 current_file: None,
                 bytes_transferred: 0,
                 total_bytes: plan.total_bytes(),
-                message: friendly_transfer_error(&error.to_string()),
+                message: message.clone(),
                 updated_at_ms: now_ms(),
             },
         );
+        let mut record = new_transfer_history_record(
+            transfer_id.clone(),
+            "send",
+            "failed",
+            plan.manifest.root_name.clone(),
+            plan.file_count(),
+            plan.total_bytes(),
+            0,
+            started_at_ms,
+        );
+        record.peer_device_id = peer.device_id.clone();
+        record.peer_name = peer.name.clone();
+        record.target_host = peer.target_host.clone();
+        record.error_message = Some(message);
+        record.updated_at_ms = now_ms();
+        let _ = push_transfer_history_record(&state.transfer_history, record);
         error.to_string()
     })?;
+    let transferred_bytes = report.plan.total_bytes();
     set_transfer_status(
         &state.transfer_status,
         TransferStatusState {
@@ -539,6 +628,21 @@ fn send_paths_to_endpoint(
             updated_at_ms: now_ms(),
         },
     );
+    let mut record = new_transfer_history_record(
+        transfer_id,
+        "send",
+        "completed",
+        report.plan.manifest.root_name.clone(),
+        report.plan.file_count(),
+        report.plan.total_bytes(),
+        transferred_bytes,
+        started_at_ms,
+    );
+    record.peer_device_id = peer.device_id;
+    record.peer_name = peer.name;
+    record.target_host = peer.target_host;
+    record.updated_at_ms = now_ms();
+    let _ = push_transfer_history_record(&state.transfer_history, record);
     Ok(send_report_to_dto(&report))
 }
 
@@ -680,66 +784,11 @@ pub fn start_receive_once(
     let transfer_status = state.transfer_status.clone();
     let last_receive_report = state.last_receive_report.clone();
     let trusted_devices = state.trusted_devices.clone();
+    let transfer_history = state.transfer_history.clone();
     let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
-    thread::spawn(move || {
-        let pending_for_decision = pending_receive_offer.clone();
-        let pending_for_pairing = pending_pairing_request.clone();
-        let status_for_decision = transfer_status.clone();
-        let status_for_progress = transfer_status.clone();
-        let trusted_for_pairing = trusted_devices.clone();
-        let local_for_pairing = local_identity.clone();
-        let result = loop {
-            if cancel.load(Ordering::SeqCst) {
-                break None;
-            }
-
-            match listener.accept() {
-                Ok((mut stream, peer_addr)) => {
-                    if let Err(error) = stream.set_nonblocking(false) {
-                        break Some(Err(NekoDropError::Network(format!(
-                            "failed to prepare TCP stream: {error}"
-                        ))));
-                    }
-                    let peer_host = peer_addr.ip().to_string();
-                    break Some(accept_incoming_stream(
-                        &mut stream,
-                        &receive_dir_for_thread,
-                        move |offer| {
-                            wait_for_receive_decision(
-                                offer,
-                                &pending_for_decision,
-                                &status_for_decision,
-                            )
-                        },
-                        move |request| {
-                            wait_for_pairing_decision(
-                                request,
-                                &peer_host,
-                                &pending_for_pairing,
-                                &trusted_for_pairing,
-                                &local_for_pairing,
-                            )
-                        },
-                        move |event| {
-                            if let Some(status) = status_from_progress_event("receive", None, event)
-                            {
-                                set_transfer_status(&status_for_progress, status);
-                            }
-                        },
-                    ));
-                }
-                Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                    thread::sleep(Duration::from_millis(120));
-                }
-                Err(error) => {
-                    break Some(Err(NekoDropError::Network(format!(
-                        "failed to accept TCP connection: {error}"
-                    ))));
-                }
-            }
-        };
-        let Some(result) = result else {
+    thread::spawn(move || loop {
+        if cancel.load(Ordering::SeqCst) {
             if let Ok(mut status) = receive_status.lock() {
                 *status = Some("收件已关闭".to_string());
             }
@@ -762,90 +811,196 @@ pub fn start_receive_once(
                 },
             );
             return;
-        };
-        if let Ok(mut status) = receive_status.lock() {
-            *status = Some(match &result {
-                Ok(IncomingSessionReport::Transfer(report)) => {
-                    format!("接收完成：{} 个文件", report.files.len())
-                }
-                Ok(IncomingSessionReport::Pairing(decision)) if decision.accepted => {
-                    "配对完成".to_string()
-                }
-                Ok(IncomingSessionReport::Pairing(_)) => "已拒绝配对".to_string(),
-                Err(_) if is_receive_terminal_offer_status(&transfer_status, "declined") => {
-                    "已拒绝这次传输".to_string()
-                }
-                Err(_) if is_receive_terminal_offer_status(&transfer_status, "expired") => {
-                    "等待确认超时，已自动拒绝".to_string()
-                }
-                Err(_) if is_receive_terminal_offer_status(&transfer_status, "closed") => {
-                    "收件已关闭".to_string()
-                }
-                Err(error) => format!("接收失败：{error}"),
-            });
         }
-        if let Ok(mut pending) = pending_receive_offer.lock() {
-            *pending = None;
-        }
-        if let Ok(mut pending) = pending_pairing_request.lock() {
-            *pending = None;
-        }
-        if let Ok(report) = result {
-            match report {
-                IncomingSessionReport::Transfer(report) => {
-                    let total_bytes = report.files.iter().map(|file| file.bytes_written).sum();
+
+        match listener.accept() {
+            Ok((mut stream, peer_addr)) => {
+                if let Err(error) = stream.set_nonblocking(false) {
                     set_transfer_status(
                         &transfer_status,
                         TransferStatusState {
                             direction: "receive".to_string(),
-                            phase: "completed".to_string(),
-                            root_name: None,
-                            file_count: report.files.len(),
-                            file_index: report.files.len(),
-                            current_file: None,
-                            bytes_transferred: total_bytes,
-                            total_bytes,
-                            message: "接收完成，校验通过".to_string(),
-                            updated_at_ms: now_ms(),
-                        },
-                    );
-                    if let Ok(mut last_report) = last_receive_report.lock() {
-                        *last_report = Some(report);
-                    }
-                }
-                IncomingSessionReport::Pairing(decision) => {
-                    set_transfer_status(
-                        &transfer_status,
-                        TransferStatusState {
-                            direction: "receive".to_string(),
-                            phase: if decision.accepted {
-                                "completed"
-                            } else {
-                                "declined"
-                            }
-                            .to_string(),
+                            phase: "failed".to_string(),
                             root_name: None,
                             file_count: 0,
                             file_index: 0,
                             current_file: None,
                             bytes_transferred: 0,
                             total_bytes: 0,
-                            message: if decision.accepted {
-                                "配对完成，设备已加入可信列表"
-                            } else {
-                                "已拒绝配对"
-                            }
-                            .to_string(),
+                            message: format!("接收连接准备失败：{error}"),
                             updated_at_ms: now_ms(),
                         },
                     );
+                    continue;
+                }
+                let peer_host = peer_addr.ip().to_string();
+                let pending_for_decision = pending_receive_offer.clone();
+                let pending_for_pairing = pending_pairing_request.clone();
+                let status_for_decision = transfer_status.clone();
+                let status_for_progress = transfer_status.clone();
+                let trusted_for_pairing = trusted_devices.clone();
+                let local_for_pairing = local_identity.clone();
+                let peer_host_for_pairing = peer_host.clone();
+                let result = accept_incoming_stream(
+                    &mut stream,
+                    &receive_dir_for_thread,
+                    move |offer| {
+                        wait_for_receive_decision(
+                            offer,
+                            &pending_for_decision,
+                            &status_for_decision,
+                        )
+                    },
+                    move |request| {
+                        wait_for_pairing_decision(
+                            request,
+                            &peer_host_for_pairing,
+                            &pending_for_pairing,
+                            &trusted_for_pairing,
+                            &local_for_pairing,
+                        )
+                    },
+                    move |event| {
+                        if let Some(status) = status_from_progress_event("receive", None, event) {
+                            set_transfer_status(&status_for_progress, status);
+                        }
+                    },
+                );
+                if let Ok(mut status) = receive_status.lock() {
+                    *status = Some(match &result {
+                        Ok(IncomingSessionReport::Transfer(report)) => {
+                            format!("接收完成：{} 个文件", report.files.len())
+                        }
+                        Ok(IncomingSessionReport::Pairing(decision)) if decision.accepted => {
+                            "配对完成".to_string()
+                        }
+                        Ok(IncomingSessionReport::Pairing(_)) => "已拒绝配对".to_string(),
+                        Err(_)
+                            if is_receive_terminal_offer_status(&transfer_status, "declined") =>
+                        {
+                            "已拒绝这次传输".to_string()
+                        }
+                        Err(_) if is_receive_terminal_offer_status(&transfer_status, "expired") => {
+                            "等待确认超时，已自动拒绝".to_string()
+                        }
+                        Err(_) if is_receive_terminal_offer_status(&transfer_status, "closed") => {
+                            "收件已关闭".to_string()
+                        }
+                        Err(error) => format!("接收失败：{error}"),
+                    });
+                }
+                if let Ok(mut pending) = pending_receive_offer.lock() {
+                    *pending = None;
+                }
+                if let Ok(mut pending) = pending_pairing_request.lock() {
+                    *pending = None;
+                }
+                if let Ok(report) = result {
+                    match report {
+                        IncomingSessionReport::Transfer(report) => {
+                            let total_bytes =
+                                report.files.iter().map(|file| file.bytes_written).sum();
+                            set_transfer_status(
+                                &transfer_status,
+                                TransferStatusState {
+                                    direction: "receive".to_string(),
+                                    phase: "completed".to_string(),
+                                    root_name: None,
+                                    file_count: report.files.len(),
+                                    file_index: report.files.len(),
+                                    current_file: None,
+                                    bytes_transferred: total_bytes,
+                                    total_bytes,
+                                    message: "接收完成，继续等待下一次连接".to_string(),
+                                    updated_at_ms: now_ms(),
+                                },
+                            );
+                            let root_name = received_root_name(&report);
+                            let mut record = new_transfer_history_record(
+                                format!("receive-{}", now_ms()),
+                                "receive",
+                                "completed",
+                                root_name,
+                                report.files.len(),
+                                total_bytes,
+                                total_bytes,
+                                now_ms(),
+                            );
+                            record.target_host = Some(peer_host.clone());
+                            record.receive_dir = Some(receive_dir_for_thread.display().to_string());
+                            let _ = push_transfer_history_record(&transfer_history, record);
+                            if let Ok(mut last_report) = last_receive_report.lock() {
+                                *last_report = Some(report);
+                            }
+                        }
+                        IncomingSessionReport::Pairing(decision) => {
+                            set_transfer_status(
+                                &transfer_status,
+                                TransferStatusState {
+                                    direction: "receive".to_string(),
+                                    phase: if decision.accepted {
+                                        "completed"
+                                    } else {
+                                        "declined"
+                                    }
+                                    .to_string(),
+                                    root_name: None,
+                                    file_count: 0,
+                                    file_index: 0,
+                                    current_file: None,
+                                    bytes_transferred: 0,
+                                    total_bytes: 0,
+                                    message: if decision.accepted {
+                                        "配对完成，继续等待下一次连接"
+                                    } else {
+                                        "已拒绝配对"
+                                    }
+                                    .to_string(),
+                                    updated_at_ms: now_ms(),
+                                },
+                            );
+                        }
+                    }
+                } else if !is_receive_terminal_offer_status(&transfer_status, "declined")
+                    && !is_receive_terminal_offer_status(&transfer_status, "expired")
+                    && !is_receive_terminal_offer_status(&transfer_status, "closed")
+                {
+                    if let Ok(status) = receive_status.lock() {
+                        let failure_message = status
+                            .clone()
+                            .unwrap_or_else(|| "接收失败，继续等待下一次连接".to_string());
+                        set_transfer_status(
+                            &transfer_status,
+                            TransferStatusState {
+                                direction: "receive".to_string(),
+                                phase: "failed".to_string(),
+                                root_name: None,
+                                file_count: 0,
+                                file_index: 0,
+                                current_file: None,
+                                bytes_transferred: 0,
+                                total_bytes: 0,
+                                message: failure_message.clone(),
+                                updated_at_ms: now_ms(),
+                            },
+                        );
+                        push_receive_failure_history(
+                            &transfer_history,
+                            &transfer_status,
+                            &peer_host,
+                            &receive_dir_for_thread,
+                            failure_message,
+                        );
+                    }
                 }
             }
-        } else if !is_receive_terminal_offer_status(&transfer_status, "declined")
-            && !is_receive_terminal_offer_status(&transfer_status, "expired")
-            && !is_receive_terminal_offer_status(&transfer_status, "closed")
-        {
-            if let Ok(status) = receive_status.lock() {
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(120));
+            }
+            Err(error) => {
+                if let Ok(mut status) = receive_status.lock() {
+                    *status = Some(format!("接收监听异常：{error}"));
+                }
                 set_transfer_status(
                     &transfer_status,
                     TransferStatusState {
@@ -857,14 +1012,12 @@ pub fn start_receive_once(
                         current_file: None,
                         bytes_transferred: 0,
                         total_bytes: 0,
-                        message: status.clone().unwrap_or_else(|| "接收失败".to_string()),
+                        message: format!("接收监听异常：{error}"),
                         updated_at_ms: now_ms(),
                     },
                 );
+                thread::sleep(Duration::from_millis(500));
             }
-        }
-        if let Ok(mut active_session) = receive_session.lock() {
-            *active_session = None;
         }
     });
 
@@ -1174,6 +1327,58 @@ fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
     }
 }
 
+fn received_root_name(report: &TransferReceiveReport) -> String {
+    let Some(first_file) = report.files.first() else {
+        return "接收文件".to_string();
+    };
+    let first_path = first_file.manifest_path.trim_matches('/');
+    let Some((root, _)) = first_path.split_once('/') else {
+        return first_path.to_string();
+    };
+    if root.trim().is_empty() {
+        "接收文件".to_string()
+    } else {
+        root.to_string()
+    }
+}
+
+fn push_receive_failure_history(
+    transfer_history: &Arc<Mutex<Vec<TransferHistoryRecord>>>,
+    transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
+    peer_host: &str,
+    receive_dir: &PathBuf,
+    error_message: String,
+) {
+    let status = transfer_status
+        .lock()
+        .ok()
+        .and_then(|status| status.clone());
+    let now = now_ms();
+    let mut record = new_transfer_history_record(
+        format!("receive-{now}"),
+        "receive",
+        "failed",
+        status
+            .as_ref()
+            .and_then(|status| status.root_name.clone())
+            .unwrap_or_else(|| "接收失败".to_string()),
+        status.as_ref().map(|status| status.file_count).unwrap_or(0),
+        status
+            .as_ref()
+            .map(|status| status.total_bytes)
+            .unwrap_or(0),
+        status
+            .as_ref()
+            .map(|status| status.bytes_transferred)
+            .unwrap_or(0),
+        now,
+    );
+    record.target_host = Some(peer_host.to_string());
+    record.receive_dir = Some(receive_dir.display().to_string());
+    record.error_message = Some(error_message);
+    let _ = push_transfer_history_record(transfer_history, record);
+}
+
 fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
     PendingReceiveOfferDto {
         transfer_id: offer.transfer_id.clone(),
@@ -1226,16 +1431,28 @@ fn transfer_status_to_dto(status: &TransferStatusState) -> TransferStatusDto {
     }
 }
 
-fn transfer_to_dto(job: &TransferJob) -> TransferDto {
+fn transfer_to_dto(record: &TransferHistoryRecord) -> TransferDto {
+    let progress = if record.total_bytes == 0 {
+        0.0
+    } else {
+        (record.transferred_bytes as f32 / record.total_bytes as f32).clamp(0.0, 1.0)
+    };
     TransferDto {
-        id: job.id.as_str().to_string(),
-        peer_device_id: job.peer_device_id.as_str().to_string(),
-        direction: format!("{:?}", job.direction),
-        status: format!("{:?}", job.status),
-        file_count: job.manifest.file_count(),
-        total_bytes: job.manifest.total_bytes(),
-        transferred_bytes: job.transferred_bytes,
-        progress: job.progress(),
+        id: record.id.clone(),
+        root_name: record.root_name.clone(),
+        peer_device_id: record.peer_device_id.clone(),
+        peer_name: record.peer_name.clone(),
+        target_host: record.target_host.clone(),
+        direction: record.direction.clone(),
+        status: record.status.clone(),
+        file_count: record.file_count,
+        total_bytes: record.total_bytes,
+        transferred_bytes: record.transferred_bytes,
+        progress,
+        receive_dir: record.receive_dir.clone(),
+        error_message: record.error_message.clone(),
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
     }
 }
 
@@ -1523,6 +1740,10 @@ fn set_transfer_status(
     if let Ok(mut slot) = transfer_status.lock() {
         *slot = Some(status);
     }
+}
+
+fn endpoint_label(endpoint: &Endpoint) -> String {
+    format!("{}:{}", endpoint.host, endpoint.port)
 }
 
 fn friendly_transfer_error(error: &str) -> String {

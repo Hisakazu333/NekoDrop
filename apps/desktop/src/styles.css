@@ -1077,6 +1077,10 @@ input {
   margin-top: 12px;
 }
 
+.recent-block.is-compact {
+  margin-top: 4px;
+}
+
 .recent-row {
   grid-template-columns: 72px minmax(0, 1fr) auto;
   gap: 12px;
@@ -1099,4 +1103,9 @@ input {
 
 .recent-row small {
   color: var(--muted);
+}
+
+.recent-row.is-failed span,
+.recent-row.is-failed strong {
+  color: var(--red);
 }

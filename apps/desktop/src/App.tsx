@@ -12,6 +12,7 @@ import type {
   ReceiveSessionDto,
   SendReportDto,
   TrustedDeviceDto,
+  TransferDto,
   TransferPlanDto,
   TransferStatusDto
 } from "./types";
@@ -46,7 +47,9 @@ export function App() {
   const [pendingReceiveOffer, setPendingReceiveOffer] = useState<PendingReceiveOfferDto | null>(null);
   const [pendingPairingRequest, setPendingPairingRequest] = useState<PendingPairingRequestDto | null>(null);
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
+  const [transfers, setTransfers] = useState<TransferDto[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
@@ -71,8 +74,9 @@ export function App() {
   const selectedDevice = useMemo(
     () =>
       trustedNearbyDevices.find((device) => device.id === selectedDeviceId) ??
+      (selectedDeviceSnapshot?.id === selectedDeviceId ? selectedDeviceSnapshot : null) ??
       null,
-    [selectedDeviceId, trustedNearbyDevices]
+    [selectedDeviceId, selectedDeviceSnapshot, trustedNearbyDevices]
   );
   const trimmedConnectionCode = connectionCode.trim();
   const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
@@ -118,8 +122,9 @@ export function App() {
 
   useEffect(() => {
     if (!selectedDeviceId) return;
-    if (nearbyDevices.some((device) => device.id === selectedDeviceId)) return;
-    setSelectedDeviceId(null);
+    const latestDevice = nearbyDevices.find((device) => device.id === selectedDeviceId);
+    if (!latestDevice || latestDevice.trust_state !== "Trusted") return;
+    setSelectedDeviceSnapshot(latestDevice);
   }, [nearbyDevices, selectedDeviceId]);
 
   useEffect(() => {
@@ -127,6 +132,7 @@ export function App() {
     if (selectedDeviceId || connectionCodeOpen || trimmedConnectionCode.length > 0) return;
     if (trustedNearbyDevices.length !== 1) return;
     setSelectedDeviceId(trustedNearbyDevices[0].id);
+    setSelectedDeviceSnapshot(trustedNearbyDevices[0]);
   }, [connectionCodeOpen, mode, selectedDeviceId, trimmedConnectionCode.length, trustedNearbyDevices]);
 
   useEffect(() => {
@@ -199,7 +205,7 @@ export function App() {
   }
 
   async function refreshReceiveState() {
-    const [status, session, report, pendingOffer, pairingRequest, nextTransferStatus, devices, discovery] = await Promise.all([
+    const [status, session, report, pendingOffer, pairingRequest, nextTransferStatus, devices, discovery, nextTransfers] = await Promise.all([
       invokeCommand<string | null>("get_receive_status"),
       invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
       invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
@@ -207,7 +213,8 @@ export function App() {
       invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
       invokeCommand<TransferStatusDto | null>("get_transfer_status"),
       invokeCommand<DeviceDto[]>("list_nearby_devices"),
-      invokeCommand<DiscoveryStatusDto>("get_discovery_status")
+      invokeCommand<DiscoveryStatusDto>("get_discovery_status"),
+      invokeCommand<TransferDto[]>("list_transfers")
     ]);
     setReceiveStatus(status);
     setReceiveSession(session);
@@ -217,7 +224,13 @@ export function App() {
     setTransferStatus(nextTransferStatus);
     setNearbyDevices(devices);
     setDiscoveryStatus(discovery);
+    setTransfers(nextTransfers);
     if (pendingOffer || pairingRequest) setMode("receive");
+  }
+
+  async function refreshTransfers() {
+    const nextTransfers = await invokeCommand<TransferDto[]>("list_transfers");
+    setTransfers(nextTransfers);
   }
 
   async function pickFiles() {
@@ -356,8 +369,10 @@ export function App() {
       });
       setSendReport(report);
       setToast(`发送完成：${report.file_count} 个文件`);
+      await refreshTransfers();
     } catch (nextError) {
       setError(errorMessage(nextError));
+      await refreshTransfers().catch(() => undefined);
     } finally {
       setBusy(null);
     }
@@ -381,9 +396,11 @@ export function App() {
       });
       setSendReport(report);
       setToast(`已发送到 ${device.name}`);
+      await refreshTransfers();
     } catch (nextError) {
       setMode("send");
       setError(deviceSendErrorMessage(errorMessage(nextError)));
+      await refreshTransfers().catch(() => undefined);
     } finally {
       setBusy(null);
     }
@@ -418,6 +435,11 @@ export function App() {
         deviceId: device.id
       });
       setSelectedDeviceId(trusted.device_id);
+      setSelectedDeviceSnapshot({
+        ...device,
+        trust_state: "Trusted",
+        pairing_code: trusted.pairing_code
+      });
       setConnectionCodeOpen(false);
       setToast(`配对完成：${trusted.device_name} · ${trusted.pairing_code}`);
       await refreshReceiveState();
@@ -623,6 +645,7 @@ export function App() {
                     onChange={(event) => {
                       setConnectionCode(event.target.value);
                       setSelectedDeviceId(null);
+                      setSelectedDeviceSnapshot(null);
                     }}
                     aria-label="对方连接码"
                     placeholder="连接码"
@@ -641,6 +664,7 @@ export function App() {
                       onClick={() => {
                         setConnectionCodeOpen((open) => !open);
                         setSelectedDeviceId(null);
+                        setSelectedDeviceSnapshot(null);
                       }}
                       title="备用码"
                       type="button"
@@ -673,6 +697,7 @@ export function App() {
                 selectedDeviceId={selectedDeviceId}
                 onSelectDevice={(device) => {
                   setSelectedDeviceId(device.id);
+                  setSelectedDeviceSnapshot(device);
                   setConnectionCodeOpen(false);
                   setConnectionCode("");
                   setError(null);
@@ -701,7 +726,7 @@ export function App() {
                 />
               ) : null}
 
-              <RecentActivity sendReport={sendReport} receiveReport={receiveReport} />
+              <RecentActivity transfers={transfers} />
             </div>
           ) : (
             <div className="single-workbench">
@@ -726,12 +751,14 @@ export function App() {
                   setConnectionCode={(value) => {
                     setConnectionCode(value);
                     setSelectedDeviceId(null);
+                    setSelectedDeviceSnapshot(null);
                   }}
                   setConnectionCodeOpen={setConnectionCodeOpen}
                   onCopyConnectionCode={copyConnectionCode}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onSelectDevice={(device) => {
                     setSelectedDeviceId(device.id);
+                    setSelectedDeviceSnapshot(device);
                     setConnectionCodeOpen(false);
                     setConnectionCode("");
                     setError(null);
@@ -767,6 +794,7 @@ export function App() {
                 manualPaths={manualPaths}
                 plan={plan}
                 selectedPaths={selectedPaths}
+                transfers={transfers}
                 setManualPaths={(value) => {
                   setManualPaths(value);
                   setPlan(null);
@@ -1229,6 +1257,7 @@ function QueuePanel({
   manualPaths,
   plan,
   selectedPaths,
+  transfers,
   setManualPaths,
   onClearQueue,
   onRemovePath,
@@ -1238,6 +1267,7 @@ function QueuePanel({
   manualPaths: string;
   plan: TransferPlanDto | null;
   selectedPaths: string[];
+  transfers: TransferDto[];
   setManualPaths: (value: string) => void;
   onClearQueue: () => void;
   onRemovePath: (path: string) => void;
@@ -1279,6 +1309,8 @@ function QueuePanel({
         onChange={(event) => setManualPaths(event.target.value)}
         placeholder="每行一个路径"
       />
+
+      <RecentActivity transfers={transfers} compact />
     </section>
   );
 }
@@ -1346,37 +1378,25 @@ function StatusLine({
   return null;
 }
 
-function RecentActivity({
-  receiveReport,
-  sendReport
-}: {
-  receiveReport: ReceiveReportDto | null;
-  sendReport: SendReportDto | null;
-}) {
-  if (!sendReport && !receiveReport) return null;
+function RecentActivity({ compact = false, transfers }: { compact?: boolean; transfers: TransferDto[] }) {
+  const recentTransfers = transfers.slice(0, compact ? 5 : 3);
+  if (recentTransfers.length === 0) return null;
 
   return (
-    <section className="recent-block">
+    <section className={compact ? "recent-block is-compact" : "recent-block"}>
       <div className="section-head">
         <strong>最近</strong>
       </div>
       <div className="recent-list">
-        {sendReport ? (
-          <div className="recent-row">
-            <span>已发送</span>
-            <strong>{sendReport.root_name}</strong>
-            <small>
-              {sendReport.file_count} 个文件 · {formatBytes(sendReport.total_bytes)}
+        {recentTransfers.map((transfer) => (
+          <div className={transfer.status === "failed" ? "recent-row is-failed" : "recent-row"} key={transfer.id}>
+            <span>{transferDirectionLabel(transfer)}</span>
+            <strong title={transfer.root_name}>{transfer.root_name}</strong>
+            <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
+              {transferMetaLabel(transfer)}
             </small>
           </div>
-        ) : null}
-        {receiveReport ? (
-          <div className="recent-row">
-            <span>已接收</span>
-            <strong>{receiveReport.files.length} 个文件</strong>
-            <small>{receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</small>
-          </div>
-        ) : null}
+        ))}
       </div>
     </section>
   );
@@ -1445,6 +1465,23 @@ function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function transferDirectionLabel(transfer: TransferDto) {
+  if (transfer.status === "failed") return "失败";
+  if (transfer.direction === "receive") return "接收";
+  return "发送";
+}
+
+function transferMetaLabel(transfer: TransferDto) {
+  if (transfer.status === "failed") {
+    return transfer.error_message ?? "失败";
+  }
+
+  const size = formatBytes(transfer.total_bytes);
+  const count = `${transfer.file_count} 个`;
+  const peer = transfer.peer_name ?? transfer.target_host;
+  return peer ? `${count} · ${size} · ${peer}` : `${count} · ${size}`;
 }
 
 function phaseLabel(phase: string) {
