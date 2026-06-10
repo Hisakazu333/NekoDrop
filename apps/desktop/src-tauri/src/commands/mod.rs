@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::net::TcpListener;
+use std::net::{IpAddr, TcpListener};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{
@@ -10,14 +10,16 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use nekodrop_core::{Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind};
+use nekodrop_core::{
+    Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, ReceivePolicy,
+};
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
     TransferProgress,
 };
 use nekodrop_service::{
     accept_incoming_stream, create_transfer_plan as create_service_transfer_plan,
-    send_pairing_request, send_plan_with_progress_and_cancel, IncomingSessionReport,
+    send_pairing_request, send_plan_with_sender_identity_and_cancel, IncomingSessionReport,
     TransferProgressEvent, TransferReceiveReport, TransferSendReport, TransferSourceFile,
     TransferSourcePlan,
 };
@@ -25,6 +27,7 @@ use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
 use tauri::State;
 
+use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
     ActiveReceiveSession, AppState, PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer,
     ReceiveDecision, TransferStatusState,
@@ -35,8 +38,9 @@ use crate::transfer_history::{
     push_transfer_history_record, TransferHistoryRecord,
 };
 use crate::trusted_devices::{
-    pairing_code_for_device, pairing_code_for_values, save_trusted_devices, trust_device_record,
-    trusted_device_record_from_remote, trusted_record_matches, upsert_trusted_device,
+    pairing_code_for_device, pairing_code_for_values, refresh_trusted_device_contact,
+    save_trusted_devices, trust_device_record, trusted_device_record_from_remote,
+    trusted_record_matches, trusted_record_matches_identity, upsert_trusted_device,
     TrustedDeviceRecord,
 };
 
@@ -44,6 +48,7 @@ use crate::trusted_devices::{
 pub struct AppSnapshot {
     pub device_name: String,
     pub receive_dir: String,
+    pub receive_policy: String,
     pub discovery_enabled: bool,
     pub tray_enabled: bool,
     pub device_identity: DeviceIdentityDto,
@@ -163,6 +168,11 @@ pub struct ReceivedFileDto {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ReceiveReportDto {
+    pub transfer_id: String,
+    pub root_name: String,
+    pub sender_device_id: Option<String>,
+    pub sender_device_name: Option<String>,
+    pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<ReceivedFileDto>,
 }
 
@@ -179,6 +189,9 @@ pub struct PendingReceiveOfferDto {
     pub root_name: String,
     pub file_count: usize,
     pub total_bytes: u64,
+    pub sender_device_id: Option<String>,
+    pub sender_device_name: Option<String>,
+    pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<PendingReceiveFileDto>,
 }
 
@@ -229,6 +242,7 @@ pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, Strin
     Ok(AppSnapshot {
         device_name: config.device_name.clone(),
         receive_dir: config.receive_dir.clone(),
+        receive_policy: receive_policy_label(config.receive_policy).to_string(),
         discovery_enabled: config.discovery_enabled,
         tray_enabled: config.tray_enabled,
         device_identity: device_identity_to_dto(&identity),
@@ -359,7 +373,9 @@ pub fn request_device_pairing(
         pairing_code,
         listen_port,
     };
-    let decision = send_pairing_request(&Endpoint::tcp(device.host.clone(), device.port), request)
+    let endpoint = Endpoint::tcp(device.host.clone(), device.port);
+    validate_endpoint_for_desktop_send(&endpoint)?;
+    let decision = send_pairing_request(&endpoint, request)
         .map_err(|error| friendly_transfer_error(&error.to_string()))?;
     if !decision.accepted {
         return Err(format!(
@@ -476,13 +492,7 @@ pub fn send_paths_to_code(
     connection_code: String,
     paths_text: String,
 ) -> Result<SendReportDto, String> {
-    let ticket = ConnectionTicket::parse(&connection_code).map_err(|error| error.to_string())?;
-    let endpoint = ticket.endpoint.clone();
-    let peer = TransferPeer {
-        device_id: ticket.device_id.clone(),
-        name: ticket.device_name.clone(),
-        target_host: Some(endpoint_label(&endpoint)),
-    };
+    let (endpoint, peer) = endpoint_and_peer_from_connection_input(&connection_code)?;
     send_paths_to_endpoint(&state, endpoint, paths_text, peer)
 }
 
@@ -542,6 +552,7 @@ pub fn open_transfer_location(
 struct TransferPeer {
     device_id: Option<String>,
     name: Option<String>,
+    fingerprint: Option<String>,
     target_host: Option<String>,
 }
 
@@ -574,6 +585,7 @@ fn endpoint_and_peer_from_nearby_device(
             let peer = TransferPeer {
                 device_id: Some(device.id.as_str().to_string()),
                 name: Some(device.name.clone()),
+                fingerprint: device.public_key_fingerprint.clone(),
                 target_host: Some(endpoint_label(&endpoint)),
             };
             (endpoint, peer)
@@ -596,6 +608,7 @@ fn endpoint_and_peer_from_trusted_device(
             let peer = TransferPeer {
                 device_id: Some(device.device_id.clone()),
                 name: Some(device.device_name.clone()),
+                fingerprint: Some(device.public_key_fingerprint.clone()),
                 target_host: Some(endpoint_label(&endpoint)),
             };
             (endpoint, peer)
@@ -620,9 +633,45 @@ fn endpoint_and_peer_for_history_record(
     let peer = TransferPeer {
         device_id: record.peer_device_id.clone(),
         name: record.peer_name.clone(),
+        fingerprint: None,
         target_host: Some(endpoint_label(&endpoint)),
     };
     Ok((endpoint, peer))
+}
+
+fn endpoint_and_peer_from_connection_input(
+    value: &str,
+) -> Result<(Endpoint, TransferPeer), String> {
+    match ConnectionTicket::parse(value) {
+        Ok(ticket) => {
+            let endpoint = ticket.endpoint.clone();
+            let peer = TransferPeer {
+                device_id: ticket.device_id.clone(),
+                name: ticket.device_name.clone(),
+                fingerprint: ticket.fingerprint.clone(),
+                target_host: Some(endpoint_label(&endpoint)),
+            };
+            Ok((endpoint, peer))
+        }
+        Err(error) => {
+            if looks_like_endpoint_label(value) {
+                let endpoint = endpoint_from_label(value)?;
+                let peer = TransferPeer {
+                    device_id: None,
+                    name: None,
+                    fingerprint: None,
+                    target_host: Some(endpoint_label(&endpoint)),
+                };
+                return Ok((endpoint, peer));
+            }
+            Err(friendly_transfer_error(&error.to_string()))
+        }
+    }
+}
+
+fn looks_like_endpoint_label(value: &str) -> bool {
+    let value = value.trim();
+    !value.starts_with("nekodrop-v1") && value.rsplit_once(':').is_some()
 }
 
 fn clear_active_send_cancel(
@@ -660,9 +709,11 @@ fn send_paths_to_endpoint(
     paths_text: String,
     peer: TransferPeer,
 ) -> Result<SendReportDto, String> {
+    validate_endpoint_for_desktop_send(&endpoint)?;
     let paths = parse_paths_text(&paths_text)?;
     let source_paths = path_bufs_to_strings(&paths);
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
+    let sender_identity = state.device_identity.public_identity();
     let started_at_ms = now_ms();
     let transfer_id = format!("send-{started_at_ms}");
     let cancel = Arc::new(AtomicBool::new(false));
@@ -693,9 +744,10 @@ fn send_paths_to_endpoint(
     );
     let transfer_status = state.transfer_status.clone();
     let cancel_for_send = cancel.clone();
-    let report = send_plan_with_progress_and_cancel(
+    let report = send_plan_with_sender_identity_and_cancel(
         &endpoint,
         plan.clone(),
+        Some(&sender_identity),
         move |event| {
             if let Some(status) = status_from_progress_event("send", None, event) {
                 set_transfer_status(&transfer_status, status);
@@ -711,18 +763,20 @@ fn send_paths_to_endpoint(
         } else {
             friendly_transfer_error(&error.to_string())
         };
-        let status = if cancelled { "cancelled" } else { "failed" };
+        let status_phase = if cancelled { "cancelled" } else { "failed" };
+        let (file_index, current_file, bytes_transferred) =
+            current_transfer_progress(&state.transfer_status);
         clear_active_send_cancel(&state.active_send_cancel, &cancel);
         set_transfer_status(
             &state.transfer_status,
             TransferStatusState {
                 direction: "send".to_string(),
-                phase: status.to_string(),
+                phase: status_phase.to_string(),
                 root_name: Some(plan.manifest.root_name.clone()),
                 file_count: plan.file_count(),
-                file_index: 0,
-                current_file: None,
-                bytes_transferred: 0,
+                file_index,
+                current_file,
+                bytes_transferred,
                 total_bytes: plan.total_bytes(),
                 message: message.clone(),
                 updated_at_ms: now_ms(),
@@ -731,11 +785,11 @@ fn send_paths_to_endpoint(
         let mut record = new_transfer_history_record(
             transfer_id.clone(),
             "send",
-            status,
+            status_phase,
             plan.manifest.root_name.clone(),
             plan.file_count(),
             plan.total_bytes(),
-            0,
+            bytes_transferred,
             started_at_ms,
         );
         record.peer_device_id = peer.device_id.clone();
@@ -776,11 +830,12 @@ fn send_paths_to_endpoint(
         transferred_bytes,
         started_at_ms,
     );
-    record.peer_device_id = peer.device_id;
-    record.peer_name = peer.name;
-    record.target_host = peer.target_host;
+    record.peer_device_id = peer.device_id.clone();
+    record.peer_name = peer.name.clone();
+    record.target_host = peer.target_host.clone();
     record.source_paths = source_paths;
     record.updated_at_ms = now_ms();
+    refresh_trusted_device_contact_from_peer(&state.trusted_devices, &peer);
     let _ = push_transfer_history_record(&state.transfer_history, record);
     Ok(send_report_to_dto(&report))
 }
@@ -800,6 +855,20 @@ pub fn select_receive_dir() -> Result<Option<String>, String> {
     Ok(choose_paths(PathDialogKind::SingleFolder)?
         .into_iter()
         .next())
+}
+
+#[tauri::command]
+pub fn set_receive_dir(state: State<'_, AppState>, receive_dir: String) -> Result<(), String> {
+    persist_receive_dir(&state, &receive_dir)
+}
+
+#[tauri::command]
+pub fn set_receive_policy(
+    state: State<'_, AppState>,
+    receive_policy: String,
+) -> Result<(), String> {
+    let receive_policy = receive_policy_from_input(&receive_policy)?;
+    persist_receive_policy(&state, receive_policy)
 }
 
 #[tauri::command]
@@ -848,6 +917,7 @@ pub fn start_receive_once(
     let receive_dir_path = expand_home_dir(&receive_dir);
     fs::create_dir_all(&receive_dir_path)
         .map_err(|error| format!("无法创建接收目录 {}: {error}", receive_dir_path.display()))?;
+    persist_receive_dir_path(&state, &receive_dir_path)?;
 
     let listener = bind_available_listener(&bind_host, port)?;
     listener
@@ -920,6 +990,7 @@ pub fn start_receive_once(
     let receive_session = state.receive_session.clone();
     let pending_receive_offer = state.pending_receive_offer.clone();
     let pending_pairing_request = state.pending_pairing_request.clone();
+    let config = state.config.clone();
     let transfer_status = state.transfer_status.clone();
     let last_receive_report = state.last_receive_report.clone();
     let trusted_devices = state.trusted_devices.clone();
@@ -973,7 +1044,12 @@ pub fn start_receive_once(
                     continue;
                 }
                 let peer_host = peer_addr.ip().to_string();
+                let receive_policy = config
+                    .lock()
+                    .map(|config| config.receive_policy)
+                    .unwrap_or(ReceivePolicy::AlwaysAsk);
                 let pending_for_decision = pending_receive_offer.clone();
+                let trusted_for_decision = trusted_devices.clone();
                 let pending_for_pairing = pending_pairing_request.clone();
                 let status_for_decision = transfer_status.clone();
                 let status_for_progress = transfer_status.clone();
@@ -988,6 +1064,8 @@ pub fn start_receive_once(
                             offer,
                             &pending_for_decision,
                             &status_for_decision,
+                            receive_policy,
+                            &trusted_for_decision,
                         )
                     },
                     move |request| {
@@ -1025,7 +1103,12 @@ pub fn start_receive_once(
                         Err(_) if is_receive_terminal_offer_status(&transfer_status, "closed") => {
                             "收件已关闭".to_string()
                         }
-                        Err(error) => format!("接收失败：{error}"),
+                        Err(_) if is_receive_terminal_offer_status(&transfer_status, "blocked") => {
+                            "已阻止这次传输".to_string()
+                        }
+                        Err(error) => {
+                            format!("接收失败：{}", friendly_transfer_error(&error.to_string()))
+                        }
                     });
                 }
                 if let Ok(mut pending) = pending_receive_offer.lock() {
@@ -1054,17 +1137,18 @@ pub fn start_receive_once(
                                     updated_at_ms: now_ms(),
                                 },
                             );
-                            let root_name = received_root_name(&report);
                             let mut record = new_transfer_history_record(
                                 format!("receive-{}", now_ms()),
                                 "receive",
                                 "completed",
-                                root_name,
+                                received_root_name(&report),
                                 report.files.len(),
                                 total_bytes,
                                 total_bytes,
                                 now_ms(),
                             );
+                            record.peer_device_id = report.sender_device_id.clone();
+                            record.peer_name = report.sender_device_name.clone();
                             record.target_host = Some(peer_host.clone());
                             record.receive_dir = Some(receive_dir_for_thread.display().to_string());
                             record.received_paths = report
@@ -1072,6 +1156,10 @@ pub fn start_receive_once(
                                 .iter()
                                 .map(|file| file.path.display().to_string())
                                 .collect();
+                            refresh_trusted_device_contact_from_receive_report(
+                                &trusted_devices,
+                                &report,
+                            );
                             let _ = push_transfer_history_record(&transfer_history, record);
                             if let Ok(mut last_report) = last_receive_report.lock() {
                                 *last_report = Some(report);
@@ -1108,6 +1196,7 @@ pub fn start_receive_once(
                 } else if !is_receive_terminal_offer_status(&transfer_status, "declined")
                     && !is_receive_terminal_offer_status(&transfer_status, "expired")
                     && !is_receive_terminal_offer_status(&transfer_status, "closed")
+                    && !is_receive_terminal_offer_status(&transfer_status, "blocked")
                 {
                     if let Ok(status) = receive_status.lock() {
                         let failure_message = status
@@ -1484,6 +1573,11 @@ fn send_report_to_dto(report: &TransferSendReport) -> SendReportDto {
 
 fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
     ReceiveReportDto {
+        transfer_id: report.transfer_id.clone(),
+        root_name: report.root_name.clone(),
+        sender_device_id: report.sender_device_id.clone(),
+        sender_device_name: report.sender_device_name.clone(),
+        sender_public_key_fingerprint: report.sender_public_key_fingerprint.clone(),
         files: report
             .files
             .iter()
@@ -1499,6 +1593,10 @@ fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
 }
 
 fn received_root_name(report: &TransferReceiveReport) -> String {
+    if !report.root_name.trim().is_empty() {
+        return report.root_name.clone();
+    }
+
     let Some(first_file) = report.files.first() else {
         return "接收文件".to_string();
     };
@@ -1556,6 +1654,9 @@ fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
         root_name: offer.root_name.clone(),
         file_count: offer.file_count,
         total_bytes: offer.total_bytes,
+        sender_device_id: offer.sender_device_id.clone(),
+        sender_device_name: offer.sender_device_name.clone(),
+        sender_public_key_fingerprint: offer.sender_public_key_fingerprint.clone(),
         files: offer
             .files
             .iter()
@@ -1633,13 +1734,56 @@ fn wait_for_receive_decision(
     offer: &TransferOffer,
     pending_receive_offer: &Arc<Mutex<Option<PendingReceiveOffer>>>,
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
+    receive_policy: ReceivePolicy,
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
 ) -> bool {
+    if receive_policy == ReceivePolicy::BlockAll {
+        set_transfer_status(
+            transfer_status,
+            TransferStatusState {
+                direction: "receive".to_string(),
+                phase: "blocked".to_string(),
+                root_name: Some(offer.root_name.clone()),
+                file_count: offer.file_count,
+                file_index: 0,
+                current_file: None,
+                bytes_transferred: 0,
+                total_bytes: offer.total_bytes,
+                message: "当前接收策略已阻止传输请求".to_string(),
+                updated_at_ms: now_ms(),
+            },
+        );
+        return false;
+    }
+
+    if should_auto_accept_receive_offer(offer, receive_policy, trusted_devices) {
+        set_transfer_status(
+            transfer_status,
+            TransferStatusState {
+                direction: "receive".to_string(),
+                phase: "auto_accepted".to_string(),
+                root_name: Some(offer.root_name.clone()),
+                file_count: offer.file_count,
+                file_index: 0,
+                current_file: None,
+                bytes_transferred: 0,
+                total_bytes: offer.total_bytes,
+                message: "可信设备已自动接受".to_string(),
+                updated_at_ms: now_ms(),
+            },
+        );
+        return true;
+    }
+
     let decision = Arc::new((Mutex::new(None), Condvar::new()));
     let pending = PendingReceiveOffer {
         transfer_id: offer.transfer_id.clone(),
         root_name: offer.root_name.clone(),
         file_count: offer.file_count,
         total_bytes: offer.total_bytes,
+        sender_device_id: offer.sender_device_id.clone(),
+        sender_device_name: offer.sender_device_name.clone(),
+        sender_public_key_fingerprint: offer.sender_public_key_fingerprint.clone(),
         files: offer
             .files
             .iter()
@@ -1703,6 +1847,29 @@ fn wait_for_receive_decision(
     }
 
     matches!(*guard, Some(ReceiveDecision::Accept))
+}
+
+fn should_auto_accept_receive_offer(
+    offer: &TransferOffer,
+    receive_policy: ReceivePolicy,
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+) -> bool {
+    if receive_policy != ReceivePolicy::AutoAcceptTrusted {
+        return false;
+    }
+
+    let Some(sender_device_id) = offer.sender_device_id.as_deref() else {
+        return false;
+    };
+    let Some(sender_fingerprint) = offer.sender_public_key_fingerprint.as_deref() else {
+        return false;
+    };
+
+    trusted_devices.lock().ok().is_some_and(|records| {
+        records.iter().any(|record| {
+            trusted_record_matches_identity(sender_device_id, sender_fingerprint, record)
+        })
+    })
 }
 
 fn wait_for_pairing_decision(
@@ -1781,6 +1948,51 @@ fn persist_trusted_device(state: &AppState, record: TrustedDeviceRecord) -> Resu
     persist_trusted_device_records(&state.trusted_devices, record)
 }
 
+fn persist_receive_dir(state: &AppState, receive_dir: &str) -> Result<(), String> {
+    if receive_dir.trim().is_empty() {
+        return Err("接收目录不能为空".to_string());
+    }
+    let receive_dir_path = expand_home_dir(receive_dir);
+    fs::create_dir_all(&receive_dir_path)
+        .map_err(|error| format!("无法创建接收目录 {}: {error}", receive_dir_path.display()))?;
+    persist_receive_dir_path(state, &receive_dir_path)
+}
+
+fn persist_receive_dir_path(state: &AppState, receive_dir_path: &PathBuf) -> Result<(), String> {
+    let receive_dir = receive_dir_path.display().to_string();
+    let mut config = state.config.lock().map_err(|error| error.to_string())?;
+    if config.receive_dir == receive_dir {
+        return Ok(());
+    }
+    let mut next_config = config.clone();
+    next_config.receive_dir = receive_dir;
+    save_app_config(&next_config)?;
+    *config = next_config;
+    Ok(())
+}
+
+fn persist_receive_policy(state: &AppState, receive_policy: ReceivePolicy) -> Result<(), String> {
+    let mut config = state.config.lock().map_err(|error| error.to_string())?;
+    if config.receive_policy == receive_policy {
+        return Ok(());
+    }
+
+    let mut next_config = config.clone();
+    next_config.receive_policy = receive_policy;
+    save_app_config(&next_config)?;
+    *config = next_config;
+    Ok(())
+}
+
+fn receive_policy_from_input(value: &str) -> Result<ReceivePolicy, String> {
+    match value {
+        "always_ask" => Ok(ReceivePolicy::AlwaysAsk),
+        "auto_accept_trusted" => Ok(ReceivePolicy::AutoAcceptTrusted),
+        "block_all" => Ok(ReceivePolicy::BlockAll),
+        _ => Err("未知接收策略".to_string()),
+    }
+}
+
 fn persist_trusted_device_records(
     trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
     record: TrustedDeviceRecord,
@@ -1791,6 +2003,66 @@ fn persist_trusted_device_records(
     save_trusted_devices(&next_trusted_devices)?;
     *trusted_devices = next_trusted_devices;
     Ok(())
+}
+
+fn refresh_trusted_device_contact_from_receive_report(
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    report: &TransferReceiveReport,
+) {
+    let Some(sender_device_id) = report.sender_device_id.as_deref() else {
+        return;
+    };
+    let Some(sender_fingerprint) = report.sender_public_key_fingerprint.as_deref() else {
+        return;
+    };
+
+    let Ok(mut trusted_devices) = trusted_devices.lock() else {
+        return;
+    };
+    let mut next_trusted_devices = trusted_devices.clone();
+    let changed = refresh_trusted_device_contact(
+        &mut next_trusted_devices,
+        sender_device_id,
+        sender_fingerprint,
+        report.sender_device_name.as_deref(),
+        now_ms(),
+    );
+    if !changed {
+        return;
+    }
+    if save_trusted_devices(&next_trusted_devices).is_ok() {
+        *trusted_devices = next_trusted_devices;
+    }
+}
+
+fn refresh_trusted_device_contact_from_peer(
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    peer: &TransferPeer,
+) {
+    let Some(device_id) = peer.device_id.as_deref() else {
+        return;
+    };
+    let Some(fingerprint) = peer.fingerprint.as_deref() else {
+        return;
+    };
+
+    let Ok(mut trusted_devices) = trusted_devices.lock() else {
+        return;
+    };
+    let mut next_trusted_devices = trusted_devices.clone();
+    let changed = refresh_trusted_device_contact(
+        &mut next_trusted_devices,
+        device_id,
+        fingerprint,
+        peer.name.as_deref(),
+        now_ms(),
+    );
+    if !changed {
+        return;
+    }
+    if save_trusted_devices(&next_trusted_devices).is_ok() {
+        *trusted_devices = next_trusted_devices;
+    }
 }
 
 fn current_receive_session_port(state: &AppState) -> Result<Option<u16>, String> {
@@ -1915,6 +2187,23 @@ fn set_transfer_status(
     }
 }
 
+fn current_transfer_progress(
+    transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
+) -> (usize, Option<String>, u64) {
+    transfer_status
+        .lock()
+        .ok()
+        .and_then(|status| status.clone())
+        .map(|status| {
+            (
+                status.file_index,
+                status.current_file,
+                status.bytes_transferred.min(status.total_bytes),
+            )
+        })
+        .unwrap_or((0, None, 0))
+}
+
 fn endpoint_label(endpoint: &Endpoint) -> String {
     format!("{}:{}", endpoint.host, endpoint.port)
 }
@@ -1922,28 +2211,337 @@ fn endpoint_label(endpoint: &Endpoint) -> String {
 fn endpoint_from_label(value: &str) -> Result<Endpoint, String> {
     let (host, port) = value
         .rsplit_once(':')
-        .ok_or_else(|| format!("目标地址格式无效：{value}"))?;
+        .ok_or_else(|| friendly_transfer_error(&format!("invalid endpoint label: {value}")))?;
     let port = port
         .parse::<u16>()
-        .map_err(|error| format!("目标端口无效：{error}"))?;
+        .map_err(|error| friendly_transfer_error(&format!("invalid endpoint port: {error}")))?;
     if host.trim().is_empty() {
-        return Err("目标地址缺少主机".to_string());
+        return Err(friendly_transfer_error("empty endpoint host"));
     }
     Ok(Endpoint::tcp(host.to_string(), port))
 }
 
+fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String> {
+    if endpoint.transport.as_str() != "tcp" {
+        return Err(friendly_transfer_error(&format!(
+            "unsupported transport: requested {}",
+            endpoint.transport.as_str()
+        )));
+    }
+    if endpoint.port == 0 {
+        return Err("目标端口无效，请重新从附近设备发送，或重新复制连接码。".to_string());
+    }
+
+    let host = endpoint.host.trim();
+    if host.is_empty() {
+        return Err("目标地址缺少主机，请重新从附近设备发送，或重新复制连接码。".to_string());
+    }
+
+    let lower = host.to_lowercase();
+    if lower == "localhost" {
+        return Err(friendly_transfer_error("failed to connect to localhost"));
+    }
+
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if ip.is_loopback() {
+            return Err(friendly_transfer_error(&format!(
+                "failed to connect to {host}:{}",
+                endpoint.port
+            )));
+        }
+        if ip.is_unspecified() {
+            return Err(
+                "目标地址是 0.0.0.0 或 ::，这只是监听地址，不能被另一台设备连接。请重新复制接收端连接码。"
+                    .to_string(),
+            );
+        }
+        if let IpAddr::V4(ipv4) = ip {
+            let octets = ipv4.octets();
+            if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
+                return Err(friendly_transfer_error(&format!(
+                    "failed to connect to {host}:{}",
+                    endpoint.port
+                )));
+            }
+            if octets[0] == 169 && octets[1] == 254 {
+                return Err(
+                    "目标地址是 169.254.x.x，这通常表示没有拿到可用局域网地址。请确认两台设备在同一网络，或重新打开接收端生成连接码。"
+                        .to_string(),
+                );
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn friendly_transfer_error(error: &str) -> String {
-    if error.contains("receiver declined") {
+    let lower = error.to_lowercase();
+
+    if lower.contains("receiver declined") || lower.contains("transfer declined by receiver") {
         return "对方拒绝了这次传输".to_string();
     }
-    if error.contains("Connection refused") || error.contains("failed to connect") {
-        return "无法连接对方电脑，请确认对方已打开收件、防火墙允许端口访问，且两台设备网络互通。"
-            .to_string();
+    if lower.contains("transfer cancelled") {
+        return "传输已取消".to_string();
     }
-    if error.contains("unsupported connection code") || error.contains("connection code") {
+
+    if lower.contains("unsupported connection code")
+        || lower.contains("connection code missing")
+        || lower.contains("invalid connection code")
+        || lower.contains("invalid percent encoding")
+        || lower.contains("connection field is not utf-8")
+        || lower.contains("connection ticket only supports")
+    {
         return "连接码无效，请重新复制对方生成的连接码。".to_string();
     }
+
+    if lower.contains("invalid endpoint label")
+        || lower.contains("invalid endpoint port")
+        || lower.contains("empty endpoint host")
+    {
+        return "历史记录里的目标地址无效，请重新从附近设备发送，或重新复制连接码。".to_string();
+    }
+
+    if lower.contains("transport is not available")
+        || lower.contains("unsupported transport")
+        || lower.contains("requested iroh")
+        || lower.contains("requested relay")
+        || lower.contains("requested quic")
+    {
+        return "当前版本还没有接入这个传输通道。请先使用局域网自动发现或连接码兜底。".to_string();
+    }
+
+    if lower.contains("198.18.") || lower.contains("198.19.") {
+        return "连接地址落在 198.18/198.19 测试网段，通常是代理、VPN 或虚拟网卡。请关闭相关网络工具，或改用真实局域网地址/连接码。".to_string();
+    }
+
+    if lower.contains("127.0.0.1") || lower.contains("localhost") {
+        return "连接地址指向了本机，另一台电脑无法访问。请重新打开接收端，复制新的连接码，或使用附近设备自动发现。".to_string();
+    }
+
+    if lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("由于连接方在一段时间后没有正确答复")
+        || lower.contains("连接尝试失败")
+    {
+        return "连接超时。常见原因是 Windows 防火墙拦截、两台设备不在同一网段、路由器隔离了有线/无线，或 VPN/代理影响了局域网连接。".to_string();
+    }
+
+    if lower.contains("connection refused")
+        || lower.contains("actively refused")
+        || lower.contains("connection reset")
+        || lower.contains("failed to connect")
+        || lower.contains("由于目标计算机积极拒绝")
+    {
+        return "无法连接对方电脑。请确认对方 NekoDrop 正在运行、收件已开启、防火墙允许访问，且两台设备网络互通。".to_string();
+    }
+
+    if lower.contains("network is unreachable")
+        || lower.contains("no route to host")
+        || lower.contains("host unreachable")
+        || lower.contains("无法访问目标主机")
+    {
+        return "当前网络无法到达对方设备。请确认两台设备在同一局域网，或使用连接码/后续 Relay 方案。".to_string();
+    }
+
+    if lower.contains("permission denied")
+        || lower.contains("access is denied")
+        || lower.contains("operation not permitted")
+        || lower.contains("权限")
+    {
+        return "系统权限阻止了这次操作。请检查接收目录权限、防火墙权限，或重新选择一个可写入的接收目录。".to_string();
+    }
+
+    if lower.contains("checksum")
+        || lower.contains("sha-256")
+        || lower.contains("sha256")
+        || lower.contains("does not match accepted offer")
+    {
+        return "文件校验失败，已拒绝把不一致的内容当作完成文件。请重新发送。".to_string();
+    }
+
+    if lower.contains("no such file") || lower.contains("not found") || lower.contains("路径不存在")
+    {
+        return "文件或目录不存在，请确认源文件没有被移动、删除，或重新选择文件。".to_string();
+    }
+
     error.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn friendly_transfer_error_explains_connection_failures() {
+        let refused = friendly_transfer_error(
+            "network error: failed to connect to 192.168.1.8:45821: Connection refused",
+        );
+        assert!(refused.contains("无法连接对方电脑"));
+
+        let timeout = friendly_transfer_error(
+            "network error: failed to connect to 192.168.1.8:45821: timed out",
+        );
+        assert!(timeout.contains("连接超时"));
+        assert!(timeout.contains("防火墙"));
+    }
+
+    #[test]
+    fn friendly_transfer_error_explains_bad_network_addresses() {
+        let benchmark =
+            friendly_transfer_error("network error: failed to connect to 198.18.0.1:45821");
+        assert!(benchmark.contains("198.18/198.19"));
+
+        let loopback = friendly_transfer_error("failed to connect to 127.0.0.1:45821");
+        assert!(loopback.contains("指向了本机"));
+    }
+
+    #[test]
+    fn friendly_transfer_error_explains_unsupported_transport_and_integrity_failures() {
+        let transport = friendly_transfer_error("iroh transport is not available in this build");
+        assert!(transport.contains("还没有接入这个传输通道"));
+
+        let checksum = friendly_transfer_error("incoming file does not match accepted offer");
+        assert!(checksum.contains("文件校验失败"));
+    }
+
+    #[test]
+    fn desktop_endpoint_preflight_rejects_unusable_addresses() {
+        assert!(validate_endpoint_for_desktop_send(&Endpoint::tcp("192.168.1.20", 45821)).is_ok());
+
+        let loopback =
+            validate_endpoint_for_desktop_send(&Endpoint::tcp("127.0.0.1", 45821)).unwrap_err();
+        assert!(loopback.contains("指向了本机"));
+
+        let unspecified =
+            validate_endpoint_for_desktop_send(&Endpoint::tcp("0.0.0.0", 45821)).unwrap_err();
+        assert!(unspecified.contains("监听地址"));
+
+        let benchmark =
+            validate_endpoint_for_desktop_send(&Endpoint::tcp("198.18.0.1", 45821)).unwrap_err();
+        assert!(benchmark.contains("198.18/198.19"));
+
+        let link_local =
+            validate_endpoint_for_desktop_send(&Endpoint::tcp("169.254.0.2", 45821)).unwrap_err();
+        assert!(link_local.contains("169.254"));
+    }
+
+    #[test]
+    fn connection_input_accepts_endpoint_label_as_manual_fallback() {
+        let (endpoint, peer) =
+            endpoint_and_peer_from_connection_input("192.168.1.20:45821").unwrap();
+
+        assert_eq!(endpoint, Endpoint::tcp("192.168.1.20", 45821));
+        assert_eq!(peer.target_host.as_deref(), Some("192.168.1.20:45821"));
+        assert!(peer.device_id.is_none());
+    }
+
+    #[test]
+    fn connection_input_keeps_connection_ticket_identity() {
+        let code = ConnectionTicket::new(Endpoint::tcp("192.168.1.20", 45821))
+            .unwrap()
+            .with_device_id("device-a")
+            .with_device_name("MacBook")
+            .with_fingerprint("sha256:abc")
+            .to_code()
+            .unwrap();
+        let (endpoint, peer) = endpoint_and_peer_from_connection_input(&code).unwrap();
+
+        assert_eq!(endpoint, Endpoint::tcp("192.168.1.20", 45821));
+        assert_eq!(peer.device_id.as_deref(), Some("device-a"));
+        assert_eq!(peer.name.as_deref(), Some("MacBook"));
+        assert_eq!(peer.fingerprint.as_deref(), Some("sha256:abc"));
+    }
+
+    #[test]
+    fn receive_policy_block_all_rejects_offer_without_pending_prompt() {
+        let pending = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(None));
+        let trusted = Arc::new(Mutex::new(Vec::new()));
+        let offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+
+        let accepted =
+            wait_for_receive_decision(&offer, &pending, &status, ReceivePolicy::BlockAll, &trusted);
+
+        assert!(!accepted);
+        assert!(pending.lock().unwrap().is_none());
+        let status = status.lock().unwrap().clone().unwrap();
+        assert_eq!(status.phase, "blocked");
+        assert!(status.message.contains("阻止"));
+    }
+
+    #[test]
+    fn receive_policy_auto_accepts_trusted_sender_identity() {
+        let pending = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(None));
+        let trusted = Arc::new(Mutex::new(vec![TrustedDeviceRecord {
+            schema_version: 1,
+            device_id: "device-a".to_string(),
+            device_name: "MacBook".to_string(),
+            platform: "macos".to_string(),
+            host: "192.168.1.20".to_string(),
+            port: 45821,
+            public_key_fingerprint: "sha256:abc".to_string(),
+            pairing_code: "AAA-BBB".to_string(),
+            paired_at_ms: 1,
+            last_seen_at_ms: 1,
+        }]));
+        let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-a".to_string());
+        offer.sender_public_key_fingerprint = Some("sha256:abc".to_string());
+
+        let accepted = wait_for_receive_decision(
+            &offer,
+            &pending,
+            &status,
+            ReceivePolicy::AutoAcceptTrusted,
+            &trusted,
+        );
+
+        assert!(accepted);
+        assert!(pending.lock().unwrap().is_none());
+        let status = status.lock().unwrap().clone().unwrap();
+        assert_eq!(status.phase, "auto_accepted");
+    }
+
+    #[test]
+    fn receive_policy_input_rejects_unknown_values() {
+        assert_eq!(
+            receive_policy_from_input("always_ask").unwrap(),
+            ReceivePolicy::AlwaysAsk
+        );
+        assert_eq!(
+            receive_policy_from_input("auto_accept_trusted").unwrap(),
+            ReceivePolicy::AutoAcceptTrusted
+        );
+        assert_eq!(
+            receive_policy_from_input("block_all").unwrap(),
+            ReceivePolicy::BlockAll
+        );
+        assert!(receive_policy_from_input("unknown").is_err());
+    }
+
+    #[test]
+    fn current_transfer_progress_uses_last_status_bytes() {
+        let status = Arc::new(Mutex::new(Some(TransferStatusState {
+            direction: "send".to_string(),
+            phase: "sending".to_string(),
+            root_name: Some("drop".to_string()),
+            file_count: 2,
+            file_index: 1,
+            current_file: Some("drop/a.txt".to_string()),
+            bytes_transferred: 42,
+            total_bytes: 100,
+            message: "发送中".to_string(),
+            updated_at_ms: 1,
+        })));
+
+        let (file_index, current_file, bytes_transferred) = current_transfer_progress(&status);
+
+        assert_eq!(file_index, 1);
+        assert_eq!(current_file.as_deref(), Some("drop/a.txt"));
+        assert_eq!(bytes_transferred, 42);
+    }
 }
 
 fn now_ms() -> u128 {

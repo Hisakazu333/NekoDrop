@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use nekodrop_core::{Device, DeviceId, DevicePlatform, DeviceTrustState};
@@ -10,10 +10,12 @@ use nekodrop_core::{Device, DeviceId, DevicePlatform, DeviceTrustState};
 use crate::app_state::{ActiveReceiveSession, AppState, DiscoveryStatusState};
 use crate::device_identity::LocalDeviceIdentity;
 use crate::network::primary_lan_ip;
+use crate::trusted_devices::{save_trusted_devices, trusted_record_matches, TrustedDeviceRecord};
 
 const SERVICE_TYPE: &str = "_nekodrop._tcp.local.";
 const REGISTER_INTERVAL: Duration = Duration::from_secs(2);
 const DEVICE_STALE_AFTER: Duration = Duration::from_secs(90);
+const TRUSTED_DEVICE_REFRESH_AFTER_MS: u128 = 30_000;
 
 pub fn start_discovery(state: &AppState) {
     let device_identity = state.device_identity.clone();
@@ -21,6 +23,7 @@ pub fn start_discovery(state: &AppState) {
     let nearby_devices = state.nearby_devices.clone();
     let nearby_seen_at = state.nearby_devices_seen_at.clone();
     let discovery_status = state.discovery_status.clone();
+    let trusted_devices = state.trusted_devices.clone();
 
     thread::spawn(move || {
         update_discovery_status(&discovery_status, |status| {
@@ -73,6 +76,7 @@ pub fn start_discovery(state: &AppState) {
                             &device_identity,
                             &nearby_devices,
                             &nearby_seen_at,
+                            &trusted_devices,
                             &info,
                         );
                         if added {
@@ -203,6 +207,7 @@ fn add_or_update_device(
     local_identity: &LocalDeviceIdentity,
     nearby_devices: &Arc<Mutex<Vec<Device>>>,
     nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
     info: &ResolvedService,
 ) -> bool {
     let local = local_identity.public_identity();
@@ -235,6 +240,8 @@ fn add_or_update_device(
     device.public_key_fingerprint = info.get_property_val_str("fingerprint").map(str::to_string);
     device.trust_state = DeviceTrustState::Untrusted;
 
+    refresh_trusted_device_endpoint(trusted_devices, &device);
+
     if let Ok(mut devices) = nearby_devices.lock() {
         if let Some(existing) = devices
             .iter_mut()
@@ -249,6 +256,43 @@ fn add_or_update_device(
         seen_at.insert(device_id, Instant::now());
     }
     true
+}
+
+fn refresh_trusted_device_endpoint(
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    device: &Device,
+) {
+    let Ok(mut records) = trusted_devices.lock() else {
+        return;
+    };
+    let Some(record) = records
+        .iter_mut()
+        .find(|record| trusted_record_matches(device, record))
+    else {
+        return;
+    };
+
+    let now = now_ms();
+    let platform = platform_wire_label(device.platform);
+    let should_persist = record.host != device.host
+        || record.port != device.port
+        || record.device_name != device.name
+        || record.platform != platform
+        || now.saturating_sub(record.last_seen_at_ms) > TRUSTED_DEVICE_REFRESH_AFTER_MS;
+
+    if !should_persist {
+        return;
+    }
+
+    record.device_name = device.name.clone();
+    record.platform = platform.to_string();
+    record.host = device.host.clone();
+    record.port = device.port;
+    record.last_seen_at_ms = now;
+
+    let next_records = records.clone();
+    drop(records);
+    let _ = save_trusted_devices(&next_records);
 }
 
 fn remove_device_by_fullname(
@@ -313,6 +357,22 @@ fn platform_from_str(value: &str) -> DevicePlatform {
         "linux" => DevicePlatform::Linux,
         _ => DevicePlatform::Unknown,
     }
+}
+
+fn platform_wire_label(platform: DevicePlatform) -> &'static str {
+    match platform {
+        DevicePlatform::MacOS => "macos",
+        DevicePlatform::Windows => "windows",
+        DevicePlatform::Linux => "linux",
+        DevicePlatform::Unknown => "unknown",
+    }
+}
+
+fn now_ms() -> u128 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
 
 fn service_instance_name(device_name: &str, device_id: &str) -> String {

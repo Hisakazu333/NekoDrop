@@ -3,6 +3,7 @@ export type PageId = "home" | "devices" | "transfers" | "settings";
 export interface AppSnapshot {
   device_name: string;
   receive_dir: string;
+  receive_policy: string;
   discovery_enabled: boolean;
   tray_enabled: boolean;
   device_identity: DeviceIdentityDto;
@@ -122,6 +123,11 @@ export interface ReceivedFileDto {
 }
 
 export interface ReceiveReportDto {
+  transfer_id: string;
+  root_name: string;
+  sender_device_id: string | null;
+  sender_device_name: string | null;
+  sender_public_key_fingerprint: string | null;
   files: ReceivedFileDto[];
 }
 
@@ -136,6 +142,9 @@ export interface PendingReceiveOfferDto {
   root_name: string;
   file_count: number;
   total_bytes: number;
+  sender_device_id: string | null;
+  sender_device_name: string | null;
+  sender_public_key_fingerprint: string | null;
   files: PendingReceiveFileDto[];
 }
 

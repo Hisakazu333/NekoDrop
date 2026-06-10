@@ -25,6 +25,7 @@ type BusyMode =
   | "pick-folders"
   | "pick-receive"
   | "stop-receive"
+  | "receive-policy"
   | "cancel-transfer"
   | "pair"
   | "forget"
@@ -33,6 +34,13 @@ type BusyMode =
   | "open";
 
 type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
+type ReceivePolicyMode = "always_ask" | "auto_accept_trusted" | "block_all";
+
+const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
+  { value: "always_ask", label: "询问" },
+  { value: "auto_accept_trusted", label: "可信" },
+  { value: "block_all", label: "阻止" }
+];
 
 export function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -40,6 +48,7 @@ export function App() {
   const [manualPaths, setManualPaths] = useState("");
   const [connectionCode, setConnectionCode] = useState("");
   const [receiveDir, setReceiveDir] = useState("~/Downloads/NekoDrop");
+  const [receivePolicy, setReceivePolicy] = useState<ReceivePolicyMode>("always_ask");
   const [bindPort, setBindPort] = useState("45821");
   const [plan, setPlan] = useState<TransferPlanDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
@@ -208,6 +217,7 @@ export function App() {
     const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
     setSnapshot(nextSnapshot);
     setReceiveDir(nextSnapshot.receive_dir);
+    setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
 
   async function refreshReceiveState() {
@@ -292,7 +302,30 @@ export function App() {
     setError(null);
     try {
       const pickedDir = await invokeCommand<string | null>("select_receive_dir");
-      if (pickedDir) setReceiveDir(pickedDir);
+      if (pickedDir) {
+        await invokeCommand<void>("set_receive_dir", { receiveDir: pickedDir });
+        setReceiveDir(pickedDir);
+        await refreshSnapshot();
+        setToast("接收目录已更新");
+      }
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function updateReceivePolicy(nextPolicy: ReceivePolicyMode) {
+    if (nextPolicy === receivePolicy) return;
+    setBusy("receive-policy");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_receive_policy", { receivePolicy: nextPolicy });
+      setReceivePolicy(nextPolicy);
+      setSnapshot((current) =>
+        current ? { ...current, receive_policy: nextPolicy } : current
+      );
+      setToast(receivePolicyLabel(nextPolicy));
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -333,6 +366,12 @@ export function App() {
 
   async function startReceive(options: { receiveDirOverride?: string; silent?: boolean } = {}) {
     const silent = options.silent ?? false;
+    const requestedPort = parseReceivePort(bindPort);
+    if (requestedPort === null) {
+      setError("端口必须是 1-65535");
+      return;
+    }
+
     if (!silent) setBusy("receive");
     setError(null);
     setReceiveReport(null);
@@ -340,10 +379,11 @@ export function App() {
     try {
       const session = await invokeCommand<ReceiveSessionDto>("start_receive_once", {
         bindHost: "0.0.0.0",
-        port: Number(bindPort),
+        port: requestedPort,
         receiveDir: options.receiveDirOverride ?? receiveDir
       });
       setReceiveSession(session);
+      setBindPort(String(portFromBindAddr(session.bind_addr) ?? requestedPort));
       setReceiveStatus("等待接收中");
       setToast(silent ? "已自动打开收件" : "收件已打开");
     } catch (nextError) {
@@ -615,8 +655,13 @@ export function App() {
 
   async function copyConnectionCode() {
     if (!receiveSession?.connection_code) return;
-    await navigator.clipboard.writeText(receiveSession.connection_code);
-    setToast("连接码已复制");
+    setError(null);
+    try {
+      await copyTextToClipboard(receiveSession.connection_code);
+      setToast("连接码已复制");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    }
   }
 
   function clearQueue() {
@@ -810,8 +855,8 @@ export function App() {
                           setSelectedDeviceId(null);
                           setSelectedDeviceSnapshot(null);
                         }}
-                        aria-label="对方连接码"
-                        placeholder="连接码"
+                        aria-label="对方连接码或地址"
+                        placeholder="连接码或 IP:端口"
                       />
                     ) : null}
                     <div className="composer-actions">
@@ -954,6 +999,7 @@ export function App() {
                     bindPort={bindPort}
                     busy={busy}
                     receiveDir={receiveDir}
+                    receivePolicy={receivePolicy}
                     pendingOffer={pendingReceiveOffer}
                     pendingPairingRequest={pendingPairingRequest}
                     receiveReport={receiveReport}
@@ -967,6 +1013,7 @@ export function App() {
                     onRespondPairingRequest={respondPairingRequest}
                     onStartReceive={startReceive}
                     onStopReceive={stopReceive}
+                    onUpdateReceivePolicy={updateReceivePolicy}
                   />
                 </>
               ) : null}
@@ -1121,7 +1168,9 @@ function TargetStrip({
           );
         })
       ) : (
-        <span className="target-empty">{discoveryCopy.label}</span>
+        <span className={discoveryCopy.isError ? "target-empty is-warning" : "target-empty"}>
+          {discoveryCopy.targetLabel}
+        </span>
       )}
     </section>
   );
@@ -1189,8 +1238,8 @@ function TargetPanel({
             className="target-code"
             value={connectionCode}
             onChange={(event) => setConnectionCode(event.target.value)}
-            aria-label="对方连接码"
-            placeholder="粘贴连接码"
+            aria-label="对方连接码或地址"
+            placeholder="连接码或 IP:端口"
           />
         ) : null}
       </section>
@@ -1466,6 +1515,7 @@ function ReceivePanel({
   bindPort,
   busy,
   receiveDir,
+  receivePolicy,
   pendingOffer,
   pendingPairingRequest,
   receiveReport,
@@ -1478,11 +1528,13 @@ function ReceivePanel({
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
-  onStopReceive
+  onStopReceive,
+  onUpdateReceivePolicy
 }: {
   bindPort: string;
   busy: BusyMode | null;
   receiveDir: string;
+  receivePolicy: ReceivePolicyMode;
   pendingOffer: PendingReceiveOfferDto | null;
   pendingPairingRequest: PendingPairingRequestDto | null;
   receiveReport: ReceiveReportDto | null;
@@ -1496,7 +1548,18 @@ function ReceivePanel({
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
+  onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
 }) {
+  const pendingOfferSender =
+    pendingOffer?.sender_device_name?.trim() ||
+    pendingOffer?.sender_device_id ||
+    null;
+  const pendingOfferPreview = pendingOffer ? pendingOfferFilePreview(pendingOffer.files) : null;
+  const receiveReportSender =
+    receiveReport?.sender_device_name?.trim() ||
+    receiveReport?.sender_device_id ||
+    null;
+
   return (
     <section className="function-panel">
       <div className="panel-head">
@@ -1533,6 +1596,23 @@ function ReceivePanel({
         </label>
       </div>
 
+      <div className="policy-row">
+        <span>接收策略</span>
+        <div className="policy-segment">
+          {RECEIVE_POLICY_OPTIONS.map((option) => (
+            <button
+              className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
+              disabled={busy === "receive-policy"}
+              key={option.value}
+              onClick={() => onUpdateReceivePolicy(option.value)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
       {receiveSession ? (
         <div className="code-line">
           <code>{receiveSession.connection_code}</code>
@@ -1548,10 +1628,11 @@ function ReceivePanel({
       {pendingOffer ? (
         <div className="incoming-offer">
           <div className="offer-main">
-            <strong>传输请求</strong>
+            <strong>{pendingOfferSender ? `来自 ${pendingOfferSender}` : "传输请求"}</strong>
             <span>
               {pendingOffer.root_name} · {pendingOffer.file_count} 个文件 · {formatBytes(pendingOffer.total_bytes)}
             </span>
+            {pendingOfferPreview ? <small>{pendingOfferPreview}</small> : null}
           </div>
           <div className="offer-actions">
             <button className="tool-button" disabled={busy === "receive"} onClick={() => onRespondReceiveOffer(false)} type="button">
@@ -1586,8 +1667,12 @@ function ReceivePanel({
 
       {receiveReport ? (
         <div className="result-line">
-          <strong>接收完成：{receiveReport.files.length} 个文件</strong>
-          <span>{receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</span>
+          <strong title={receiveReport.root_name}>
+            {receiveReportSender ? `接收完成：来自 ${receiveReportSender}` : `接收完成：${receiveReport.root_name}`}
+          </strong>
+          <span>
+            {receiveReport.files.length} 个 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}
+          </span>
         </div>
       ) : null}
     </section>
@@ -2014,6 +2099,37 @@ function formatBytes(bytes: number) {
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
+function normalizeReceivePolicy(value: string): ReceivePolicyMode {
+  if (value === "auto_accept_trusted" || value === "block_all") return value;
+  return "always_ask";
+}
+
+function parseReceivePort(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return port;
+}
+
+function portFromBindAddr(bindAddr: string): number | null {
+  const port = bindAddr.trim().split(":").pop();
+  return port ? parseReceivePort(port) : null;
+}
+
+function pendingOfferFilePreview(files: PendingReceiveOfferDto["files"]) {
+  if (files.length === 0) return null;
+  const preview = files.slice(0, 3).map((file) => file.manifest_path).join(" · ");
+  const rest = files.length > 3 ? ` +${files.length - 3}` : "";
+  return `${preview}${rest}`;
+}
+
+function receivePolicyLabel(value: ReceivePolicyMode) {
+  if (value === "auto_accept_trusted") return "仅可信设备自动接收";
+  if (value === "block_all") return "已阻止外部接收";
+  return "接收前询问";
+}
+
 function transferDirectionLabel(transfer: TransferDto) {
   if (transfer.status === "cancelled") return "取消";
   if (transfer.status === "failed") return "失败";
@@ -2095,28 +2211,32 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
       label: "启动中",
       subtitle: "初始化",
       emptyTitle: "启动中",
-      emptyBody: "无设备",
+      emptyBody: "正在准备自动发现",
+      targetLabel: "启动中",
       isError: false
     };
   }
 
   if (status.phase === "unavailable") {
     return {
-      label: "发现不可用",
-      subtitle: status.last_error ? "异常" : "不可用",
-      emptyTitle: "发现不可用",
-      emptyBody: "备用码",
+      label: "发现异常",
+      subtitle: status.last_error ? "mDNS 异常" : "不可用",
+      emptyTitle: "发现异常",
+      emptyBody: "使用备用码，或重启应用后再试",
+      targetLabel: "发现异常 · 备用码",
       isError: true
     };
   }
 
   if (!status.advertised) {
+    const hasNetworkError = Boolean(status.last_error);
     return {
-      label: "未广播",
-      subtitle: status.last_error ? "异常" : "未开启",
-      emptyTitle: "未广播",
-      emptyBody: "收件关闭",
-      isError: Boolean(status.last_error)
+      label: hasNetworkError ? "广播异常" : "未广播",
+      subtitle: hasNetworkError ? "检查网络" : "收件关闭",
+      emptyTitle: hasNetworkError ? "广播异常" : "未广播",
+      emptyBody: hasNetworkError ? "检查网络、VPN、代理或虚拟网卡" : "打开收件后会广播本机",
+      targetLabel: hasNetworkError ? "广播异常 · 检查网络" : "未广播 · 打开收件",
+      isError: hasNetworkError
     };
   }
 
@@ -2126,6 +2246,7 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
       subtitle: status.last_seen_seconds_ago == null ? "在线" : `${status.last_seen_seconds_ago}s 前`,
       emptyTitle: "",
       emptyBody: "",
+      targetLabel: `${deviceCount} 台在线`,
       isError: false
     };
   }
@@ -2134,7 +2255,8 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
     label: "扫描中",
     subtitle: "搜索中",
     emptyTitle: "无设备",
-    emptyBody: "扫描中",
+    emptyBody: "确认同一网络、防火墙允许、VPN/代理关闭",
+    targetLabel: "扫描中 · 同网段",
     isError: false
   };
 }
@@ -2173,6 +2295,35 @@ function shortDeviceId(deviceId: string) {
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+async function copyTextToClipboard(text: string) {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return;
+    } catch {
+      // Some WebViews expose clipboard but reject writes depending on permissions.
+    }
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "true");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  document.body.appendChild(textarea);
+  textarea.select();
+
+  try {
+    const copied = document.execCommand("copy");
+    if (!copied) {
+      throw new Error("无法写入剪贴板，请手动选择连接码复制。");
+    }
+  } finally {
+    document.body.removeChild(textarea);
+  }
 }
 
 function deviceSendErrorMessage(message: string) {

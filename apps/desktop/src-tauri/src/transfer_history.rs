@@ -42,11 +42,13 @@ pub fn load_transfer_history() -> Result<Vec<TransferHistoryRecord>, String> {
         .map_err(|error| format!("无法读取传输历史文件 {}: {error}", path.display()))?;
     let records = serde_json::from_str::<Vec<TransferHistoryRecord>>(&content)
         .map_err(|error| format!("传输历史文件格式无效 {}: {error}", path.display()))?;
-    Ok(records
+    let mut records = records
         .into_iter()
         .filter(|record| validate_transfer_history_record(record).is_ok())
-        .take(TRANSFER_HISTORY_LIMIT)
-        .collect())
+        .collect::<Vec<_>>();
+    sort_transfer_history_records(&mut records);
+    records.truncate(TRANSFER_HISTORY_LIMIT);
+    Ok(records)
 }
 
 pub fn push_transfer_history_record(
@@ -58,8 +60,19 @@ pub fn push_transfer_history_record(
     let mut records = records.lock().map_err(|error| error.to_string())?;
     records.retain(|item| item.id != record.id);
     records.insert(0, record);
+    sort_transfer_history_records(&mut records);
     records.truncate(TRANSFER_HISTORY_LIMIT);
     save_transfer_history(&records)
+}
+
+fn sort_transfer_history_records(records: &mut [TransferHistoryRecord]) {
+    records.sort_by(|left, right| {
+        right
+            .updated_at_ms
+            .cmp(&left.updated_at_ms)
+            .then_with(|| right.created_at_ms.cmp(&left.created_at_ms))
+            .then_with(|| left.id.cmp(&right.id))
+    });
 }
 
 pub fn delete_transfer_history_record(
@@ -146,5 +159,46 @@ pub fn new_transfer_history_record(
         error_message: None,
         created_at_ms,
         updated_at_ms: created_at_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sorts_transfer_history_by_latest_update() {
+        let mut records = vec![
+            new_transfer_history_record("old".to_string(), "send", "failed", "old", 1, 10, 3, 10),
+            new_transfer_history_record(
+                "new".to_string(),
+                "receive",
+                "completed",
+                "new",
+                1,
+                10,
+                10,
+                20,
+            ),
+            new_transfer_history_record(
+                "middle".to_string(),
+                "send",
+                "completed",
+                "middle",
+                1,
+                10,
+                10,
+                15,
+            ),
+        ];
+        records[0].updated_at_ms = 30;
+        records[1].updated_at_ms = 50;
+        records[2].updated_at_ms = 40;
+
+        sort_transfer_history_records(&mut records);
+
+        assert_eq!(records[0].id, "new");
+        assert_eq!(records[1].id, "middle");
+        assert_eq!(records[2].id, "old");
     }
 }

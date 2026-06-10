@@ -1,7 +1,10 @@
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
+
+const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportKind {
@@ -88,13 +91,47 @@ impl NekoLinkTransport for TcpTransport {
             return Err(NekoDropError::Network("endpoint port cannot be 0".into()));
         }
 
-        TcpStream::connect((endpoint.host.as_str(), endpoint.port)).map_err(|error| {
+        let addrs = resolve_tcp_addrs(endpoint)?;
+        let mut last_error = None;
+
+        for addr in addrs {
+            match TcpStream::connect_timeout(&addr, TCP_CONNECT_TIMEOUT) {
+                Ok(stream) => return Ok(stream),
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        let error = last_error
+            .map(|error| error.to_string())
+            .unwrap_or_else(|| "no socket address resolved".to_string());
+        Err(NekoDropError::Network(format!(
+            "failed to connect to {}:{} within {}s: {error}",
+            endpoint.host,
+            endpoint.port,
+            TCP_CONNECT_TIMEOUT.as_secs()
+        )))
+    }
+}
+
+fn resolve_tcp_addrs(endpoint: &Endpoint) -> NekoDropResult<Vec<SocketAddr>> {
+    let addrs = (endpoint.host.as_str(), endpoint.port)
+        .to_socket_addrs()
+        .map_err(|error| {
             NekoDropError::Network(format!(
-                "failed to connect to {}:{}: {error}",
+                "failed to resolve {}:{}: {error}",
                 endpoint.host, endpoint.port
             ))
-        })
+        })?
+        .collect::<Vec<_>>();
+
+    if addrs.is_empty() {
+        return Err(NekoDropError::Network(format!(
+            "failed to resolve {}:{}: no socket address found",
+            endpoint.host, endpoint.port
+        )));
     }
+
+    Ok(addrs)
 }
 
 fn unsupported_transport_error(
@@ -155,5 +192,13 @@ mod tests {
         assert!(error
             .to_string()
             .contains("iroh transport is not available"));
+    }
+
+    #[test]
+    fn tcp_resolve_rejects_unknown_host_with_clear_error() {
+        let endpoint = Endpoint::tcp("", 45821);
+        let error = resolve_tcp_addrs(&endpoint).unwrap_err();
+
+        assert!(error.to_string().contains("failed to resolve"));
     }
 }

@@ -659,6 +659,12 @@ p {
   padding: 0 14px;
 }
 
+.target-empty.is-warning {
+  color: var(--red);
+  border-color: #efc4bd;
+  background: var(--red-soft);
+}
+
 .nearby-strip,
 .status-line,
 .transfer-status,
@@ -1141,6 +1147,16 @@ p {
   white-space: nowrap;
 }
 
+.offer-main small {
+  min-width: 0;
+  overflow: hidden;
+  color: #8a929c;
+  font-size: 12px;
+  font-weight: 680;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .control-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 96px;
@@ -1173,6 +1189,45 @@ input {
 
 .port-field input {
   text-align: center;
+}
+
+.policy-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.policy-segment {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.policy-button {
+  min-width: 0;
+  height: 32px;
+  border: 0;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.policy-button:hover,
+.policy-button.is-active {
+  color: var(--text);
+  background: rgba(15, 23, 42, 0.07);
+}
+
+.policy-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .code-line {

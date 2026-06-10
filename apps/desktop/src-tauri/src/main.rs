@@ -1,3 +1,4 @@
+mod app_config;
 mod app_state;
 mod commands;
 mod device_identity;
@@ -32,6 +33,8 @@ pub fn run() {
             commands::select_send_files,
             commands::select_send_folders,
             commands::select_receive_dir,
+            commands::set_receive_dir,
+            commands::set_receive_policy,
             commands::open_path,
             commands::start_receive_once,
             commands::stop_receive_once,

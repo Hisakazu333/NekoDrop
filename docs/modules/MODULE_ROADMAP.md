@@ -14,20 +14,26 @@ Agent 又提前接进来
 
 ## V0.5 Trusted Pairing
 
+状态：基础已接入，后续继续做安全加固。
+
 主模块：
 
 - NekoLink Identity
 - NekoLink Pairing
 - Desktop UI
 
-要做：
+已接入：
 
 - trusted device store
 - pairing request
-- pairing confirm
+- pairing accept / reject
 - short code
-- fingerprint display
 - forget device
+
+待补齐：
+
+- fingerprint 更清晰展示
+- pairing confirm 的交互打磨
 - blocked device
 
 不做：
@@ -45,20 +51,28 @@ Agent 又提前接进来
 
 ## V0.6 Auto Discovery
 
+状态：基础已接入，后续继续做稳定性和错误恢复。
+
 主模块：
 
 - Discovery
 - NekoDrop UI
 - NekoLink Device Hello
 
-要做：
+已接入：
 
 - 启动后自动接收
-- UDP multicast 或 mDNS discovery
+- mDNS discovery
 - nearby devices
 - 点设备发送
 - 连接码兜底
 - IP 过滤
+
+待补齐：
+
+- UDP broadcast fallback
+- Windows 防火墙提示优化
+- macOS 本地网络权限说明
 
 必须修：
 
@@ -74,20 +88,27 @@ Agent 又提前接进来
 
 ## V0.7 NekoLink Transport Abstraction
 
+状态：最小抽象已接入，后续要把路由和 capability negotiation 用实。
+
 主模块：
 
 - NekoLink Transport
 - NekoDrop Service
 - NekoLink Protocol
 
-要做：
+已接入：
 
 - `NekoLinkTransport` trait
 - `TcpTransport`
 - file offer 走统一 Envelope
 - file decision 走统一 Envelope
 - transport error model
+
+待补齐：
+
 - capability negotiation
+- iroh 技术验证
+- relay 技术验证
 
 验收：
 
@@ -132,9 +153,9 @@ Agent 又提前接进来
 - chunk manifest
 - resume
 - retry
-- cancel
+- cancel 体验补强
 - pause / continue
-- transfer history
+- transfer history 详情和续传状态
 - better error messages
 
 验收：

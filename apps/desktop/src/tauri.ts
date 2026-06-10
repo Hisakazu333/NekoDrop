@@ -18,6 +18,8 @@ type CommandName =
   | "select_send_files"
   | "select_send_folders"
   | "select_receive_dir"
+  | "set_receive_dir"
+  | "set_receive_policy"
   | "open_path"
   | "start_receive_once"
   | "stop_receive_once"

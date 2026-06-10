@@ -5,6 +5,7 @@ use std::time::Instant;
 use nekodrop_core::{AppConfig, Device};
 use nekodrop_service::TransferReceiveReport;
 
+use crate::app_config::load_app_config;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
 use crate::transfer_history::{load_transfer_history, TransferHistoryRecord};
 use crate::trusted_devices::{load_trusted_devices, TrustedDeviceRecord};
@@ -63,6 +64,9 @@ pub struct PendingReceiveOffer {
     pub root_name: String,
     pub file_count: usize,
     pub total_bytes: u64,
+    pub sender_device_id: Option<String>,
+    pub sender_device_name: Option<String>,
+    pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<PendingReceiveFile>,
     pub decision: Arc<(Mutex<Option<ReceiveDecision>>, Condvar)>,
 }
@@ -96,7 +100,7 @@ pub struct TransferStatusState {
 
 #[derive(Debug)]
 pub struct AppState {
-    pub config: Mutex<AppConfig>,
+    pub config: Arc<Mutex<AppConfig>>,
     pub device_identity: LocalDeviceIdentity,
     pub nearby_devices: Arc<Mutex<Vec<Device>>>,
     pub nearby_devices_seen_at: Arc<Mutex<HashMap<String, Instant>>>,
@@ -117,11 +121,10 @@ impl AppState {
         let device_identity = load_or_create_device_identity()?;
         let trusted_devices = load_trusted_devices()?;
         let transfer_history = load_transfer_history()?;
-        let mut config = AppConfig::default();
-        config.device_name = device_identity.device_name().to_string();
+        let config = load_app_config(device_identity.device_name())?;
 
         Ok(Self {
-            config: Mutex::new(config),
+            config: Arc::new(Mutex::new(config)),
             device_identity,
             nearby_devices: Arc::new(Mutex::new(Vec::new())),
             nearby_devices_seen_at: Arc::new(Mutex::new(HashMap::new())),

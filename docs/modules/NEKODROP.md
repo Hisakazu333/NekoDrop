@@ -49,30 +49,38 @@ NekoDrop 不应该承载所有生态功能，也不应该把 OpenNeko Agent、Ne
 - Tauri desktop app
 - React UI
 - Rust service
+- 启动后自动后台接收
 - 文件选择
 - 文件夹选择
 - 手动路径输入
 - manifest
 - SHA-256
 - TCP connection code
+- mDNS / DNS-SD 自动发现
+- 附近设备列表
+- 设备离线过期
+- 点附近设备发送
+- 设备身份
+- 可信配对基础
+- 可信设备管理
 - transfer offer
 - accept / decline
 - 真实传输进度
+- 发送中取消
+- 传输历史持久化
+- 历史打开位置 / 重发 / 删除 / 清空
 - 接收目录
-- macOS 打包
-- Win11 打包脚本
+- macOS DMG 打包
+- Win11 NSIS / MSI 打包脚本
 
 待接入：
 
-- 自动发现设备
-- 点设备发送
-- 可信配对
 - 加密 session
-- 常驻接收服务
-- 断点续传
-- 传输历史
+- 断点续传完整产品流程
 - 手机端接入
-- Relay / P2P
+- iroh / Relay / P2P
+- OpenNeko Agent 指令通道
+- NekoState 状态同步
 
 ## 4. UI 原则
 

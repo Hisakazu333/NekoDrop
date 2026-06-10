@@ -35,9 +35,11 @@ pub fn load_trusted_devices() -> Result<Vec<TrustedDeviceRecord>, String> {
         .map_err(|error| format!("无法读取可信设备文件 {}: {error}", path.display()))?;
     let records = serde_json::from_str::<Vec<TrustedDeviceRecord>>(&content)
         .map_err(|error| format!("可信设备文件格式无效 {}: {error}", path.display()))?;
+    let mut records = records;
     for record in &records {
         validate_trusted_device(record)?;
     }
+    sort_trusted_devices(&mut records);
     Ok(records)
 }
 
@@ -131,14 +133,68 @@ pub fn upsert_trusted_device(
     } else {
         records.push(next_record);
     }
+    sort_trusted_devices(records);
+}
+
+pub fn refresh_trusted_device_contact(
+    records: &mut Vec<TrustedDeviceRecord>,
+    device_id: &str,
+    public_key_fingerprint: &str,
+    device_name: Option<&str>,
+    seen_at_ms: u128,
+) -> bool {
+    let Some(record) = records
+        .iter_mut()
+        .find(|record| trusted_record_matches_identity(device_id, public_key_fingerprint, record))
+    else {
+        return false;
+    };
+
+    let mut changed = false;
+    if record.last_seen_at_ms < seen_at_ms {
+        record.last_seen_at_ms = seen_at_ms;
+        changed = true;
+    }
+
+    if let Some(device_name) = device_name.map(str::trim).filter(|value| !value.is_empty()) {
+        if record.device_name != device_name {
+            record.device_name = device_name.to_string();
+            changed = true;
+        }
+    }
+
+    if changed {
+        sort_trusted_devices(records);
+    }
+    changed
+}
+
+fn sort_trusted_devices(records: &mut [TrustedDeviceRecord]) {
+    records.sort_by(|left, right| {
+        right
+            .last_seen_at_ms
+            .cmp(&left.last_seen_at_ms)
+            .then_with(|| right.paired_at_ms.cmp(&left.paired_at_ms))
+            .then_with(|| left.device_name.cmp(&right.device_name))
+            .then_with(|| left.device_id.cmp(&right.device_id))
+    });
 }
 
 pub fn trusted_record_matches(device: &Device, record: &TrustedDeviceRecord) -> bool {
-    record.device_id == device.id.as_str()
-        && device
-            .public_key_fingerprint
-            .as_ref()
-            .is_some_and(|fingerprint| fingerprint == &record.public_key_fingerprint)
+    device
+        .public_key_fingerprint
+        .as_ref()
+        .is_some_and(|fingerprint| {
+            trusted_record_matches_identity(device.id.as_str(), fingerprint, record)
+        })
+}
+
+pub fn trusted_record_matches_identity(
+    device_id: &str,
+    public_key_fingerprint: &str,
+    record: &TrustedDeviceRecord,
+) -> bool {
+    record.device_id == device_id && record.public_key_fingerprint == public_key_fingerprint
 }
 
 fn validate_trusted_device(record: &TrustedDeviceRecord) -> Result<(), String> {
@@ -208,5 +264,73 @@ mod tests {
 
         assert_eq!(first, second);
         assert_eq!(first.len(), 7);
+    }
+
+    #[test]
+    fn sorts_trusted_devices_by_recent_activity() {
+        let mut records = vec![
+            trusted_record("old", "Old Mac", 100),
+            trusted_record("new", "New PC", 300),
+            trusted_record("middle", "Middle Laptop", 200),
+        ];
+
+        sort_trusted_devices(&mut records);
+
+        assert_eq!(records[0].device_id, "new");
+        assert_eq!(records[1].device_id, "middle");
+        assert_eq!(records[2].device_id, "old");
+    }
+
+    #[test]
+    fn refreshes_contact_only_for_matching_identity() {
+        let mut records = vec![
+            trusted_record("device-a", "Old Name", 100),
+            trusted_record("device-b", "Other", 200),
+        ];
+
+        let changed = refresh_trusted_device_contact(
+            &mut records,
+            "device-a",
+            "sha256:device-a",
+            Some("New Name"),
+            300,
+        );
+
+        assert!(changed);
+        assert_eq!(records[0].device_id, "device-a");
+        assert_eq!(records[0].device_name, "New Name");
+        assert_eq!(records[0].last_seen_at_ms, 300);
+
+        let rejected = refresh_trusted_device_contact(
+            &mut records,
+            "device-a",
+            "sha256:wrong",
+            Some("Wrong"),
+            400,
+        );
+
+        assert!(!rejected);
+        assert_eq!(records[0].device_name, "New Name");
+        assert_eq!(records[0].last_seen_at_ms, 300);
+    }
+
+    fn trusted_record(
+        device_id: impl Into<String>,
+        device_name: impl Into<String>,
+        last_seen_at_ms: u128,
+    ) -> TrustedDeviceRecord {
+        let device_id = device_id.into();
+        TrustedDeviceRecord {
+            schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
+            device_name: device_name.into(),
+            platform: "macos".to_string(),
+            host: "192.168.1.20".to_string(),
+            port: 45821,
+            public_key_fingerprint: format!("sha256:{device_id}"),
+            pairing_code: "ABC-123".to_string(),
+            paired_at_ms: 1,
+            last_seen_at_ms,
+            device_id,
+        }
     }
 }

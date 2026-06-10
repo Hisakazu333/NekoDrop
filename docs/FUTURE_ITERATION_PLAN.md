@@ -32,16 +32,27 @@ OpenNeko  = 上层 AI 桌面伴侣 / Agent 运行时
 - NekoLink Envelope
 - 设备身份字段
 - 稳定设备 ID 和 fingerprint
-- macOS 打包脚本
-- Win11 打包脚本
+- mDNS / DNS-SD 自动发现
+- 发现状态诊断和无设备短提示
+- 附近设备列表和离线过期
+- 可信配对基础
+- 可信设备管理
+- 点附近设备发送
+- 真实进度、速度、ETA
+- 发送中取消
+- 接收目录持久化
+- 网络/传输错误提示和目标地址预检
+- 传输历史持久化
+- NekoLink transport 抽象和 TCP 实现
+- macOS DMG 打包脚本
+- Win11 NSIS / MSI 打包脚本
 
 当前还不能假装已经完成的能力：
 
-- 可信配对
 - 加密会话
-- LAN 自动发现
-- 断点续传
+- 断点续传完整产品流程
 - 手机端互通
+- iroh runtime
 - Relay / P2P
 - OpenNeko Agent 指令通道
 - NekoState 状态同步
@@ -114,18 +125,24 @@ crates/
 
 ### V0.5 Trusted Pairing
 
+状态：基础已接入，后续是安全加固和交互打磨。
+
 目标：从 connection-code 走向可信设备关系。
 
-要做的能力：
+已经具备：
 
 - 配对请求消息
-- 配对确认消息
+- 配对接受 / 拒绝消息
 - 双端短码确认
 - trusted_devices.json
 - 忘记设备
 - 设备信任状态
+
+后续补齐：
+
 - UI 显示“未配对 / 已信任 / 待确认”
 - 拒绝未信任设备直接发送文件
+- fingerprint 展示方式更容易理解
 
 验收标准：
 
@@ -143,16 +160,21 @@ crates/
 
 ### V0.6 LAN Discovery
 
+状态：基础已接入，后续是稳定性和异常处理。
+
 目标：让同一局域网设备自动出现。
 
-要做的能力：
+已经具备：
 
 - mDNS 广播
 - mDNS 发现
-- UDP broadcast fallback
 - 在线 / 离线状态
-- 设备 heartbeat
 - discovery service 生命周期
+
+后续补齐：
+
+- UDP broadcast fallback
+- 设备 heartbeat 加强
 - Windows 防火墙提示处理
 - macOS 本地网络权限提示说明
 
@@ -169,7 +191,35 @@ crates/
 - 有线台式机和无线笔记本不一定在同一广播域。
 - Windows 防火墙可能拦截监听端口。
 
-### V0.7 Encrypted Session
+### V0.7 NekoLink Transport Abstraction
+
+状态：最小抽象已接入，下一步要把 transport routing 和 capability negotiation 用实。
+
+目标：让 NekoDrop 不再把传输细节写死在产品流程里。
+
+已经具备：
+
+- `NekoLinkTransport`
+- `TransportKind`
+- `Endpoint`
+- `TcpTransport`
+- iroh / QUIC / Relay 的明确未接入错误
+
+后续补齐：
+
+- transport capability negotiation
+- transport selection
+- iroh 技术验证
+- relay 技术验证
+- TCP fallback 保持稳定
+
+验收标准：
+
+- TCP 文件传输不退化。
+- 发送流程只依赖 transport 抽象。
+- iroh / Relay 技术验证失败时，不影响现有局域网互传。
+
+### V0.8 Encrypted Session
 
 目标：把文件互传从明文 TCP 升级为可信加密会话。
 
@@ -197,7 +247,7 @@ crates/
 - 需要选择成熟库实现密钥交换和消息加密。
 - 私钥存储要走系统安全目录，后续可接 Keychain / Windows Credential Manager。
 
-### V0.8 Transfer Reliability
+### V0.9 Transfer Reliability
 
 目标：让大文件和文件夹传输足够可靠。
 
@@ -207,11 +257,11 @@ crates/
 - chunk manifest
 - 断点续传
 - retry failed chunk
-- 取消传输
+- 取消传输体验补强
 - 暂停 / 继续
 - 接收目录冲突处理
 - 同名文件策略
-- 传输历史持久化
+- 传输历史详情和续传状态
 - 传输速度、ETA、当前文件
 
 验收标准：
@@ -228,14 +278,14 @@ crates/
 - Windows 长路径和非法字符要处理。
 - macOS package 目录和普通文件夹的边界要确认。
 
-### V0.9 Desktop Productization
+### V0.10 Desktop Productization
 
 目标：让 NekoDrop 像真实工具，而不是开发 demo。
 
 要做的能力：
 
 - Win11 安装包验证
-- macOS `.app` / 后续 DMG
+- macOS `.app` / DMG 安装验证
 - 应用图标
 - 系统托盘
 - 开机启动
@@ -652,19 +702,19 @@ logs/
 最推荐的下一步顺序：
 
 ```text
-1. V0.5 Trusted Pairing
-2. V0.6 LAN Discovery
-3. V0.7 Encrypted Session
-4. V0.8 Transfer Reliability
-5. V0.9 Desktop Productization
+1. V0.6 Desktop Transfer Polish
+2. V0.7 NekoLink Transport Abstraction
+3. V0.8 Encrypted Session
+4. V0.9 Transfer Reliability
+5. V0.10 Desktop Productization
 6. V1.0 Mac / Windows Stable
 7. V1.1 Mobile Companion
-8. V1.2 Relay / P2P
+8. V1.2 iroh / Relay / P2P
 9. V1.4 NekoState
 10. V1.5 OpenNeko Agent Integration
 ```
 
-当前最不应该跳过的是可信配对和加密会话。没有这两层，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
+当前最不应该跳过的是加密会话和传输可靠性。设备身份和可信配对已经有基础，但还不能替代真正的加密 session；没有这层，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
 
 ## 12. 一句话总结
 

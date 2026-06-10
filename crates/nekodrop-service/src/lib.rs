@@ -14,6 +14,7 @@ use nekodrop_network::{
 use nekodrop_storage::{
     create_source_plan_from_paths, write_received_file_with_progress, ReceivedFile,
 };
+use nekolink_protocol::DeviceIdentity;
 
 pub use nekodrop_storage::{TransferSourceFile, TransferSourcePlan};
 
@@ -25,6 +26,11 @@ pub struct TransferSendReport {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferReceiveReport {
+    pub transfer_id: String,
+    pub root_name: String,
+    pub sender_device_id: Option<String>,
+    pub sender_device_name: Option<String>,
+    pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<ReceivedFile>,
 }
 
@@ -100,6 +106,20 @@ pub fn send_plan_with_progress_and_cancel<F, C>(
     endpoint: &Endpoint,
     plan: TransferSourcePlan,
     on_progress: F,
+    should_cancel: C,
+) -> NekoDropResult<TransferSendReport>
+where
+    F: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
+    send_plan_with_sender_identity_and_cancel(endpoint, plan, None, on_progress, should_cancel)
+}
+
+pub fn send_plan_with_sender_identity_and_cancel<F, C>(
+    endpoint: &Endpoint,
+    plan: TransferSourcePlan,
+    sender_identity: Option<&DeviceIdentity>,
+    on_progress: F,
     mut should_cancel: C,
 ) -> NekoDropResult<TransferSendReport>
 where
@@ -107,7 +127,7 @@ where
     C: FnMut() -> bool,
 {
     let outgoing = outgoing_frames_from_plan(&plan);
-    let offer = offer_from_plan(&plan);
+    let offer = offer_from_plan_with_sender_identity(&plan, sender_identity);
     let mut stream = connect_endpoint(endpoint)?;
     write_transfer_offer(&mut stream, &offer)?;
     let mut on_progress = on_progress;
@@ -304,7 +324,14 @@ where
         )));
     }
 
-    Ok(TransferReceiveReport { files })
+    Ok(TransferReceiveReport {
+        transfer_id: offer.transfer_id,
+        root_name: offer.root_name,
+        sender_device_id: offer.sender_device_id,
+        sender_device_name: offer.sender_device_name,
+        sender_public_key_fingerprint: offer.sender_public_key_fingerprint,
+        files,
+    })
 }
 
 pub fn outgoing_frames_from_plan(plan: &TransferSourcePlan) -> Vec<OutgoingFileFrame> {
@@ -321,7 +348,14 @@ pub fn outgoing_frames_from_plan(plan: &TransferSourcePlan) -> Vec<OutgoingFileF
 }
 
 pub fn offer_from_plan(plan: &TransferSourcePlan) -> TransferOffer {
-    TransferOffer::new(
+    offer_from_plan_with_sender_identity(plan, None)
+}
+
+pub fn offer_from_plan_with_sender_identity(
+    plan: &TransferSourcePlan,
+    sender_identity: Option<&DeviceIdentity>,
+) -> TransferOffer {
+    let offer = TransferOffer::new(
         next_transfer_id(),
         plan.manifest.root_name.clone(),
         plan.files
@@ -332,7 +366,13 @@ pub fn offer_from_plan(plan: &TransferSourcePlan) -> TransferOffer {
                 sha256: file.sha256.clone(),
             })
             .collect(),
-    )
+    );
+
+    if let Some(identity) = sender_identity {
+        return offer.with_sender_identity(identity);
+    }
+
+    offer
 }
 
 fn next_transfer_id() -> String {

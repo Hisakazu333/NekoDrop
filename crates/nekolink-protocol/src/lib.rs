@@ -509,6 +509,12 @@ pub struct TransferOffer {
     pub root_name: String,
     pub file_count: usize,
     pub total_bytes: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_device_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_device_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<TransferOfferFile>,
 }
 
@@ -525,8 +531,18 @@ impl TransferOffer {
             root_name: root_name.into(),
             file_count,
             total_bytes,
+            sender_device_id: None,
+            sender_device_name: None,
+            sender_public_key_fingerprint: None,
             files,
         }
+    }
+
+    pub fn with_sender_identity(mut self, identity: &DeviceIdentity) -> Self {
+        self.sender_device_id = Some(identity.device_id.clone());
+        self.sender_device_name = Some(identity.device_name.clone());
+        self.sender_public_key_fingerprint = Some(identity.public_key_fingerprint.clone());
+        self
     }
 
     pub fn validate(&self) -> Result<(), ProtocolError> {
@@ -554,6 +570,26 @@ impl TransferOffer {
                     "transfer offer size mismatch: {} != {}",
                     self.total_bytes, total_bytes
                 ),
+            ));
+        }
+        if self
+            .sender_device_id
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "sender_device_id cannot be empty",
+            ));
+        }
+        if self
+            .sender_public_key_fingerprint
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "sender_public_key_fingerprint cannot be empty",
             ));
         }
         for file in &self.files {
@@ -642,6 +678,31 @@ mod tests {
 
         assert_eq!(offer.file_count, 1);
         assert_eq!(offer.total_bytes, 10);
+        offer.validate().unwrap();
+    }
+
+    #[test]
+    fn transfer_offer_can_include_sender_identity() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            vec![Capability::FileSend],
+        );
+        let offer =
+            TransferOffer::new("transfer-1", "drop", Vec::new()).with_sender_identity(&identity);
+
+        assert_eq!(
+            offer.sender_device_id.as_deref(),
+            Some("neko-device-abc123")
+        );
+        assert_eq!(offer.sender_device_name.as_deref(), Some("Hisakazu Mac"));
+        assert_eq!(
+            offer.sender_public_key_fingerprint.as_deref(),
+            Some("sha256:abc123")
+        );
         offer.validate().unwrap();
     }
 

@@ -43,6 +43,14 @@ Bluetooth / USB transport
 - device kind
 - platform kind
 - connection code 携带 device identity
+- `DeviceHello`
+- pairing request / accept / reject payload
+- file offer / accept / decline payload
+- `NekoLinkTransport` 抽象
+- `TransportKind`
+- `Endpoint`
+- `TcpTransport`
+- iroh / QUIC / Relay transport 的明确未接入错误
 
 待接入：
 
@@ -50,8 +58,7 @@ Bluetooth / USB transport
 - `nekolink-pairing`
 - `nekolink-session`
 - `nekolink-transport`
-- iroh transport
-- trusted device store
+- iroh runtime transport
 - encrypted session
 - relay fallback
 
@@ -149,7 +156,31 @@ Bluetooth / USB transport
 
 ## 4. Transport 抽象
 
-后续所有传输都应该套在同一层接口下：
+当前已经落地的最小接口：
+
+```text
+TransportKind
+Endpoint
+NekoLinkTransport::connect(endpoint)
+TcpTransport
+connect_endpoint(endpoint)
+```
+
+真实可用：
+
+```text
+tcp
+```
+
+已预留但会返回明确错误：
+
+```text
+iroh
+quic
+relay
+```
+
+后续完整传输层应该扩展成：
 
 ```text
 NekoLinkTransport
