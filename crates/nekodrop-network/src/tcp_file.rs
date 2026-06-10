@@ -1,11 +1,12 @@
+use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
 pub use nekolink_protocol::{
     DeviceHello, PairingDecisionPayload, PairingRequestPayload, TransferDecision, TransferOffer,
-    TransferOfferFile,
+    TransferOfferFile, TransferResumeFile,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
@@ -20,6 +21,8 @@ pub struct FileFrameHeader {
     pub manifest_path: String,
     pub size: u64,
     pub sha256: String,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub offset: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -109,6 +112,31 @@ where
     F: FnMut(u64),
     C: FnMut() -> bool,
 {
+    send_single_file_frame_from_offset_with_progress_and_cancel(
+        stream,
+        manifest_path,
+        file_path,
+        sha256,
+        0,
+        &mut on_progress,
+        &mut should_cancel,
+    )
+}
+
+pub fn send_single_file_frame_from_offset_with_progress_and_cancel<W, F, C>(
+    stream: &mut W,
+    manifest_path: impl Into<String>,
+    file_path: &Path,
+    sha256: impl Into<String>,
+    offset: u64,
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<SentFileFrame>
+where
+    W: Write,
+    F: FnMut(u64),
+    C: FnMut() -> bool,
+{
     let manifest_path = manifest_path.into();
     let metadata = file_path.metadata().map_err(|error| {
         NekoDropError::Network(format!(
@@ -122,18 +150,37 @@ where
             file_path.display()
         )));
     }
+    if offset > metadata.len() {
+        return Err(NekoDropError::Network(format!(
+            "resume offset is larger than file size for {}: {} > {}",
+            file_path.display(),
+            offset,
+            metadata.len()
+        )));
+    }
 
     let header = FileFrameHeader {
         manifest_path: manifest_path.clone(),
         size: metadata.len(),
         sha256: sha256.into(),
+        offset,
     };
     write_header(stream, &header)?;
 
     let mut file = File::open(file_path).map_err(|error| {
         NekoDropError::Network(format!("failed to open {}: {error}", file_path.display()))
     })?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset)).map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to seek {} to resume offset {offset}: {error}",
+                file_path.display()
+            ))
+        })?;
+        on_progress(offset);
+    }
     let mut buffer = [0_u8; COPY_BUFFER_SIZE];
+    let mut file_bytes_transferred = offset;
     let mut bytes_sent = 0_u64;
     loop {
         if should_cancel() {
@@ -157,7 +204,8 @@ where
             ))
         })?;
         bytes_sent += read as u64;
-        on_progress(bytes_sent);
+        file_bytes_transferred += read as u64;
+        on_progress(file_bytes_transferred);
     }
     stream.flush().map_err(|error| {
         NekoDropError::Network(format!(
@@ -204,6 +252,29 @@ where
     F: FnMut(TransferProgress),
     C: FnMut() -> bool,
 {
+    send_file_frames_with_resume_and_cancel(
+        stream,
+        files,
+        total_bytes,
+        &[],
+        &mut on_progress,
+        &mut should_cancel,
+    )
+}
+
+pub fn send_file_frames_with_resume_and_cancel<W, F, C>(
+    stream: &mut W,
+    files: &[OutgoingFileFrame],
+    total_bytes: u64,
+    resume_files: &[TransferResumeFile],
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<Vec<SentFileFrame>>
+where
+    W: Write,
+    F: FnMut(TransferProgress),
+    C: FnMut() -> bool,
+{
     let count = u32::try_from(files.len())
         .map_err(|_| NekoDropError::Network("too many files in one transfer".into()))?;
     stream
@@ -224,7 +295,8 @@ where
     } else {
         total_bytes
     };
-    let mut bytes_transferred = 0_u64;
+    let resume_offsets = resume_offsets_by_path(resume_files)?;
+    let mut bytes_transferred = initial_resumed_bytes(files, &resume_offsets)?;
 
     for (index, file) in files.iter().enumerate() {
         if should_cancel() {
@@ -241,12 +313,23 @@ where
                 ))
             })?
             .len();
-        let mut last_file_bytes = 0_u64;
-        let sent_frame = send_single_file_frame_with_progress_and_cancel(
+        let offset = resume_offsets
+            .get(file.manifest_path.as_str())
+            .copied()
+            .unwrap_or(0);
+        if offset > file_size {
+            return Err(NekoDropError::Network(format!(
+                "resume offset is larger than file size for {}: {} > {}",
+                file.manifest_path, offset, file_size
+            )));
+        }
+        let mut last_file_bytes = offset;
+        let sent_frame = send_single_file_frame_from_offset_with_progress_and_cancel(
             stream,
             file.manifest_path.clone(),
             &file.file_path,
             file.sha256.clone(),
+            offset,
             |file_bytes| {
                 let delta = file_bytes.saturating_sub(last_file_bytes);
                 last_file_bytes = file_bytes;
@@ -263,6 +346,17 @@ where
             },
             || should_cancel(),
         )?;
+        if offset == file_size {
+            on_progress(TransferProgress {
+                manifest_path: file.manifest_path.clone(),
+                file_index: index + 1,
+                file_count: files.len(),
+                file_bytes_transferred: file_size,
+                file_size,
+                bytes_transferred,
+                total_bytes: resolved_total_bytes,
+            });
+        }
         sent.push(sent_frame);
     }
 
@@ -426,6 +520,7 @@ pub fn write_transfer_decision_for_transfer(
     transfer_id: &str,
     decision: &TransferDecision,
 ) -> NekoDropResult<()> {
+    decision.validate().map_err(protocol_error_to_network)?;
     let kind = if decision.accepted {
         MessageKind::FileAccept
     } else {
@@ -454,6 +549,7 @@ pub fn read_transfer_decision(stream: &mut impl Read) -> NekoDropResult<Transfer
         )));
     }
     let decision = envelope.payload;
+    decision.validate().map_err(protocol_error_to_network)?;
     if decision.accepted && envelope.kind != MessageKind::FileAccept {
         return Err(protocol_error_to_network(ProtocolError::new(
             ErrorCode::InvalidPayload,
@@ -604,6 +700,58 @@ fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Neko
         .map_err(|error| NekoDropError::Network(format!("failed to decode JSON frame: {error}")))
 }
 
+fn resume_offsets_by_path<'a>(
+    resume_files: &'a [TransferResumeFile],
+) -> NekoDropResult<HashMap<&'a str, u64>> {
+    let mut offsets = HashMap::new();
+    for file in resume_files {
+        if offsets
+            .insert(file.manifest_path.as_str(), file.received_bytes)
+            .is_some()
+        {
+            return Err(NekoDropError::Network(format!(
+                "duplicate resume path: {}",
+                file.manifest_path
+            )));
+        }
+    }
+    Ok(offsets)
+}
+
+fn initial_resumed_bytes(
+    files: &[OutgoingFileFrame],
+    resume_offsets: &HashMap<&str, u64>,
+) -> NekoDropResult<u64> {
+    let mut total = 0_u64;
+    for file in files {
+        let Some(offset) = resume_offsets.get(file.manifest_path.as_str()).copied() else {
+            continue;
+        };
+        let size = file
+            .file_path
+            .metadata()
+            .map_err(|error| {
+                NekoDropError::Network(format!(
+                    "failed to read metadata for {}: {error}",
+                    file.file_path.display()
+                ))
+            })?
+            .len();
+        if offset > size {
+            return Err(NekoDropError::Network(format!(
+                "resume offset is larger than file size for {}: {} > {}",
+                file.manifest_path, offset, size
+            )));
+        }
+        total = total.saturating_add(offset);
+    }
+    Ok(total)
+}
+
+fn is_zero(value: &u64) -> bool {
+    *value == 0
+}
+
 fn protocol_error_to_network(error: ProtocolError) -> NekoDropError {
     NekoDropError::Network(format!("{:?}: {}", error.code, error.message))
 }
@@ -611,7 +759,7 @@ fn protocol_error_to_network(error: ProtocolError) -> NekoDropError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::Cursor;
+    use std::io::{Cursor, Read};
     use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
     use std::thread;
@@ -745,6 +893,51 @@ mod tests {
         assert_eq!(
             fs::read_to_string(receive_dir.join("drop/two.txt")).unwrap(),
             "two"
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn sends_resumed_file_frames_from_offset() {
+        let dir = unique_temp_dir("tcp-resume-offset");
+        let file = dir.join("sample.txt");
+        fs::write(&file, b"hello world").unwrap();
+        let outgoing = vec![OutgoingFileFrame::new(
+            "sample.txt",
+            file,
+            "sha256-placeholder",
+        )];
+        let resume_files = vec![TransferResumeFile::new("sample.txt", 6).unwrap()];
+        let mut stream = Cursor::new(Vec::new());
+        let mut progress = Vec::new();
+
+        let sent = send_file_frames_with_resume_and_cancel(
+            &mut stream,
+            &outgoing,
+            11,
+            &resume_files,
+            |event| progress.push(event),
+            || false,
+        )
+        .unwrap();
+
+        assert_eq!(sent[0].bytes_sent, 5);
+        stream.set_position(0);
+        let received = receive_file_frames(&mut stream, |header, stream| {
+            assert_eq!(header.manifest_path, "sample.txt");
+            assert_eq!(header.size, 11);
+            assert_eq!(header.offset, 6);
+            let mut payload = vec![0_u8; (header.size - header.offset) as usize];
+            stream.read_exact(&mut payload).unwrap();
+            Ok(payload)
+        })
+        .unwrap();
+
+        assert_eq!(received, vec![b"world".to_vec()]);
+        assert_eq!(
+            progress.last().map(|event| event.bytes_transferred),
+            Some(11)
         );
 
         fs::remove_dir_all(dir).unwrap();

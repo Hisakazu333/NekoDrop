@@ -316,12 +316,21 @@ The current implementation computes SHA-256 before sending the offer. Later trus
 
 ```json
 {
-  "type": "SEND_ACCEPT",
-  "transfer_id": "uuid",
-  "receive_mode": "default_folder",
-  "resume_token": null
+  "kind": "file.accept",
+  "payload": {
+    "accepted": true,
+    "reason": null,
+    "resume_files": [
+      {
+        "manifest_path": "large.mov",
+        "received_bytes": 734003200
+      }
+    ]
+  }
 }
 ```
+
+`resume_files` is omitted when the receiver has no usable completed or partial state. When present, each entry means the receiver already has a contiguous prefix for that manifest path and the sender should start that file frame at `received_bytes`.
 
 ### SEND_DECLINE
 
@@ -396,27 +405,27 @@ Do not base64 encode file chunks for the transfer path.
 
 ## Resume Model
 
-MVP resume can be conservative:
+Current TCP resume support is conservative:
 
-- keep partial files under a transfer-specific temp directory
-- store completed byte ranges per file
-- on reconnect, receiver sends known completed offsets
-- sender restarts from the last verified contiguous offset
+- receiver scans completed files and `.nekodrop-part` partial files before accepting an offer
+- receiver sends known contiguous offsets in `file.accept.resume_files`
+- sender writes each file frame header with the full file size and the selected `offset`
+- sender only streams bytes from `offset..file_size`
+- receiver requires the incoming header `offset` to match the accepted resume decision
+- receiver appends to the matching partial file and verifies final SHA-256 before finalizing
 
-Resume message:
+TCP file frame header:
 
 ```json
 {
-  "type": "RESUME_REQUEST",
-  "transfer_id": "uuid",
-  "files": [
-    {
-      "path": "large.mov",
-      "received_bytes": 734003200
-    }
-  ]
+  "manifest_path": "large.mov",
+  "size": 1048576000,
+  "sha256": "hex",
+  "offset": 734003200
 }
 ```
+
+`offset` defaults to `0` for normal full-file sends.
 
 ## Error Codes
 

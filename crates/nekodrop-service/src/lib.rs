@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -5,14 +6,15 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     connect_endpoint, read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
-    read_transfer_offer, receive_file_frames, send_file_frames_with_progress_and_cancel,
+    read_transfer_offer, receive_file_frames, send_file_frames_with_resume_and_cancel,
     write_pairing_decision, write_pairing_request, write_transfer_decision_for_transfer,
     write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame,
     PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer,
-    TransferOfferFile, TransferProgress,
+    TransferOfferFile, TransferProgress, TransferResumeFile,
 };
 use nekodrop_storage::{
-    create_source_plan_from_paths, write_received_file_with_progress_and_cancel, ReceivedFile,
+    build_resume_plan_for_files, create_source_plan_from_paths,
+    write_received_file_with_resume_and_cancel, ReceivedFile, ResumeExpectedFile, ResumePlan,
 };
 use nekolink_protocol::DeviceIdentity;
 
@@ -149,10 +151,11 @@ where
         )));
     }
 
-    let sent_files = send_file_frames_with_progress_and_cancel(
+    let sent_files = send_file_frames_with_resume_and_cancel(
         &mut stream,
         &outgoing,
         plan.total_bytes(),
+        &decision.resume_files,
         |progress| on_progress(TransferProgressEvent::Sending(progress)),
         || should_cancel(),
     )?;
@@ -309,9 +312,22 @@ where
             "transfer declined by receiver".into(),
         ));
     }
-    write_transfer_decision_for_transfer(stream, &offer.transfer_id, &TransferDecision::accept())?;
+    let resume_plan = match resume_plan_from_offer(receive_dir, &offer) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = write_transfer_decision_for_transfer(
+                stream,
+                &offer.transfer_id,
+                &TransferDecision::decline("receiver resume state is not usable"),
+            );
+            return Err(error);
+        }
+    };
+    let decision = TransferDecision::accept_with_resume(resume_files_from_plan(&resume_plan)?);
+    write_transfer_decision_for_transfer(stream, &offer.transfer_id, &decision)?;
+    let resume_offsets = resume_offsets_by_path(&decision.resume_files)?;
 
-    let mut bytes_transferred = 0_u64;
+    let mut bytes_transferred = resume_plan.total_received_bytes();
     let mut file_index = 0_usize;
     let mut on_progress = on_progress;
     let files = receive_file_frames(stream, |header, stream| {
@@ -333,36 +349,51 @@ where
                 header.manifest_path
             )));
         }
+        let expected_offset = resume_offsets
+            .get(header.manifest_path.as_str())
+            .copied()
+            .unwrap_or(0);
+        if header.offset != expected_offset {
+            return Err(NekoDropError::Network(format!(
+                "incoming file resume offset does not match accepted decision for {}: {} != {}",
+                header.manifest_path, header.offset, expected_offset
+            )));
+        }
         file_index += 1;
         on_progress(TransferProgressEvent::Receiving(TransferProgress {
             manifest_path: header.manifest_path.clone(),
             file_index,
             file_count: offer.file_count,
-            file_bytes_transferred: 0,
+            file_bytes_transferred: header.offset,
             file_size: header.size,
             bytes_transferred,
             total_bytes: offer.total_bytes,
         }));
-        let received = write_received_file_with_progress_and_cancel(
+        let mut last_file_bytes = header.offset;
+        let received = write_received_file_with_resume_and_cancel(
             receive_dir,
             &header.manifest_path,
             header.size,
             &header.sha256,
+            header.offset,
             stream,
             |file_bytes| {
+                let delta = file_bytes.saturating_sub(last_file_bytes);
+                last_file_bytes = file_bytes;
                 on_progress(TransferProgressEvent::Receiving(TransferProgress {
                     manifest_path: header.manifest_path.clone(),
                     file_index,
                     file_count: offer.file_count,
                     file_bytes_transferred: file_bytes,
                     file_size: header.size,
-                    bytes_transferred: bytes_transferred.saturating_add(file_bytes),
+                    bytes_transferred: bytes_transferred.saturating_add(delta),
                     total_bytes: offer.total_bytes,
                 }));
             },
             || should_cancel(),
         )?;
-        bytes_transferred = bytes_transferred.saturating_add(received.bytes_written);
+        bytes_transferred =
+            bytes_transferred.saturating_add(received.bytes_written.saturating_sub(header.offset));
         on_progress(TransferProgressEvent::Verifying {
             manifest_path: received.manifest_path.clone(),
             bytes_transferred,
@@ -429,6 +460,50 @@ pub fn offer_from_plan_with_sender_identity(
     offer
 }
 
+fn resume_plan_from_offer(receive_dir: &Path, offer: &TransferOffer) -> NekoDropResult<ResumePlan> {
+    let expected_files = offer
+        .files
+        .iter()
+        .map(|file| {
+            ResumeExpectedFile::new(
+                file.manifest_path.clone(),
+                file.size,
+                Some(file.sha256.clone()),
+            )
+        })
+        .collect::<NekoDropResult<Vec<_>>>()?;
+    build_resume_plan_for_files(receive_dir, &offer.transfer_id, &expected_files)
+}
+
+fn resume_files_from_plan(plan: &ResumePlan) -> NekoDropResult<Vec<TransferResumeFile>> {
+    plan.files
+        .iter()
+        .map(|file| {
+            TransferResumeFile::new(file.path.clone(), file.received_bytes).map_err(|error| {
+                NekoDropError::Network(format!("{:?}: {}", error.code, error.message))
+            })
+        })
+        .collect()
+}
+
+fn resume_offsets_by_path(
+    resume_files: &[TransferResumeFile],
+) -> NekoDropResult<HashMap<&str, u64>> {
+    let mut offsets = HashMap::new();
+    for file in resume_files {
+        if offsets
+            .insert(file.manifest_path.as_str(), file.received_bytes)
+            .is_some()
+        {
+            return Err(NekoDropError::Network(format!(
+                "duplicate resume path: {}",
+                file.manifest_path
+            )));
+        }
+    }
+    Ok(offsets)
+}
+
 fn next_transfer_id() -> String {
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -488,6 +563,38 @@ mod tests {
             fs::read_to_string(receive_dir.join("drop/two.txt")).unwrap(),
             "two"
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn service_resumes_transfer_from_existing_partial_file() {
+        let dir = unique_temp_dir("service-resume");
+        let source_root = dir.join("source").join("drop");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(receive_dir.join("drop")).unwrap();
+        fs::write(source_root.join("sample.txt"), b"hello world").unwrap();
+        fs::write(receive_dir.join("drop/sample.txt.nekodrop-part"), b"hello ").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            move || accept_transfer(&listener, &receive_dir)
+        });
+
+        let send_report = send_paths(&endpoint, &[source_root]).unwrap();
+        let receive_report = receiver.join().unwrap().unwrap();
+
+        assert_eq!(send_report.sent_files.len(), 1);
+        assert_eq!(send_report.sent_files[0].bytes_sent, 5);
+        assert_eq!(receive_report.files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
+            "hello world"
+        );
+        assert!(!receive_dir.join("drop/sample.txt.nekodrop-part").exists());
 
         fs::remove_dir_all(dir).unwrap();
     }

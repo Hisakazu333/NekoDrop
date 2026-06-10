@@ -657,6 +657,14 @@ fn validate_transfer_manifest_path(path: &str) -> Result<(), ProtocolError> {
 pub struct TransferDecision {
     pub accepted: bool,
     pub reason: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resume_files: Vec<TransferResumeFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TransferResumeFile {
+    pub manifest_path: String,
+    pub received_bytes: u64,
 }
 
 impl TransferDecision {
@@ -664,6 +672,15 @@ impl TransferDecision {
         Self {
             accepted: true,
             reason: None,
+            resume_files: Vec::new(),
+        }
+    }
+
+    pub fn accept_with_resume(resume_files: Vec<TransferResumeFile>) -> Self {
+        Self {
+            accepted: true,
+            reason: None,
+            resume_files,
         }
     }
 
@@ -671,7 +688,47 @@ impl TransferDecision {
         Self {
             accepted: false,
             reason: Some(reason.into()),
+            resume_files: Vec::new(),
         }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if !self.accepted && !self.resume_files.is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "declined transfer decisions cannot include resume files",
+            ));
+        }
+        for file in &self.resume_files {
+            validate_transfer_manifest_path(&file.manifest_path)?;
+            if file.received_bytes == 0 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "resume file received_bytes must be greater than 0",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TransferResumeFile {
+    pub fn new(
+        manifest_path: impl Into<String>,
+        received_bytes: u64,
+    ) -> Result<Self, ProtocolError> {
+        let file = Self {
+            manifest_path: manifest_path.into(),
+            received_bytes,
+        };
+        validate_transfer_manifest_path(&file.manifest_path)?;
+        if file.received_bytes == 0 {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "resume file received_bytes must be greater than 0",
+            ));
+        }
+        Ok(file)
     }
 }
 
@@ -781,6 +838,31 @@ mod tests {
             Some("sha256:abc123")
         );
         offer.validate().unwrap();
+    }
+
+    #[test]
+    fn transfer_decision_can_include_resume_files() {
+        let decision = TransferDecision::accept_with_resume(vec![TransferResumeFile::new(
+            "drop/sample.txt",
+            128,
+        )
+        .unwrap()]);
+
+        decision.validate().unwrap();
+        assert_eq!(decision.resume_files[0].manifest_path, "drop/sample.txt");
+        assert_eq!(decision.resume_files[0].received_bytes, 128);
+    }
+
+    #[test]
+    fn transfer_decision_rejects_invalid_resume_files() {
+        assert!(TransferResumeFile::new("drop/../secret.txt", 128).is_err());
+        assert!(TransferResumeFile::new("drop/sample.txt", 0).is_err());
+
+        let mut decision = TransferDecision::decline("no");
+        decision.resume_files = vec![TransferResumeFile::new("drop/sample.txt", 1).unwrap()];
+
+        let error = decision.validate().unwrap_err();
+        assert!(error.message.contains("declined transfer decisions"));
     }
 
     #[test]

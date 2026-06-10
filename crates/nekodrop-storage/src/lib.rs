@@ -14,7 +14,8 @@ pub use manifest_builder::{
 pub use receive_dir::safe_join_receive_path;
 pub use received_file::{
     write_received_file, write_received_file_with_progress,
-    write_received_file_with_progress_and_cancel, ReceivedFile,
+    write_received_file_with_progress_and_cancel, write_received_file_with_resume_and_cancel,
+    ReceivedFile,
 };
 pub use resume::{
     build_resume_plan, build_resume_plan_for_files, inspect_resume_file_state, ResumeExpectedFile,

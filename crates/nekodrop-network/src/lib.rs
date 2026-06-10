@@ -13,12 +13,14 @@ pub use tcp_file::{
     accept_file_frames, accept_one_file_frame, read_device_hello, read_incoming_control_frame,
     read_pairing_decision, read_transfer_decision, read_transfer_offer, receive_file_frames,
     receive_single_file_frame, send_file_frames, send_file_frames_with_progress,
-    send_file_frames_with_progress_and_cancel, send_single_file_frame,
+    send_file_frames_with_progress_and_cancel, send_file_frames_with_resume_and_cancel,
+    send_single_file_frame, send_single_file_frame_from_offset_with_progress_and_cancel,
     send_single_file_frame_with_progress, send_single_file_frame_with_progress_and_cancel,
     write_device_hello, write_pairing_decision, write_pairing_request, write_transfer_decision,
     write_transfer_decision_for_transfer, write_transfer_offer, DeviceHello, FileFrameHeader,
     IncomingControlFrame, OutgoingFileFrame, PairingDecisionPayload, PairingRequestPayload,
     SentFileFrame, TransferDecision, TransferOffer, TransferOfferFile, TransferProgress,
+    TransferResumeFile,
 };
 pub use transport::{
     connect_endpoint, Endpoint, NekoLinkTransport, TcpTransport, TransportKind, TransportStream,

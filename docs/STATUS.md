@@ -37,7 +37,7 @@
 | 传输进度 / 速度 / ETA | 已接入 | 来自真实传输状态。 |
 | 发送中取消 | 已接入 | 当前发送任务可以取消。 |
 | 接收中取消 | 已接入 | 正在接收文件时可以发出取消信号，清理当前 partial 文件并关闭收件。 |
-| Resume plan 基础 | 已接入 | Storage 层可以基于 manifest 扫描已完成文件和 `.nekodrop-part`，生成安全的续传计划；完整断点续传产品流程仍待接入。 |
+| TCP partial offset 断点续传基础 | 已接入 | 接收端可以基于 `.nekodrop-part` 生成 resume files，发送端按 offset 只补传剩余 payload，接收端追加后做 SHA-256 校验；失败后自动重试和完整 UI 流程仍待接入。 |
 | 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会自动接受 device_id + fingerprint 匹配的可信设备。 |
 | 接收目录持久化 | 已接入 | 选择或启动收件时会写入 `app_config.json`，重启后继续使用。 |
 | 失败/取消历史进度 | 已接入 | 发送失败或取消时，历史记录会保留最后一次真实已传字节数。 |
@@ -79,7 +79,7 @@
 - Relay 服务器
 - P2P / NAT 打洞
 - 加密 session
-- 断点续传完整产品流程
+- 失败后自动重试 / 完整断点续传 UI 流程
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - NekoState 状态同步
