@@ -140,13 +140,210 @@ impl MessageKind {
 #[serde(rename_all = "snake_case")]
 pub enum Capability {
     FileTransfer,
+    FileSend,
+    FileReceive,
     FileSha256,
     FileResume,
     DevicePairing,
     EncryptedSession,
     AgentCommand,
+    DesktopAgentHost,
+    MobileCompanion,
     CompanionState,
     StateSync,
+}
+
+impl Capability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::FileTransfer => "file_transfer",
+            Self::FileSend => "file_send",
+            Self::FileReceive => "file_receive",
+            Self::FileSha256 => "file_sha256",
+            Self::FileResume => "file_resume",
+            Self::DevicePairing => "device_pairing",
+            Self::EncryptedSession => "encrypted_session",
+            Self::AgentCommand => "agent_command",
+            Self::DesktopAgentHost => "desktop_agent_host",
+            Self::MobileCompanion => "mobile_companion",
+            Self::CompanionState => "companion_state",
+            Self::StateSync => "state_sync",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeviceKind {
+    Desktop,
+    Phone,
+    Tablet,
+    #[serde(rename = "openharmony")]
+    OpenHarmony,
+    Web,
+    Nas,
+    AgentNode,
+    Unknown,
+}
+
+impl DeviceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Desktop => "desktop",
+            Self::Phone => "phone",
+            Self::Tablet => "tablet",
+            Self::OpenHarmony => "openharmony",
+            Self::Web => "web",
+            Self::Nas => "nas",
+            Self::AgentNode => "agent_node",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "desktop" => Self::Desktop,
+            "phone" => Self::Phone,
+            "tablet" => Self::Tablet,
+            "openharmony" | "open_harmony" => Self::OpenHarmony,
+            "web" => Self::Web,
+            "nas" => Self::Nas,
+            "agent_node" => Self::AgentNode,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlatformKind {
+    Macos,
+    Windows,
+    Linux,
+    Ios,
+    Android,
+    #[serde(rename = "openharmony")]
+    OpenHarmony,
+    Web,
+    Unknown,
+}
+
+impl PlatformKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Macos => "macos",
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+            Self::Ios => "ios",
+            Self::Android => "android",
+            Self::OpenHarmony => "openharmony",
+            Self::Web => "web",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "macos" => Self::Macos,
+            "windows" => Self::Windows,
+            "linux" => Self::Linux,
+            "ios" => Self::Ios,
+            "android" => Self::Android,
+            "openharmony" | "open_harmony" => Self::OpenHarmony,
+            "web" => Self::Web,
+            _ => Self::Unknown,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIdentity {
+    pub device_id: String,
+    pub device_name: String,
+    pub device_kind: DeviceKind,
+    pub platform: PlatformKind,
+    pub public_key_fingerprint: String,
+    pub capabilities: Vec<Capability>,
+}
+
+impl DeviceIdentity {
+    pub fn new(
+        device_id: impl Into<String>,
+        device_name: impl Into<String>,
+        device_kind: DeviceKind,
+        platform: PlatformKind,
+        public_key_fingerprint: impl Into<String>,
+        capabilities: impl Into<Vec<Capability>>,
+    ) -> Self {
+        Self {
+            device_id: device_id.into(),
+            device_name: device_name.into(),
+            device_kind,
+            platform,
+            public_key_fingerprint: public_key_fingerprint.into(),
+            capabilities: capabilities.into(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.device_id.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "device_id cannot be empty",
+            ));
+        }
+        if self.device_name.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "device_name cannot be empty",
+            ));
+        }
+        if self.public_key_fingerprint.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "public_key_fingerprint cannot be empty",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceHello {
+    pub identity: DeviceIdentity,
+    pub app_name: String,
+    pub app_version: String,
+}
+
+impl DeviceHello {
+    pub fn new(
+        identity: DeviceIdentity,
+        app_name: impl Into<String>,
+        app_version: impl Into<String>,
+    ) -> Self {
+        Self {
+            identity,
+            app_name: app_name.into(),
+            app_version: app_version.into(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.identity.validate()?;
+        if self.app_name.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "app_name cannot be empty",
+            ));
+        }
+        if self.app_version.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "app_version cannot be empty",
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -332,5 +529,36 @@ mod tests {
         assert_eq!(offer.file_count, 1);
         assert_eq!(offer.total_bytes, 10);
         offer.validate().unwrap();
+    }
+
+    #[test]
+    fn validates_device_identity() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::FileReceive,
+                Capability::DevicePairing,
+            ],
+        );
+        identity.validate().unwrap();
+
+        let hello = DeviceHello::new(identity, "NekoDrop", "0.1.0");
+        hello.validate().unwrap();
+    }
+
+    #[test]
+    fn parses_unknown_device_kinds_conservatively() {
+        assert_eq!(DeviceKind::parse("phone"), DeviceKind::Phone);
+        assert_eq!(DeviceKind::parse("watch"), DeviceKind::Unknown);
+        assert_eq!(
+            PlatformKind::parse("openharmony"),
+            PlatformKind::OpenHarmony
+        );
+        assert_eq!(PlatformKind::parse("visionos"), PlatformKind::Unknown);
     }
 }

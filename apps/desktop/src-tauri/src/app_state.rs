@@ -3,6 +3,8 @@ use std::sync::{atomic::AtomicBool, Arc, Condvar, Mutex};
 use nekodrop_core::{AppConfig, Device, TransferJob};
 use nekodrop_service::TransferReceiveReport;
 
+use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
+
 #[derive(Debug, Clone)]
 pub struct ActiveReceiveSession {
     pub bind_addr: String,
@@ -51,6 +53,7 @@ pub struct TransferStatusState {
 #[derive(Debug)]
 pub struct AppState {
     pub config: Mutex<AppConfig>,
+    pub device_identity: LocalDeviceIdentity,
     pub nearby_devices: Mutex<Vec<Device>>,
     pub transfers: Mutex<Vec<TransferJob>>,
     pub receive_status: Arc<Mutex<Option<String>>>,
@@ -60,10 +63,15 @@ pub struct AppState {
     pub last_receive_report: Arc<Mutex<Option<TransferReceiveReport>>>,
 }
 
-impl Default for AppState {
-    fn default() -> Self {
-        Self {
-            config: Mutex::new(AppConfig::default()),
+impl AppState {
+    pub fn new() -> Result<Self, String> {
+        let device_identity = load_or_create_device_identity()?;
+        let mut config = AppConfig::default();
+        config.device_name = device_identity.device_name().to_string();
+
+        Ok(Self {
+            config: Mutex::new(config),
+            device_identity,
             nearby_devices: Mutex::new(Vec::new()),
             transfers: Mutex::new(Vec::new()),
             receive_status: Arc::new(Mutex::new(None)),
@@ -71,6 +79,12 @@ impl Default for AppState {
             pending_receive_offer: Arc::new(Mutex::new(None)),
             transfer_status: Arc::new(Mutex::new(None)),
             last_receive_report: Arc::new(Mutex::new(None)),
-        }
+        })
+    }
+}
+
+impl Default for AppState {
+    fn default() -> Self {
+        Self::new().expect("failed to initialize NekoDrop app state")
     }
 }

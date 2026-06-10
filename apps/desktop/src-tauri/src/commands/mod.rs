@@ -13,13 +13,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use nekodrop_core::{
     Device, FileManifest, ManifestItem, ManifestItemKind, NekoDropError, TransferJob,
 };
-use nekodrop_network::{Endpoint, TransferOffer, TransferProgress};
+use nekodrop_network::{ConnectionTicket, Endpoint, TransferOffer, TransferProgress};
 use nekodrop_service::{
-    accept_transfer_stream_with_decision, connection_code_for_endpoint,
-    create_transfer_plan as create_service_transfer_plan, endpoint_from_connection_code,
-    send_plan_with_progress, TransferProgressEvent, TransferReceiveReport, TransferSendReport,
-    TransferSourceFile, TransferSourcePlan,
+    accept_transfer_stream_with_decision, create_transfer_plan as create_service_transfer_plan,
+    endpoint_from_connection_code, send_plan_with_progress, TransferProgressEvent,
+    TransferReceiveReport, TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
+use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
 use tauri::State;
 
@@ -34,6 +34,17 @@ pub struct AppSnapshot {
     pub receive_dir: String,
     pub discovery_enabled: bool,
     pub tray_enabled: bool,
+    pub device_identity: DeviceIdentityDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceIdentityDto {
+    pub device_id: String,
+    pub device_name: String,
+    pub device_kind: String,
+    pub platform: String,
+    pub public_key_fingerprint: String,
+    pub capabilities: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -153,11 +164,13 @@ pub struct TransferStatusDto {
 #[tauri::command]
 pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let config = state.config.lock().map_err(|error| error.to_string())?;
+    let identity = state.device_identity.public_identity();
     Ok(AppSnapshot {
         device_name: config.device_name.clone(),
         receive_dir: config.receive_dir.clone(),
         discovery_enabled: config.discovery_enabled,
         tray_enabled: config.tray_enabled,
+        device_identity: device_identity_to_dto(&identity),
     })
 }
 
@@ -335,11 +348,11 @@ pub fn start_receive_once(
     } else {
         local_addr.ip().to_string()
     };
-    let connection_code = connection_code_for_endpoint(
-        Endpoint::tcp(code_host, local_addr.port()),
-        Some("这台电脑"),
-    )
-    .map_err(|error| error.to_string())?;
+    let identity = state.device_identity.public_identity();
+    let connection_code = ConnectionTicket::new(Endpoint::tcp(code_host, local_addr.port()))
+        .map(|ticket| ticket.with_device_identity(&identity))
+        .and_then(|ticket| ticket.to_code())
+        .map_err(|error| error.to_string())?;
     let bind_addr = local_addr.to_string();
     let cancel = Arc::new(AtomicBool::new(false));
     let session = ActiveReceiveSession {
@@ -705,6 +718,21 @@ fn device_to_dto(device: &Device) -> DeviceDto {
         host: device.host.clone(),
         port: device.port,
         trust_state: format!("{:?}", device.trust_state),
+    }
+}
+
+fn device_identity_to_dto(identity: &DeviceIdentity) -> DeviceIdentityDto {
+    DeviceIdentityDto {
+        device_id: identity.device_id.clone(),
+        device_name: identity.device_name.clone(),
+        device_kind: identity.device_kind.as_str().to_string(),
+        platform: identity.platform.as_str().to_string(),
+        public_key_fingerprint: identity.public_key_fingerprint.clone(),
+        capabilities: identity
+            .capabilities
+            .iter()
+            .map(|capability| capability.as_str().to_string())
+            .collect(),
     }
 }
 

@@ -5,6 +5,16 @@ export interface AppSnapshot {
   receive_dir: string;
   discovery_enabled: boolean;
   tray_enabled: boolean;
+  device_identity: DeviceIdentityDto;
+}
+
+export interface DeviceIdentityDto {
+  device_id: string;
+  device_name: string;
+  device_kind: string;
+  platform: string;
+  public_key_fingerprint: string;
+  capabilities: string[];
 }
 
 export interface DeviceDto {

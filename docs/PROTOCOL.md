@@ -20,7 +20,7 @@ It must support:
 Current implemented path:
 
 - TCP for transfer sessions
-- connection code contains host and port
+- connection code contains host, port, and the receiver's public device identity
 - receiver opens an explicit one-shot receive listener
 - sender sends a `nekolink` Envelope with `file_offer` before any file bytes
 - receiver responds with `file_accept` or `file_decline` before file bytes are sent
@@ -56,6 +56,57 @@ Each device advertises:
 ```
 
 Discovery entries are not trusted by themselves. They only make devices visible.
+
+## Device Identity
+
+Current V0.4 identity fields:
+
+```json
+{
+  "device_id": "neko-device-0f4a11c8b9a2d311",
+  "device_name": "Hisakazu MacBook",
+  "device_kind": "desktop",
+  "platform": "macos",
+  "public_key_fingerprint": "sha256:hex",
+  "capabilities": [
+    "file_transfer",
+    "file_send",
+    "file_receive",
+    "file_sha256",
+    "device_pairing",
+    "encrypted_session",
+    "desktop_agent_host"
+  ]
+}
+```
+
+Supported device kinds:
+
+```text
+desktop
+phone
+tablet
+openharmony
+web
+nas
+agent_node
+unknown
+```
+
+Supported platforms:
+
+```text
+macos
+windows
+linux
+ios
+android
+openharmony
+web
+unknown
+```
+
+Desktop builds persist `device_identity.json` in the OS application data directory. The current implementation stores a random local seed and derives a SHA-256 public fingerprint from it. This is the stable identity foundation for trusted pairing; it is not the final encrypted-session key exchange.
 
 ## Envelope
 
@@ -93,6 +144,25 @@ state.sync
 ```
 
 Only `file.offer`, `file.accept`, and `file.decline` are currently used by NekoDrop transfer sessions. The other kinds reserve the protocol surface for device identity, OpenNeko Agent commands, companion state, and future state sync.
+
+### DEVICE_HELLO
+
+Reserved NekoLink identity handshake payload:
+
+```json
+{
+  "identity": {
+    "device_id": "neko-device-0f4a11c8b9a2d311",
+    "device_name": "Hisakazu MacBook",
+    "device_kind": "desktop",
+    "platform": "macos",
+    "public_key_fingerprint": "sha256:hex",
+    "capabilities": ["file_transfer", "device_pairing"]
+  },
+  "app_name": "NekoDrop",
+  "app_version": "0.1.0"
+}
+```
 
 ## Pairing Messages
 
@@ -144,8 +214,10 @@ The current desktop build uses a compact TCP frame format with a NekoLink envelo
 Connection code:
 
 ```text
-nekodrop-v1://connect?transport=tcp&host=192.168.1.24&port=45821&name=This%20Computer
+nekodrop-v1;transport=tcp;host=192.168.1.24;port=45821;device_id=neko-device-0f4a11c8b9a2d311;name=Hisakazu%20MacBook;kind=desktop;platform=macos;fingerprint=sha256:hex
 ```
+
+Older connection codes that only include `transport`, `host`, `port`, and `name` remain parseable.
 
 Transfer offer envelope:
 

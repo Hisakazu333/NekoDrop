@@ -1804,11 +1804,16 @@ version = "0.1.0"
 name = "nekodrop-desktop"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.3.4",
+ "hex",
  "nekodrop-core",
  "nekodrop-network",
  "nekodrop-service",
  "nekodrop-storage",
+ "nekolink-protocol",
  "serde",
+ "serde_json",
+ "sha2",
  "tauri",
  "tauri-build",
 ]

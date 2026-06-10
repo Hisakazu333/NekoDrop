@@ -400,6 +400,14 @@ export function App() {
             <span>{snapshot?.device_name ?? "这台电脑"}</span>
           </div>
 
+          {snapshot ? (
+            <div className="identity-strip" title={snapshot.device_identity.public_key_fingerprint}>
+              <span>{platformLabel(snapshot.device_identity.platform)}</span>
+              <code>{shortDeviceId(snapshot.device_identity.device_id)}</code>
+              <span>{shortFingerprint(snapshot.device_identity.public_key_fingerprint)}</span>
+            </div>
+          ) : null}
+
           <div className="topbar-actions">
             <button className={receiveSession ? "receive-pill is-on" : "receive-pill"} onClick={() => setMode("receive")} type="button">
               {receiveState}
@@ -860,6 +868,28 @@ function formatDuration(seconds: number) {
   const hours = Math.floor(minutes / 60);
   const minuteRest = minutes % 60;
   return minuteRest > 0 ? `${hours}h ${minuteRest}m` : `${hours}h`;
+}
+
+function platformLabel(platform: string) {
+  if (platform === "macos") return "macOS";
+  if (platform === "windows") return "Windows";
+  if (platform === "linux") return "Linux";
+  if (platform === "ios") return "iOS";
+  if (platform === "android") return "Android";
+  if (platform === "openharmony") return "OpenHarmony";
+  if (platform === "web") return "Web";
+  return "Unknown";
+}
+
+function shortDeviceId(deviceId: string) {
+  if (deviceId.length <= 22) return deviceId;
+  return `${deviceId.slice(0, 17)}…${deviceId.slice(-4)}`;
+}
+
+function shortFingerprint(fingerprint: string) {
+  const value = fingerprint.replace(/^sha256:/, "");
+  if (value.length <= 16) return `sha256:${value}`;
+  return `sha256:${value.slice(0, 8)}…${value.slice(-6)}`;
 }
 
 function errorMessage(error: unknown) {

@@ -199,6 +199,33 @@ button.nav-item:hover {
   gap: 8px;
 }
 
+.identity-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  margin-left: auto;
+  padding: 0 8px;
+  color: #626a74;
+  font-size: 12px;
+  font-weight: 740;
+}
+
+.identity-strip code {
+  max-width: 180px;
+  overflow: hidden;
+  color: #2f3440;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-weight: 720;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.identity-strip span {
+  white-space: nowrap;
+}
+
 .receive-pill,
 .ghost-pill,
 .tool-button,

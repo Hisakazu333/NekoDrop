@@ -36,12 +36,21 @@ MVP does not fully solve:
 Each installation generates:
 
 - stable device ID
-- asymmetric key pair
+- local secret seed for identity derivation
+- public SHA-256 fingerprint
 - user-visible device name
 
-The private key stays local.
+The secret seed stays local.
 
 The public key fingerprint is shown during pairing and used in trusted device records.
+
+Current V0.4 status:
+
+- desktop builds persist `device_identity.json` in the OS application data directory
+- connection codes include the receiver's public identity fields
+- this is the foundation for trusted pairing, not the final encrypted session implementation
+
+The later trusted-pairing stage should replace or extend the seed-derived fingerprint with a real asymmetric identity key pair.
 
 ## Pairing
 
@@ -169,4 +178,3 @@ Failed verification
 ```
 
 Avoid vague states such as "secure" unless the connection is actually authenticated and encrypted.
-

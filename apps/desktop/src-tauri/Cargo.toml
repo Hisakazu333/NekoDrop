@@ -7,9 +7,14 @@ edition = "2021"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+nekolink-protocol = { path = "../../../crates/nekolink-protocol" }
 nekodrop-core = { path = "../../../crates/nekodrop-core" }
 nekodrop-network = { path = "../../../crates/nekodrop-network" }
 nekodrop-service = { path = "../../../crates/nekodrop-service" }
 nekodrop-storage = { path = "../../../crates/nekodrop-storage" }
+getrandom = "0.3"
+hex = "0.4"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
 tauri = { version = "2", features = [] }

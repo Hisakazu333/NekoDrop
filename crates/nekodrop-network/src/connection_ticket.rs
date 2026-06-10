@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
+use nekolink_protocol::{DeviceIdentity, DeviceKind, PlatformKind};
 
 use crate::{Endpoint, TransportKind};
 
@@ -9,7 +10,10 @@ const PREFIX: &str = "nekodrop-v1";
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ConnectionTicket {
     pub endpoint: Endpoint,
+    pub device_id: Option<String>,
     pub device_name: Option<String>,
+    pub device_kind: Option<DeviceKind>,
+    pub platform: Option<PlatformKind>,
     pub fingerprint: Option<String>,
 }
 
@@ -18,9 +22,29 @@ impl ConnectionTicket {
         validate_tcp_endpoint(&endpoint)?;
         Ok(Self {
             endpoint,
+            device_id: None,
             device_name: None,
+            device_kind: None,
+            platform: None,
             fingerprint: None,
         })
+    }
+
+    pub fn with_device_identity(mut self, identity: &DeviceIdentity) -> Self {
+        self.device_id = Some(identity.device_id.clone());
+        self.device_name = Some(identity.device_name.clone());
+        self.device_kind = Some(identity.device_kind);
+        self.platform = Some(identity.platform);
+        self.fingerprint = Some(identity.public_key_fingerprint.clone());
+        self
+    }
+
+    pub fn with_device_id(mut self, device_id: impl Into<String>) -> Self {
+        let device_id = device_id.into();
+        if !device_id.trim().is_empty() {
+            self.device_id = Some(device_id);
+        }
+        self
     }
 
     pub fn with_device_name(mut self, device_name: impl Into<String>) -> Self {
@@ -28,6 +52,16 @@ impl ConnectionTicket {
         if !device_name.trim().is_empty() {
             self.device_name = Some(device_name);
         }
+        self
+    }
+
+    pub fn with_device_kind(mut self, device_kind: DeviceKind) -> Self {
+        self.device_kind = Some(device_kind);
+        self
+    }
+
+    pub fn with_platform(mut self, platform: PlatformKind) -> Self {
+        self.platform = Some(platform);
         self
     }
 
@@ -49,8 +83,20 @@ impl ConnectionTicket {
             format!("port={}", self.endpoint.port),
         ];
 
+        if let Some(device_id) = &self.device_id {
+            parts.push(format!("device_id={}", encode_field(device_id)));
+        }
+
         if let Some(device_name) = &self.device_name {
             parts.push(format!("name={}", encode_field(device_name)));
+        }
+
+        if let Some(device_kind) = self.device_kind {
+            parts.push(format!("kind={}", device_kind.as_str()));
+        }
+
+        if let Some(platform) = self.platform {
+            parts.push(format!("platform={}", platform.as_str()));
         }
 
         if let Some(fingerprint) = &self.fingerprint {
@@ -100,7 +146,14 @@ impl ConnectionTicket {
 
         let ticket = Self {
             endpoint: Endpoint::tcp(host, port),
+            device_id: fields.get("device_id").cloned(),
             device_name: fields.get("name").cloned(),
+            device_kind: fields
+                .get("kind")
+                .map(|value| DeviceKind::parse(value.as_str())),
+            platform: fields
+                .get("platform")
+                .map(|value| PlatformKind::parse(value.as_str())),
             fingerprint: fields.get("fingerprint").cloned(),
         };
         validate_tcp_endpoint(&ticket.endpoint)?;
@@ -180,15 +233,44 @@ mod tests {
     fn round_trips_connection_ticket() {
         let ticket = ConnectionTicket::new(Endpoint::tcp("192.168.1.24", 45821))
             .unwrap()
+            .with_device_id("neko-device-abc123")
             .with_device_name("Hisakazu Mac")
+            .with_device_kind(DeviceKind::Desktop)
+            .with_platform(PlatformKind::Macos)
             .with_fingerprint("sha256:abc123");
 
         let code = ticket.to_code().unwrap();
         let parsed = ConnectionTicket::parse(&code).unwrap();
 
         assert_eq!(parsed.endpoint, Endpoint::tcp("192.168.1.24", 45821));
+        assert_eq!(parsed.device_id.as_deref(), Some("neko-device-abc123"));
         assert_eq!(parsed.device_name.as_deref(), Some("Hisakazu Mac"));
+        assert_eq!(parsed.device_kind, Some(DeviceKind::Desktop));
+        assert_eq!(parsed.platform, Some(PlatformKind::Macos));
         assert_eq!(parsed.fingerprint.as_deref(), Some("sha256:abc123"));
+    }
+
+    #[test]
+    fn includes_device_identity_in_connection_ticket() {
+        let identity = DeviceIdentity::new(
+            "neko-device-def456",
+            "Windows Workstation",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:def456",
+            [],
+        );
+        let ticket = ConnectionTicket::new(Endpoint::tcp("10.0.0.8", 45821))
+            .unwrap()
+            .with_device_identity(&identity);
+
+        let parsed = ConnectionTicket::parse(&ticket.to_code().unwrap()).unwrap();
+
+        assert_eq!(parsed.device_id.as_deref(), Some("neko-device-def456"));
+        assert_eq!(parsed.device_name.as_deref(), Some("Windows Workstation"));
+        assert_eq!(parsed.device_kind, Some(DeviceKind::Desktop));
+        assert_eq!(parsed.platform, Some(PlatformKind::Windows));
+        assert_eq!(parsed.fingerprint.as_deref(), Some("sha256:def456"));
     }
 
     #[test]

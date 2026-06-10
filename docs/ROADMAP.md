@@ -104,7 +104,29 @@ Exit criteria:
 - protocol crate has no desktop or storage dependency
 - OpenNeko-facing message kinds are reserved without adding fake product features
 
-## Phase 5: LAN Discovery
+## Phase 5: Device Identity V0.4
+
+Goal: give every NekoLink node a stable local identity before trusted pairing.
+
+Status: implemented for the desktop app and protocol crate.
+
+Deliverables:
+
+- `DeviceIdentity`, `DeviceKind`, `PlatformKind`, and `DeviceHello` in `nekolink-protocol`
+- cross-device identity kinds for desktop, phone, tablet, OpenHarmony, web, NAS, and Agent nodes
+- desktop identity persistence in `device_identity.json`
+- stable `neko-device-*` ID and public SHA-256 fingerprint
+- connection code carries receiver `device_id`, `kind`, `platform`, and `fingerprint`
+- app snapshot exposes public identity to the Tauri UI
+
+Exit criteria:
+
+- restarting the desktop app keeps the same device ID
+- connection-code transfer still works
+- old connection codes remain parseable
+- no trusted-pairing UI is faked before it exists
+
+## Phase 6: LAN Discovery
 
 Goal: show nearby devices.
 
@@ -121,13 +143,12 @@ Exit criteria:
 - two app instances on the same LAN can see each other
 - device name and platform appear correctly
 
-## Phase 6: Device Identity and Pairing
+## Phase 7: Trusted Pairing
 
 Goal: trusted device relationship.
 
 Deliverables:
 
-- device identity generation
 - pairing request
 - confirmation dialog
 - trusted device storage
@@ -138,7 +159,7 @@ Exit criteria:
 - untrusted device cannot receive file offers
 - trusted devices persist after restart
 
-## Phase 7: Encrypted Session and File Transfer Productization
+## Phase 8: Encrypted Session and File Transfer Productization
 
 Goal: move from connection-code transfer to trusted-device transfer.
 
@@ -160,7 +181,7 @@ Exit criteria:
 - Windows to Mac file transfer works
 - completed file verifies correctly
 
-## Phase 8: Folder Transfer and Resume
+## Phase 9: Folder Transfer and Resume
 
 Goal: make large practical transfers reliable.
 
@@ -177,7 +198,7 @@ Exit criteria:
 - folder transfer preserves structure
 - interrupted large file can resume from a partial state
 
-## Phase 9: Polish
+## Phase 10: Polish
 
 Goal: make the app feel like a real utility.
 

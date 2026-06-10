@@ -1,12 +1,14 @@
 mod app_state;
 mod commands;
+mod device_identity;
 mod tray;
 
 use app_state::AppState;
 
 pub fn run() {
+    let app_state = AppState::new().expect("failed to initialize NekoDrop app state");
     tauri::Builder::default()
-        .manage(AppState::default())
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
             commands::list_nearby_devices,
