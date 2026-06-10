@@ -9,6 +9,7 @@
     "dev": "npm --workspace apps/desktop run dev",
     "build": "npm --workspace apps/desktop run build",
     "package:desktop": "bash scripts/package-desktop.sh",
+    "package:windows": "powershell -ExecutionPolicy Bypass -File scripts/package-windows.ps1",
     "tauri": "npm --workspace apps/desktop run tauri",
     "check:rust": "cargo check --workspace"
   }
