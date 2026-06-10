@@ -663,8 +663,116 @@ p {
 .status-line,
 .transfer-status,
 .function-panel,
+.device-panel,
 .recent-block {
   width: 100%;
+}
+
+.device-panel {
+  display: grid;
+  gap: 22px;
+  min-width: 0;
+}
+
+.device-overview {
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  min-height: 34px;
+}
+
+.device-overview > div {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+}
+
+.device-overview strong {
+  color: var(--text);
+  font-size: 20px;
+  font-weight: 840;
+}
+
+.device-overview span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 730;
+}
+
+.trusted-strip {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.trusted-list {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.trusted-device {
+  display: grid;
+  grid-template-columns: 9px minmax(0, 1fr) 74px auto;
+  gap: 11px;
+  align-items: center;
+  min-height: 48px;
+  padding: 4px 0;
+  color: var(--muted);
+}
+
+.trusted-device.is-selected .trusted-main strong {
+  color: #c24b32;
+}
+
+.device-dot.is-online {
+  background: var(--green);
+}
+
+.trusted-main {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.trusted-main strong,
+.trusted-main small,
+.trusted-meta {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.trusted-main strong {
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 760;
+}
+
+.trusted-main small,
+.trusted-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.trusted-meta {
+  text-align: right;
+}
+
+.trusted-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.device-empty {
+  display: grid;
+  min-height: 48px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .nearby-strip {

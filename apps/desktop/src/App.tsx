@@ -26,11 +26,12 @@ type BusyMode =
   | "pick-receive"
   | "stop-receive"
   | "pair"
+  | "forget"
   | "history"
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "receive" | "queue" | "history";
+type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
 
 export function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -50,6 +51,7 @@ export function App() {
   const [pendingPairingRequest, setPendingPairingRequest] = useState<PendingPairingRequestDto | null>(null);
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
   const [transfers, setTransfers] = useState<TransferDto[]>([]);
+  const [trustedDevices, setTrustedDevices] = useState<TrustedDeviceDto[]>([]);
   const [selectedTransferId, setSelectedTransferId] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
@@ -208,7 +210,18 @@ export function App() {
   }
 
   async function refreshReceiveState() {
-    const [status, session, report, pendingOffer, pairingRequest, nextTransferStatus, devices, discovery, nextTransfers] = await Promise.all([
+    const [
+      status,
+      session,
+      report,
+      pendingOffer,
+      pairingRequest,
+      nextTransferStatus,
+      devices,
+      trusted,
+      discovery,
+      nextTransfers
+    ] = await Promise.all([
       invokeCommand<string | null>("get_receive_status"),
       invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
       invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
@@ -216,6 +229,7 @@ export function App() {
       invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
       invokeCommand<TransferStatusDto | null>("get_transfer_status"),
       invokeCommand<DeviceDto[]>("list_nearby_devices"),
+      invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
       invokeCommand<DiscoveryStatusDto>("get_discovery_status"),
       invokeCommand<TransferDto[]>("list_transfers")
     ]);
@@ -226,6 +240,7 @@ export function App() {
     setPendingPairingRequest(pairingRequest);
     setTransferStatus(nextTransferStatus);
     setNearbyDevices(devices);
+    setTrustedDevices(trusted);
     setDiscoveryStatus(discovery);
     setTransfers(nextTransfers);
     if (pendingOffer || pairingRequest) setMode("receive");
@@ -533,6 +548,26 @@ export function App() {
     }
   }
 
+  async function forgetTrustedDevice(device: TrustedDeviceDto) {
+    setBusy("forget");
+    setError(null);
+    try {
+      await invokeCommand<void>("forget_trusted_device", {
+        deviceId: device.device_id
+      });
+      if (selectedDeviceId === device.device_id) {
+        setSelectedDeviceId(null);
+        setSelectedDeviceSnapshot(null);
+      }
+      setToast(`已移除：${device.device_name}`);
+      await refreshReceiveState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function respondReceiveOffer(accept: boolean) {
     setBusy("receive");
     setError(null);
@@ -577,15 +612,17 @@ export function App() {
   const pageTitle =
     mode === "receive"
       ? "收件"
-      : mode === "queue"
-        ? "发送队列"
-        : mode === "history"
-          ? "传输历史"
-          : selectedDevice
-            ? `发给 ${selectedDevice.name}`
-            : trimmedConnectionCode.length > 0
-              ? "使用备用码发送"
-              : "把文件发到哪台设备？";
+      : mode === "devices"
+        ? "设备"
+        : mode === "queue"
+          ? "发送队列"
+          : mode === "history"
+            ? "传输历史"
+            : selectedDevice
+              ? `发给 ${selectedDevice.name}`
+              : trimmedConnectionCode.length > 0
+                ? "使用备用码发送"
+                : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -599,9 +636,11 @@ export function App() {
   const pageSubtitle =
     mode === "receive"
       ? receiveState
-      : mode === "history"
-        ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
-        : composerSubtitle;
+      : mode === "devices"
+        ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
+        : mode === "history"
+          ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
+          : composerSubtitle;
 
   return (
     <main className="app-shell">
@@ -626,6 +665,14 @@ export function App() {
             type="button"
           >
             <Icon name="inbox" />
+          </button>
+          <button
+            className={mode === "devices" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("devices")}
+            title="设备"
+            type="button"
+          >
+            <Icon name="devices" />
           </button>
           <button
             className={mode === "queue" ? "rail-item is-active" : "rail-item"}
@@ -892,6 +939,35 @@ export function App() {
                 </>
               ) : null}
 
+              {mode === "devices" ? (
+                <DevicePanel
+                  busy={busy}
+                  discoveryStatus={discoveryStatus}
+                  nearbyDevices={nearbyDevices}
+                  selectedDeviceId={selectedDeviceId}
+                  trustedDevices={trustedDevices}
+                  onForgetTrustedDevice={forgetTrustedDevice}
+                  onSelectNearbyDevice={(device) => {
+                    setSelectedDeviceId(device.id);
+                    setSelectedDeviceSnapshot(device);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setMode("send");
+                    setError(null);
+                  }}
+                  onSelectTrustedDevice={(device) => {
+                    const target = trustedDeviceToDeviceDto(device);
+                    setSelectedDeviceId(target.id);
+                    setSelectedDeviceSnapshot(target);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setMode("send");
+                    setError(null);
+                  }}
+                  onTrustDevice={requestPairing}
+                />
+              ) : null}
+
               {mode === "queue" ? (
                 <QueuePanel
                   busy={busy}
@@ -936,6 +1012,7 @@ export function App() {
 type IconName =
   | "arrow-up"
   | "clock"
+  | "devices"
   | "file"
   | "folder"
   | "inbox"
@@ -949,6 +1026,7 @@ function Icon({ name }: { name: IconName }) {
     <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24">
       {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
       {name === "clock" ? <path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /> : null}
+      {name === "devices" ? <path d="M7 8a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 13a7 7 0 0 1 14 0M17 11a3 3 0 0 1 0 6m3-8a6 6 0 0 1 0 10" /> : null}
       {name === "file" ? <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5" /> : null}
       {name === "folder" ? <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /> : null}
       {name === "inbox" ? <path d="M4 4h16v11l-3 5H7l-3-5V4Zm0 11h5l2 2h2l2-2h5" /> : null}
@@ -1258,6 +1336,95 @@ function NearbyDevices({
           <span>{discoveryCopy.emptyBody}</span>
         </div>
       )}
+    </section>
+  );
+}
+
+function DevicePanel({
+  busy,
+  discoveryStatus,
+  nearbyDevices,
+  selectedDeviceId,
+  trustedDevices,
+  onForgetTrustedDevice,
+  onSelectNearbyDevice,
+  onSelectTrustedDevice,
+  onTrustDevice
+}: {
+  busy: BusyMode | null;
+  discoveryStatus: DiscoveryStatusDto | null;
+  nearbyDevices: DeviceDto[];
+  selectedDeviceId: string | null;
+  trustedDevices: TrustedDeviceDto[];
+  onForgetTrustedDevice: (device: TrustedDeviceDto) => void;
+  onSelectNearbyDevice: (device: DeviceDto) => void;
+  onSelectTrustedDevice: (device: TrustedDeviceDto) => void;
+  onTrustDevice: (device: DeviceDto) => void;
+}) {
+  return (
+    <section className="device-panel">
+      <div className="device-overview">
+        <div>
+          <strong>{trustedDevices.length}</strong>
+          <span>可信设备</span>
+        </div>
+        <div>
+          <strong>{nearbyDevices.length}</strong>
+          <span>附近在线</span>
+        </div>
+      </div>
+
+      <section className="trusted-strip">
+        <div className="section-head">
+          <strong>已信任</strong>
+          <span>{trustedDevices.length > 0 ? "可直接发送" : "未配对"}</span>
+        </div>
+
+        {trustedDevices.length > 0 ? (
+          <div className="trusted-list">
+            {trustedDevices.map((device) => {
+              const online = nearbyDevices.some((nearby) => nearby.id === device.device_id);
+              const selected = selectedDeviceId === device.device_id;
+              return (
+                <div
+                  className={selected ? "trusted-device is-selected" : "trusted-device"}
+                  key={device.device_id}
+                >
+                  <span className={online ? "device-dot is-online" : "device-dot"} />
+                  <span className="trusted-main">
+                    <strong>{device.device_name}</strong>
+                    <small>
+                      {devicePlatformLabel(device.platform)} · {shortDeviceId(device.device_id)}
+                    </small>
+                  </span>
+                  <span className="trusted-meta">
+                    {online ? "在线" : formatDeviceSeenTime(device.last_seen_at_ms)}
+                  </span>
+                  <span className="trusted-actions">
+                    <button className="target-button" onClick={() => onSelectTrustedDevice(device)} type="button">
+                      {selected ? "已选" : "选择"}
+                    </button>
+                    <button className="text-button" disabled={busy === "forget"} onClick={() => onForgetTrustedDevice(device)} type="button">
+                      移除
+                    </button>
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="device-empty">暂无可信设备</div>
+        )}
+      </section>
+
+      <NearbyDevices
+        busy={busy}
+        discoveryStatus={discoveryStatus}
+        devices={nearbyDevices}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={onSelectNearbyDevice}
+        onTrustDevice={onTrustDevice}
+      />
     </section>
   );
 }
@@ -1762,6 +1929,19 @@ function uniquePaths(paths: string[]) {
   return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
 }
 
+function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
+  return {
+    id: device.device_id,
+    name: device.device_name,
+    platform: device.platform,
+    host: device.host,
+    port: device.port,
+    trust_state: "Trusted",
+    public_key_fingerprint: device.public_key_fingerprint,
+    pairing_code: device.pairing_code
+  };
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -1821,6 +2001,21 @@ function formatTransferTime(timestampMs: number) {
     minute: "2-digit",
     hour12: false
   }).format(date);
+}
+
+function formatDeviceSeenTime(timestampMs: number) {
+  if (timestampMs <= 0) return "未见";
+  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
+  if (elapsedSeconds < 60) return "刚刚";
+  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)}m 前`;
+  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)}h 前`;
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(new Date(timestampMs));
 }
 
 function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: number) {
