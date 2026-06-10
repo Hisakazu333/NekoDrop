@@ -251,7 +251,7 @@ export function App() {
     const mergedPaths = uniquePaths([...selectedPaths, ...paths]);
     setSelectedPaths(mergedPaths);
     setSendReport(null);
-    setMode("queue");
+    setMode("send");
     await scanPaths(mergedPaths, manualPaths);
   }
 
@@ -341,7 +341,7 @@ export function App() {
   async function sendFiles() {
     const payload = transferPaths;
     if (payload.length === 0) {
-      setMode("queue");
+      setMode("send");
       setError("未选择文件");
       return;
     }
@@ -366,7 +366,7 @@ export function App() {
   async function sendFilesToDevice(device: DeviceDto) {
     const payload = transferPaths;
     if (payload.length === 0) {
-      setMode("queue");
+      setMode("send");
       setError("未选择文件");
       return;
     }
@@ -603,33 +603,25 @@ export function App() {
           </div>
         ) : null}
 
-        <section className="home-surface">
-          <div className="home-center">
-            <div className="product-line">
-              <span>N</span>
-              <strong>NekoDrop</strong>
-            </div>
-            <h1>{pageTitle}</h1>
+        <section className={mode === "send" ? "work-surface" : "work-surface is-single"}>
+          {mode === "send" ? (
+            <div className="send-workbench">
+              <section className="task-pane">
+                <div className="pane-head">
+                  <div>
+                    <strong>投递任务</strong>
+                    <span>{composerSubtitle}</span>
+                  </div>
+                  <span className={canSend ? "target-state is-ready" : "target-state"}>
+                    {targetLabel}
+                  </span>
+                </div>
 
-            {mode === "send" ? (
-              <>
                 <section className={dragActive ? "composer is-dragging" : "composer"}>
                   <div className="composer-main">
                     <strong>{composerTitle}</strong>
                     <span>{composerSubtitle}</span>
                   </div>
-                  {connectionCodeOpen ? (
-                    <textarea
-                      className="composer-code"
-                      value={connectionCode}
-                      onChange={(event) => {
-                        setConnectionCode(event.target.value);
-                        setSelectedDeviceId(null);
-                      }}
-                      aria-label="对方连接码"
-                      placeholder="粘贴连接码"
-                    />
-                  ) : null}
                   <div className="composer-actions">
                     <div className="composer-toolset">
                       <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
@@ -667,23 +659,65 @@ export function App() {
                   </div>
                 </section>
 
-                <NearbyDevices
+                <QueuePreview
+                  plan={plan}
+                  selectedPaths={selectedPaths}
+                  onClearQueue={clearQueue}
+                  onRemovePath={removePath}
+                />
+
+                <StatusLine
+                  plan={plan}
+                  receiveReport={receiveReport}
+                  receiveSession={receiveSession}
+                  sendReport={sendReport}
+                  transferMetrics={transferMetrics}
+                  transferStatus={transferStatus}
+                  transferCount={transferPaths.length}
+                />
+
+                <RecentActivity sendReport={sendReport} receiveReport={receiveReport} />
+              </section>
+
+              <aside className="target-pane">
+                <TargetPanel
                   busy={busy}
+                  connectionCode={connectionCode}
+                  connectionCodeOpen={connectionCodeOpen}
                   discoveryStatus={discoveryStatus}
                   devices={nearbyDevices}
+                  receiveSession={receiveSession}
+                  receiveState={receiveState}
                   selectedDeviceId={selectedDeviceId}
+                  setConnectionCode={(value) => {
+                    setConnectionCode(value);
+                    setSelectedDeviceId(null);
+                  }}
+                  setConnectionCodeOpen={setConnectionCodeOpen}
+                  onCopyConnectionCode={copyConnectionCode}
+                  onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onSelectDevice={(device) => {
                     setSelectedDeviceId(device.id);
                     setConnectionCodeOpen(false);
                     setConnectionCode("");
                     setError(null);
                   }}
+                  onStartReceive={startReceive}
+                  onStopReceive={stopReceive}
                   onTrustDevice={requestPairing}
                 />
-              </>
-            ) : null}
+              </aside>
+            </div>
+          ) : (
+            <div className="single-workbench">
+              <div className="pane-head">
+                <div>
+                  <strong>{pageTitle}</strong>
+                  <span>{mode === "receive" ? receiveState : composerSubtitle}</span>
+                </div>
+              </div>
 
-            {mode === "receive" ? (
+              {mode === "receive" ? (
               <ReceivePanel
                 bindPort={bindPort}
                 busy={busy}
@@ -702,9 +736,9 @@ export function App() {
                 onStartReceive={startReceive}
                 onStopReceive={stopReceive}
               />
-            ) : null}
+              ) : null}
 
-            {mode === "queue" ? (
+              {mode === "queue" ? (
               <QueuePanel
                 busy={busy}
                 manualPaths={manualPaths}
@@ -719,23 +753,155 @@ export function App() {
                 onRemovePath={removePath}
                 onScan={() => scanPaths()}
               />
-            ) : null}
-
-            <StatusLine
-              plan={plan}
-              receiveReport={receiveReport}
-              receiveSession={receiveSession}
-              sendReport={sendReport}
-              transferMetrics={transferMetrics}
-              transferStatus={transferStatus}
-              transferCount={transferPaths.length}
-            />
-
-            <RecentActivity sendReport={sendReport} receiveReport={receiveReport} />
-          </div>
+              ) : null}
+            </div>
+          )}
         </section>
       </section>
     </main>
+  );
+}
+
+function TargetPanel({
+  busy,
+  connectionCode,
+  connectionCodeOpen,
+  discoveryStatus,
+  devices,
+  receiveSession,
+  receiveState,
+  selectedDeviceId,
+  setConnectionCode,
+  setConnectionCodeOpen,
+  onCopyConnectionCode,
+  onOpenReceiveDir,
+  onSelectDevice,
+  onStartReceive,
+  onStopReceive,
+  onTrustDevice
+}: {
+  busy: BusyMode | null;
+  connectionCode: string;
+  connectionCodeOpen: boolean;
+  discoveryStatus: DiscoveryStatusDto | null;
+  devices: DeviceDto[];
+  receiveSession: ReceiveSessionDto | null;
+  receiveState: string;
+  selectedDeviceId: string | null;
+  setConnectionCode: (value: string) => void;
+  setConnectionCodeOpen: (value: boolean) => void;
+  onCopyConnectionCode: () => void;
+  onOpenReceiveDir: () => void;
+  onSelectDevice: (device: DeviceDto) => void;
+  onStartReceive: () => void;
+  onStopReceive: () => void;
+  onTrustDevice: (device: DeviceDto) => void;
+}) {
+  return (
+    <section className="target-panel">
+      <NearbyDevices
+        busy={busy}
+        discoveryStatus={discoveryStatus}
+        devices={devices}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={onSelectDevice}
+        onTrustDevice={onTrustDevice}
+      />
+
+      <section className="target-block">
+        <div className="block-head">
+          <strong>备用码</strong>
+          <button
+            className={connectionCodeOpen ? "text-button is-active" : "text-button"}
+            onClick={() => setConnectionCodeOpen(!connectionCodeOpen)}
+            type="button"
+          >
+            {connectionCodeOpen ? "收起" : "使用"}
+          </button>
+        </div>
+        {connectionCodeOpen ? (
+          <textarea
+            className="target-code"
+            value={connectionCode}
+            onChange={(event) => setConnectionCode(event.target.value)}
+            aria-label="对方连接码"
+            placeholder="粘贴连接码"
+          />
+        ) : null}
+      </section>
+
+      <section className="target-block">
+        <div className="block-head">
+          <strong>本机收件</strong>
+          <span>{receiveState}</span>
+        </div>
+        <div className="receive-actions">
+          {receiveSession ? (
+            <>
+              <button className="tool-button" onClick={onCopyConnectionCode} type="button">
+                复制码
+              </button>
+              <button className="tool-button" onClick={onOpenReceiveDir} type="button">
+                目录
+              </button>
+              <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
+                关闭
+              </button>
+            </>
+          ) : (
+            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+              打开
+            </button>
+          )}
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function QueuePreview({
+  plan,
+  selectedPaths,
+  onClearQueue,
+  onRemovePath
+}: {
+  plan: TransferPlanDto | null;
+  selectedPaths: string[];
+  onClearQueue: () => void;
+  onRemovePath: (path: string) => void;
+}) {
+  const previewPaths = selectedPaths.slice(0, 4);
+
+  return (
+    <section className="queue-preview">
+      <div className="block-head">
+        <strong>待发送</strong>
+        <span>{plan ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}` : `${selectedPaths.length} 个路径`}</span>
+      </div>
+
+      {previewPaths.length > 0 ? (
+        <div className="queue-preview-list">
+          {previewPaths.map((path) => (
+            <div className="queue-preview-row" key={path}>
+              <span>{path}</span>
+              <button className="text-button" onClick={() => onRemovePath(path)} type="button">
+                移除
+              </button>
+            </div>
+          ))}
+          {selectedPaths.length > previewPaths.length ? (
+            <div className="queue-preview-row is-muted">
+              <span>还有 {selectedPaths.length - previewPaths.length} 个路径</span>
+              <button className="text-button" onClick={onClearQueue} type="button">
+                清空
+              </button>
+            </div>
+          ) : null}
+        </div>
+      ) : (
+        <div className="queue-preview-empty">未选择文件</div>
+      )}
+    </section>
   );
 }
 
