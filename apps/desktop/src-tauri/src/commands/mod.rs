@@ -1,6 +1,6 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::net::{IpAddr, TcpListener, UdpSocket};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::{
@@ -27,6 +27,7 @@ use crate::app_state::{
     ActiveReceiveSession, AppState, PendingReceiveFile, PendingReceiveOffer, ReceiveDecision,
     TransferStatusState,
 };
+use crate::network::primary_lan_ip;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSnapshot {
@@ -344,7 +345,9 @@ pub fn start_receive_once(
     let code_host = if local_addr.ip().is_unspecified() {
         primary_lan_ip()
             .map(|ip| ip.to_string())
-            .unwrap_or_else(|| "127.0.0.1".to_string())
+            .ok_or_else(|| {
+                "无法找到可用于其他设备连接的局域网地址，请确认已连接到同一局域网，或关闭代理/虚拟网卡后重试。".to_string()
+            })?
     } else {
         local_addr.ip().to_string()
     };
@@ -1118,17 +1121,6 @@ fn default_receive_dir() -> PathBuf {
 
 fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
-}
-
-fn primary_lan_ip() -> Option<IpAddr> {
-    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
-    socket.connect("1.1.1.1:80").ok()?;
-    let ip = socket.local_addr().ok()?.ip();
-    if ip.is_loopback() || ip.is_unspecified() {
-        None
-    } else {
-        Some(ip)
-    }
 }
 
 fn bind_available_listener(bind_host: &str, requested_port: u16) -> Result<TcpListener, String> {

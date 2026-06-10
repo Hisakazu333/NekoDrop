@@ -1,6 +1,7 @@
 mod app_state;
 mod commands;
 mod device_identity;
+mod network;
 mod tray;
 
 use app_state::AppState;

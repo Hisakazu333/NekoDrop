@@ -44,6 +44,7 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const previousTransferStatus = useRef<TransferStatusDto | null>(null);
+  const autoReceiveStarted = useRef(false);
   const [transferMetrics, setTransferMetrics] = useState<{
     speedBytesPerSecond: number | null;
     etaSeconds: number | null;
@@ -91,8 +92,8 @@ export function App() {
     }
 
     return {
-      eyebrow: "连接码投递",
-      title: "选择文件，粘贴连接码，发送"
+      eyebrow: "设备投递",
+      title: "选择文件，发送到附近设备"
     };
   }, [mode, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
 
@@ -100,6 +101,14 @@ export function App() {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
     refreshReceiveState().catch(() => undefined);
   }, []);
+
+  useEffect(() => {
+    if (!snapshot || receiveSession || autoReceiveStarted.current) return;
+    autoReceiveStarted.current = true;
+    startReceive({ receiveDirOverride: snapshot.receive_dir, silent: true }).catch((nextError) =>
+      setError(errorMessage(nextError))
+    );
+  }, [snapshot, receiveSession]);
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -278,24 +287,25 @@ export function App() {
     }
   }
 
-  async function startReceive() {
-    setBusy("receive");
+  async function startReceive(options: { receiveDirOverride?: string; silent?: boolean } = {}) {
+    const silent = options.silent ?? false;
+    if (!silent) setBusy("receive");
     setError(null);
     setReceiveReport(null);
-    setMode("receive");
+    if (!silent) setMode("receive");
     try {
       const session = await invokeCommand<ReceiveSessionDto>("start_receive_once", {
         bindHost: "0.0.0.0",
         port: Number(bindPort),
-        receiveDir
+        receiveDir: options.receiveDirOverride ?? receiveDir
       });
       setReceiveSession(session);
       setReceiveStatus("等待接收中");
-      setToast("收件已打开");
+      setToast(silent ? "已自动打开收件" : "收件已打开");
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
-      setBusy(null);
+      if (!silent) setBusy(null);
     }
   }
 
@@ -431,7 +441,7 @@ export function App() {
       <section className="workspace">
         <header className="topbar">
           <div className="breadcrumb">
-            <strong>连接码投递</strong>
+            <strong>设备投递</strong>
             <span>{snapshot?.device_name ?? "这台电脑"}</span>
           </div>
 
@@ -459,7 +469,7 @@ export function App() {
               }}
               type="button"
             >
-              {receiveSession ? "查看连接码" : "打开收件"}
+              {receiveSession ? "查看兜底码" : "打开收件"}
             </button>
             <button className="ghost-pill" onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)} type="button">
               接收目录
@@ -490,8 +500,8 @@ export function App() {
           <section className={dragActive ? "composer is-dragging" : "composer"}>
             <div className="composer-header">
               <div>
-                <strong>对方连接码</strong>
-                <span>连接码以 nekodrop-v1 开头</span>
+                <strong>连接码兜底</strong>
+                <span>自动发现接入前，可粘贴对方连接码发送</span>
               </div>
               <span>{transferPaths.length} 个路径</span>
             </div>
@@ -502,7 +512,7 @@ export function App() {
                 setMode("send");
               }}
               aria-label="对方连接码"
-              placeholder="粘贴对方连接码"
+              placeholder="粘贴对方连接码。自动发现完成后，这里会降级为兜底入口。"
             />
             <div className="composer-bottom">
               <div className="composer-tools">
@@ -611,17 +621,17 @@ function ReceivePanel({
     <section className="function-panel">
       <div className="panel-head">
         <div>
-          <strong>{receiveSession ? "这台电脑正在收件" : "打开这台电脑收件"}</strong>
-          <span>{receiveSession?.bind_addr ?? "生成连接码后给另一台电脑"}</span>
+          <strong>{receiveSession ? "后台收件已打开" : "后台收件未打开"}</strong>
+          <span>{receiveSession?.bind_addr ?? "启动收件服务后生成兜底连接码"}</span>
         </div>
         <div className="panel-actions">
           {receiveSession ? (
             <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
-              关闭收件
+              关闭后台收件
             </button>
           ) : (
             <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-              打开收件
+              打开后台收件
             </button>
           )}
         </div>
