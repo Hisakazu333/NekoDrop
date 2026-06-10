@@ -657,9 +657,8 @@ fn endpoint_and_peer_for_history_record(
     record: &TransferHistoryRecord,
 ) -> Result<(Endpoint, TransferPeer), String> {
     if let Some(device_id) = record.peer_device_id.as_deref() {
-        if let Ok(result) = endpoint_and_peer_for_device_id(state, device_id) {
-            return Ok(result);
-        }
+        return endpoint_and_peer_for_device_id(state, device_id)
+            .map_err(|error| format!("这条历史记录绑定的设备当前不能重发：{error}"));
     }
 
     let target_host = record
