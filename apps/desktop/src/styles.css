@@ -166,6 +166,16 @@ button.nav-item:hover {
   font-weight: 760;
 }
 
+.nav-item.is-roadmap.is-ready {
+  color: #2f5f47;
+  background: #eef8f2;
+}
+
+.nav-item.is-roadmap.is-ready > span:first-child,
+.nav-item.is-roadmap.is-ready small {
+  color: var(--green);
+}
+
 .sidebar-settings {
   align-self: end;
 }

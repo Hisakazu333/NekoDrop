@@ -8,8 +8,8 @@
   "scripts": {
     "dev": "npm --workspace apps/desktop run dev",
     "build": "npm --workspace apps/desktop run build",
+    "package:desktop": "bash scripts/package-desktop.sh",
     "tauri": "npm --workspace apps/desktop run tauri",
     "check:rust": "cargo check --workspace"
   }
 }
-

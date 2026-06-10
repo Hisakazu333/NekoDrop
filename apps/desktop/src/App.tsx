@@ -65,6 +65,36 @@ export function App() {
       : receiveStatus?.startsWith("接收失败")
         ? "接收失败"
         : "收件关闭";
+  const stageCopy = useMemo(() => {
+    if (mode === "receive") {
+      return receiveSession
+        ? {
+            eyebrow: "收件连接码",
+            title: pendingReceiveOffer ? "收到传输请求，等待确认" : "连接码已生成，等待对方发送"
+          }
+        : {
+            eyebrow: "收件连接码",
+            title: "打开收件，生成本机连接码"
+          };
+    }
+
+    if (mode === "queue") {
+      return plan
+        ? {
+            eyebrow: "发送队列",
+            title: `${plan.file_count} 个文件，${formatBytes(plan.total_bytes)}`
+          }
+        : {
+            eyebrow: "发送队列",
+            title: transferPaths.length > 0 ? "扫描路径，生成发送清单" : "选择文件，建立发送队列"
+          };
+    }
+
+    return {
+      eyebrow: "连接码投递",
+      title: "选择文件，粘贴连接码，发送"
+    };
+  }, [mode, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
@@ -368,26 +398,31 @@ export function App() {
             <span>03</span>
             队列
           </button>
+          <span className="nav-item is-roadmap is-ready">
+            <span>04</span>
+            <strong>设备身份</strong>
+            <small>已接入</small>
+          </span>
           <span className="nav-label">后续迭代</span>
           <span className="nav-item is-roadmap">
-            <span>04</span>
-            <strong>设备配对</strong>
-            <small>待接入</small>
-          </span>
-          <span className="nav-item is-roadmap">
             <span>05</span>
-            <strong>历史</strong>
+            <strong>可信配对</strong>
             <small>待接入</small>
           </span>
           <span className="nav-item is-roadmap">
             <span>06</span>
+            <strong>历史</strong>
+            <small>待接入</small>
+          </span>
+          <span className="nav-item is-roadmap">
+            <span>07</span>
             <strong>OpenNeko 支撑</strong>
             <small>待接入</small>
           </span>
         </nav>
 
         <span className="nav-item is-roadmap sidebar-settings">
-          <span>07</span>
+          <span>08</span>
           <strong>设置</strong>
           <small>待接入</small>
         </span>
@@ -448,8 +483,8 @@ export function App() {
 
         <section className="stage">
           <div className="hero-copy">
-            <p>连接码投递</p>
-            <h1>选择文件，粘贴连接码，发送</h1>
+            <p>{stageCopy.eyebrow}</p>
+            <h1>{stageCopy.title}</h1>
           </div>
 
           <section className={dragActive ? "composer is-dragging" : "composer"}>

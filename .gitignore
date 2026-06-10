@@ -2,8 +2,8 @@
 node_modules/
 dist/
 target/
+release/
 *.log
 
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
-
