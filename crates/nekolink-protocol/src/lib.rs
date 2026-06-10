@@ -583,6 +583,16 @@ impl TransferOffer {
             ));
         }
         if self
+            .sender_device_name
+            .as_deref()
+            .is_some_and(|value| value.trim().is_empty())
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "sender_device_name cannot be empty",
+            ));
+        }
+        if self
             .sender_public_key_fingerprint
             .as_deref()
             .is_some_and(|value| value.trim().is_empty())
@@ -590,6 +600,12 @@ impl TransferOffer {
             return Err(ProtocolError::new(
                 ErrorCode::InvalidPayload,
                 "sender_public_key_fingerprint cannot be empty",
+            ));
+        }
+        if self.sender_device_id.is_some() != self.sender_public_key_fingerprint.is_some() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "sender identity requires both device_id and public_key_fingerprint",
             ));
         }
         for file in &self.files {
@@ -704,6 +720,18 @@ mod tests {
             Some("sha256:abc123")
         );
         offer.validate().unwrap();
+    }
+
+    #[test]
+    fn transfer_offer_rejects_partial_sender_identity() {
+        let mut offer = TransferOffer::new("transfer-1", "drop", Vec::new());
+        offer.sender_device_id = Some("neko-device-abc123".to_string());
+
+        let error = offer.validate().unwrap_err();
+
+        assert!(error
+            .message
+            .contains("requires both device_id and public_key_fingerprint"));
     }
 
     #[test]
