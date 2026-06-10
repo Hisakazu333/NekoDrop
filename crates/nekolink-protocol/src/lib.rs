@@ -390,6 +390,25 @@ impl DeviceIdentity {
         }
         Ok(())
     }
+
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.capabilities.contains(&capability)
+    }
+
+    pub fn require_capability(&self, capability: Capability) -> Result<(), ProtocolError> {
+        if self.supports(capability) {
+            return Ok(());
+        }
+
+        Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!(
+                "device {} does not support {}",
+                self.device_id,
+                capability.as_str()
+            ),
+        ))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -428,6 +447,17 @@ impl DeviceHello {
         }
         Ok(())
     }
+
+    pub fn supports(&self, capability: Capability) -> bool {
+        self.identity.supports(capability)
+    }
+}
+
+pub fn shared_capabilities(left: &[Capability], right: &[Capability]) -> Vec<Capability> {
+    left.iter()
+        .copied()
+        .filter(|capability| right.contains(capability))
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -633,6 +663,40 @@ mod tests {
 
         let hello = DeviceHello::new(identity, "NekoDrop", "0.1.0");
         hello.validate().unwrap();
+    }
+
+    #[test]
+    fn checks_and_intersects_capabilities() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::FileReceive,
+                Capability::DevicePairing,
+            ],
+        );
+        let hello = DeviceHello::new(identity, "NekoDrop", "0.1.0");
+
+        assert!(hello.supports(Capability::FileTransfer));
+        assert!(hello
+            .identity
+            .require_capability(Capability::DevicePairing)
+            .is_ok());
+        assert!(hello
+            .identity
+            .require_capability(Capability::AgentCommand)
+            .is_err());
+        assert_eq!(
+            shared_capabilities(
+                &hello.identity.capabilities,
+                &[Capability::FileTransfer, Capability::AgentCommand]
+            ),
+            vec![Capability::FileTransfer]
+        );
     }
 
     #[test]

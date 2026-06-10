@@ -4,7 +4,7 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
 pub use nekolink_protocol::{
-    PairingDecisionPayload, PairingRequestPayload, TransferDecision, TransferOffer,
+    DeviceHello, PairingDecisionPayload, PairingRequestPayload, TransferDecision, TransferOffer,
     TransferOfferFile,
 };
 
@@ -48,6 +48,7 @@ pub struct OutgoingFileFrame {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IncomingControlFrame {
+    DeviceHello(DeviceHello),
     FileOffer(TransferOffer),
     PairingRequest(PairingRequestPayload),
 }
@@ -280,6 +281,28 @@ pub fn write_transfer_offer(stream: &mut impl Write, offer: &TransferOffer) -> N
     write_json_frame(stream, &envelope)
 }
 
+pub fn write_device_hello(stream: &mut impl Write, hello: &DeviceHello) -> NekoDropResult<()> {
+    hello.validate().map_err(protocol_error_to_network)?;
+    let envelope = Envelope::new(
+        hello.identity.device_id.clone(),
+        format!("{}:hello", hello.identity.device_id),
+        MessageKind::DeviceHello,
+        hello.clone(),
+    )
+    .with_capabilities(hello.identity.capabilities.clone());
+    write_json_frame(stream, &envelope)
+}
+
+pub fn read_device_hello(stream: &mut impl Read) -> NekoDropResult<DeviceHello> {
+    let envelope: Envelope<DeviceHello> = read_json_frame(stream)?;
+    envelope
+        .validate_kind(MessageKind::DeviceHello)
+        .map_err(protocol_error_to_network)?;
+    let hello = envelope.payload;
+    hello.validate().map_err(protocol_error_to_network)?;
+    Ok(hello)
+}
+
 pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
     let envelope: Envelope<TransferOffer> = read_json_frame(stream)?;
     envelope
@@ -309,6 +332,14 @@ pub fn read_incoming_control_frame(stream: &mut impl Read) -> NekoDropResult<Inc
     let envelope: Envelope<serde_json::Value> = read_json_frame(stream)?;
     envelope.validate().map_err(protocol_error_to_network)?;
     match envelope.kind {
+        MessageKind::DeviceHello => {
+            let hello =
+                serde_json::from_value::<DeviceHello>(envelope.payload).map_err(|error| {
+                    NekoDropError::Network(format!("failed to decode device hello: {error}"))
+                })?;
+            hello.validate().map_err(protocol_error_to_network)?;
+            Ok(IncomingControlFrame::DeviceHello(hello))
+        }
         MessageKind::FileOffer => {
             let offer =
                 serde_json::from_value::<TransferOffer>(envelope.payload).map_err(|error| {
@@ -580,13 +611,41 @@ fn protocol_error_to_network(error: ProtocolError) -> NekoDropError {
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::io::Cursor;
     use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
     use std::thread;
 
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
+    use nekolink_protocol::{Capability, DeviceIdentity, DeviceKind, PlatformKind};
 
     use super::*;
+
+    #[test]
+    fn device_hello_round_trips_without_tcp_specific_stream() {
+        let hello = DeviceHello::new(
+            DeviceIdentity::new(
+                "neko-device-abc123",
+                "Hisakazu Mac",
+                DeviceKind::Desktop,
+                PlatformKind::Macos,
+                "sha256:abc123",
+                [
+                    Capability::FileTransfer,
+                    Capability::FileReceive,
+                    Capability::DevicePairing,
+                ],
+            ),
+            "NekoDrop",
+            "0.1.0",
+        );
+        let mut buffer = Vec::new();
+
+        write_device_hello(&mut buffer, &hello).unwrap();
+        let received = read_device_hello(&mut Cursor::new(buffer)).unwrap();
+
+        assert_eq!(received, hello);
+    }
 
     #[test]
     fn sends_and_receives_real_file_over_loopback_tcp() {

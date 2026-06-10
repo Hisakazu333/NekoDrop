@@ -199,6 +199,9 @@ where
     P: FnMut(TransferProgressEvent),
 {
     match read_incoming_control_frame(stream)? {
+        IncomingControlFrame::DeviceHello(_) => Err(NekoDropError::Network(
+            "device hello is not a transfer or pairing request".into(),
+        )),
         IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
             stream,
             receive_dir,
