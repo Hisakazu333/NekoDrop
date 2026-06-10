@@ -552,6 +552,12 @@ impl TransferOffer {
                 "transfer_id cannot be empty",
             ));
         }
+        if self.root_name.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "root_name cannot be empty",
+            ));
+        }
         if self.file_count != self.files.len() {
             return Err(ProtocolError::new(
                 ErrorCode::InvalidPayload,
@@ -695,6 +701,15 @@ mod tests {
         assert_eq!(offer.file_count, 1);
         assert_eq!(offer.total_bytes, 10);
         offer.validate().unwrap();
+    }
+
+    #[test]
+    fn transfer_offer_rejects_empty_root_name() {
+        let offer = TransferOffer::new("transfer-1", " ", Vec::new());
+
+        let error = offer.validate().unwrap_err();
+
+        assert!(error.message.contains("root_name"));
     }
 
     #[test]
