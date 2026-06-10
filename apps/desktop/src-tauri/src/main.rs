@@ -14,6 +14,7 @@ pub fn run() {
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
+            commands::get_discovery_status,
             commands::list_nearby_devices,
             commands::list_transfers,
             commands::create_transfer_plan,

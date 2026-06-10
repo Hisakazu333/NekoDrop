@@ -22,7 +22,7 @@ impl Default for AppConfig {
             receive_dir: "~/Downloads/NekoDrop".to_string(),
             launch_at_login: false,
             tray_enabled: false,
-            discovery_enabled: false,
+            discovery_enabled: true,
             receive_policy: ReceivePolicy::AlwaysAsk,
         }
     }

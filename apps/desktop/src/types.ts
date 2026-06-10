@@ -26,6 +26,18 @@ export interface DeviceDto {
   trust_state: string;
 }
 
+export interface DiscoveryStatusDto {
+  phase: string;
+  message: string;
+  service_type: string;
+  advertised: boolean;
+  lan_ip: string | null;
+  port: number | null;
+  device_count: number;
+  last_seen_seconds_ago: number | null;
+  last_error: string | null;
+}
+
 export interface TransferDto {
   id: string;
   peer_device_id: string;

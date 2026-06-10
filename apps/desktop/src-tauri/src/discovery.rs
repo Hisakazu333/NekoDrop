@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use nekodrop_core::{Device, DeviceId, DevicePlatform, DeviceTrustState};
 
-use crate::app_state::{ActiveReceiveSession, AppState};
+use crate::app_state::{ActiveReceiveSession, AppState, DiscoveryStatusState};
 use crate::device_identity::LocalDeviceIdentity;
 use crate::network::primary_lan_ip;
 
@@ -20,27 +20,69 @@ pub fn start_discovery(state: &AppState) {
     let receive_session = state.receive_session.clone();
     let nearby_devices = state.nearby_devices.clone();
     let nearby_seen_at = state.nearby_devices_seen_at.clone();
+    let discovery_status = state.discovery_status.clone();
 
     thread::spawn(move || {
-        let Ok(daemon) = ServiceDaemon::new() else {
-            return;
+        update_discovery_status(&discovery_status, |status| {
+            status.phase = "starting".to_string();
+            status.message = "正在启动自动发现".to_string();
+            status.last_error = None;
+        });
+
+        let daemon = match ServiceDaemon::new() {
+            Ok(daemon) => daemon,
+            Err(error) => {
+                update_discovery_status(&discovery_status, |status| {
+                    status.phase = "unavailable".to_string();
+                    status.message = "mDNS 服务启动失败，自动发现不可用".to_string();
+                    status.last_error = Some(error.to_string());
+                });
+                return;
+            }
         };
-        let Ok(receiver) = daemon.browse(SERVICE_TYPE) else {
-            return;
+        let receiver = match daemon.browse(SERVICE_TYPE) {
+            Ok(receiver) => receiver,
+            Err(error) => {
+                update_discovery_status(&discovery_status, |status| {
+                    status.phase = "unavailable".to_string();
+                    status.message = "无法浏览 NekoDrop 设备服务".to_string();
+                    status.last_error = Some(error.to_string());
+                });
+                return;
+            }
         };
 
-        spawn_service_advertiser(daemon.clone(), device_identity.clone(), receive_session);
+        update_discovery_status(&discovery_status, |status| {
+            status.phase = "active".to_string();
+            status.message = "正在扫描附近设备".to_string();
+            status.last_error = None;
+        });
+
+        spawn_service_advertiser(
+            daemon.clone(),
+            device_identity.clone(),
+            receive_session,
+            discovery_status.clone(),
+        );
 
         loop {
             while let Ok(event) = receiver.try_recv() {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
-                        add_or_update_device(
+                        let added = add_or_update_device(
                             &device_identity,
                             &nearby_devices,
                             &nearby_seen_at,
                             &info,
                         );
+                        if added {
+                            update_discovery_status(&discovery_status, |status| {
+                                status.phase = "active".to_string();
+                                status.message = "已发现附近设备".to_string();
+                                status.last_seen_at = Some(Instant::now());
+                                status.last_error = None;
+                            });
+                        }
                     }
                     ServiceEvent::ServiceRemoved(_, fullname) => {
                         remove_device_by_fullname(&nearby_devices, &nearby_seen_at, &fullname);
@@ -58,13 +100,24 @@ fn spawn_service_advertiser(
     daemon: ServiceDaemon,
     device_identity: LocalDeviceIdentity,
     receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
+    discovery_status: Arc<Mutex<DiscoveryStatusState>>,
 ) {
     thread::spawn(move || {
-        let mut last_port = None;
+        let mut last_port: Option<u16> = None;
         let mut last_fullname: Option<String> = None;
 
         loop {
             let Some(port) = current_receive_port(&receive_session) else {
+                if let Some(fullname) = last_fullname.take() {
+                    let _ = daemon.unregister(&fullname);
+                }
+                if last_port.take().is_some() {
+                    update_discovery_status(&discovery_status, |status| {
+                        status.advertised = false;
+                        status.port = None;
+                        status.message = "后台收件已关闭，本机未广播".to_string();
+                    });
+                }
                 thread::sleep(REGISTER_INTERVAL);
                 continue;
             };
@@ -75,6 +128,20 @@ fn spawn_service_advertiser(
 
             let identity = device_identity.public_identity();
             let Some(host_ip) = primary_lan_ip() else {
+                if let Some(fullname) = last_fullname.take() {
+                    let _ = daemon.unregister(&fullname);
+                }
+                last_port = None;
+                update_discovery_status(&discovery_status, |status| {
+                    status.advertised = false;
+                    status.lan_ip = None;
+                    status.port = None;
+                    status.message = "无法找到可广播的局域网地址".to_string();
+                    status.last_error = Some(
+                        "请确认已连接 Wi-Fi/有线局域网，并关闭会抢占路由的代理或虚拟网卡。"
+                            .to_string(),
+                    );
+                });
                 thread::sleep(REGISTER_INTERVAL);
                 continue;
             };
@@ -103,9 +170,30 @@ fn spawn_service_advertiser(
                 continue;
             };
 
-            last_fullname = Some(info.get_fullname().to_string());
-            last_port = Some(port);
-            let _ = daemon.register(info);
+            let fullname = info.get_fullname().to_string();
+            match daemon.register(info) {
+                Ok(_) => {
+                    last_fullname = Some(fullname);
+                    last_port = Some(port);
+                    update_discovery_status(&discovery_status, |status| {
+                        status.phase = "active".to_string();
+                        status.advertised = true;
+                        status.lan_ip = Some(host_ip.to_string());
+                        status.port = Some(port);
+                        status.message = "本机已广播，正在扫描附近设备".to_string();
+                        status.last_error = None;
+                    });
+                }
+                Err(error) => {
+                    last_port = None;
+                    update_discovery_status(&discovery_status, |status| {
+                        status.advertised = false;
+                        status.port = None;
+                        status.message = "本机广播失败".to_string();
+                        status.last_error = Some(error.to_string());
+                    });
+                }
+            }
             thread::sleep(REGISTER_INTERVAL);
         }
     });
@@ -116,14 +204,14 @@ fn add_or_update_device(
     nearby_devices: &Arc<Mutex<Vec<Device>>>,
     nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
     info: &ResolvedService,
-) {
+) -> bool {
     let local = local_identity.public_identity();
     let device_id = info
         .get_property_val_str("device_id")
         .map(str::to_string)
         .unwrap_or_else(|| info.get_fullname().to_string());
     if device_id == local.device_id {
-        return;
+        return false;
     }
 
     let name = info
@@ -135,14 +223,14 @@ fn add_or_update_device(
         .map(platform_from_str)
         .unwrap_or(DevicePlatform::Unknown);
     let Some(host) = first_ip_addr(info) else {
-        return;
+        return false;
     };
 
     let Ok(id) = DeviceId::new(device_id.clone()) else {
-        return;
+        return false;
     };
     let Ok(mut device) = Device::new(id, name, platform, host.to_string(), info.get_port()) else {
-        return;
+        return false;
     };
     device.public_key_fingerprint = info.get_property_val_str("fingerprint").map(str::to_string);
     device.trust_state = DeviceTrustState::Untrusted;
@@ -160,6 +248,7 @@ fn add_or_update_device(
     if let Ok(mut seen_at) = nearby_seen_at.lock() {
         seen_at.insert(device_id, Instant::now());
     }
+    true
 }
 
 fn remove_device_by_fullname(
@@ -244,5 +333,14 @@ fn service_instance_name(device_name: &str, device_id: &str) -> String {
         format!("NekoDrop-{suffix}")
     } else {
         format!("{name}-{suffix}")
+    }
+}
+
+fn update_discovery_status(
+    discovery_status: &Arc<Mutex<DiscoveryStatusState>>,
+    update: impl FnOnce(&mut DiscoveryStatusState),
+) {
+    if let Ok(mut status) = discovery_status.lock() {
+        update(&mut status);
     }
 }

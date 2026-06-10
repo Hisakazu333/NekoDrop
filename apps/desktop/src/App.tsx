@@ -5,6 +5,7 @@ import { invokeCommand } from "./tauri";
 import type {
   AppSnapshot,
   DeviceDto,
+  DiscoveryStatusDto,
   PendingReceiveOfferDto,
   ReceiveReportDto,
   ReceiveSessionDto,
@@ -35,6 +36,7 @@ export function App() {
   const [plan, setPlan] = useState<TransferPlanDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
   const [nearbyDevices, setNearbyDevices] = useState<DeviceDto[]>([]);
+  const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatusDto | null>(null);
   const [receiveSession, setReceiveSession] = useState<ReceiveSessionDto | null>(null);
   const [receiveStatus, setReceiveStatus] = useState<string | null>(null);
   const [receiveReport, setReceiveReport] = useState<ReceiveReportDto | null>(null);
@@ -95,7 +97,7 @@ export function App() {
 
     return {
       eyebrow: "设备投递",
-      title: "选择文件，发送到附近设备"
+      title: "拖入文件，点附近设备发送"
     };
   }, [mode, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
 
@@ -195,13 +197,14 @@ export function App() {
   }
 
   async function refreshReceiveState() {
-    const [status, session, report, pendingOffer, nextTransferStatus, devices] = await Promise.all([
+    const [status, session, report, pendingOffer, nextTransferStatus, devices, discovery] = await Promise.all([
       invokeCommand<string | null>("get_receive_status"),
       invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
       invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
       invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
       invokeCommand<TransferStatusDto | null>("get_transfer_status"),
-      invokeCommand<DeviceDto[]>("list_nearby_devices")
+      invokeCommand<DeviceDto[]>("list_nearby_devices"),
+      invokeCommand<DiscoveryStatusDto>("get_discovery_status")
     ]);
     setReceiveStatus(status);
     setReceiveSession(session);
@@ -209,6 +212,7 @@ export function App() {
     setPendingReceiveOffer(pendingOffer);
     setTransferStatus(nextTransferStatus);
     setNearbyDevices(devices);
+    setDiscoveryStatus(discovery);
     if (pendingOffer) setMode("receive");
   }
 
@@ -374,7 +378,8 @@ export function App() {
       setSendReport(report);
       setToast(`已发送到 ${device.name}`);
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      setMode("send");
+      setError(deviceSendErrorMessage(errorMessage(nextError)));
     } finally {
       setBusy(null);
     }
@@ -526,23 +531,24 @@ export function App() {
             <h1>{stageCopy.title}</h1>
           </div>
 
-          <section className={dragActive ? "composer is-dragging" : "composer"}>
+          <section className={dragActive ? "composer file-composer is-dragging" : "composer file-composer"}>
             <div className="composer-header">
               <div>
-                <strong>连接码兜底</strong>
-                <span>自动发现接入前，可粘贴对方连接码发送</span>
+                <strong>发送内容</strong>
+                <span>文件会经过真实扫描和 SHA-256 校验</span>
               </div>
               <span>{transferPaths.length} 个路径</span>
             </div>
-            <textarea
-              value={connectionCode}
-              onChange={(event) => {
-                setConnectionCode(event.target.value);
-                setMode("send");
-              }}
-              aria-label="对方连接码"
-              placeholder="粘贴对方连接码。自动发现完成后，这里会降级为兜底入口。"
-            />
+            <div className="drop-target">
+              <strong>{transferPaths.length > 0 ? `${transferPaths.length} 个路径已加入` : "把文件或文件夹拖到这里"}</strong>
+              <span>
+                {plan
+                  ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
+                  : transferPaths.length > 0
+                    ? transferPaths[0]
+                    : "也可以用下面的按钮选择文件；然后点击附近设备发送。"}
+              </span>
+            </div>
             <div className="composer-bottom">
               <div className="composer-tools">
                 <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
@@ -551,25 +557,44 @@ export function App() {
                 <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
                   文件夹
                 </button>
-                <button className="tool-button" onClick={() => setMode("receive")} type="button">
-                  收件
+                <button className="tool-button" disabled={transferPaths.length === 0 || busy === "scan"} onClick={() => scanPaths()} type="button">
+                  扫描
                 </button>
                 <button className="tool-button" onClick={() => setMode("queue")} type="button">
                   队列 {transferPaths.length}
                 </button>
               </div>
-              <button className="send-button" disabled={!canSend} onClick={sendFiles} type="button">
-                发送
-              </button>
+              <span className="composer-hint">{nearbyDevices.length > 0 ? "选择下面的设备发送" : "等待附近设备出现"}</span>
             </div>
           </section>
 
           <NearbyDevices
             busy={busy}
+            discoveryStatus={discoveryStatus}
             devices={nearbyDevices}
             transferCount={transferPaths.length}
             onSendToDevice={sendFilesToDevice}
           />
+
+          <section className="fallback-strip">
+            <div className="fallback-copy">
+              <strong>连接码兜底</strong>
+              <span>自动发现失败、跨网段或防火墙异常时使用。</span>
+            </div>
+            <textarea
+              className="fallback-code"
+              value={connectionCode}
+              onChange={(event) => {
+                setConnectionCode(event.target.value);
+                setMode("send");
+              }}
+              aria-label="对方连接码"
+              placeholder="粘贴对方连接码"
+            />
+            <button className="send-button" disabled={!canSend} onClick={sendFiles} type="button">
+              用连接码发送
+            </button>
+          </section>
 
           <StatusLine
             plan={plan}
@@ -624,20 +649,29 @@ export function App() {
 
 function NearbyDevices({
   busy,
+  discoveryStatus,
   devices,
   transferCount,
   onSendToDevice
 }: {
   busy: BusyMode | null;
+  discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
   transferCount: number;
   onSendToDevice: (device: DeviceDto) => void;
 }) {
+  const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
+
   return (
     <section className="nearby-strip">
       <div className="nearby-head">
-        <strong>附近设备</strong>
-        <span>{devices.length > 0 ? `${devices.length} 台在线` : "正在自动扫描"}</span>
+        <div>
+          <strong>附近设备</strong>
+          <span>{discoveryCopy.subtitle}</span>
+        </div>
+        <span className={discoveryCopy.isError ? "discovery-badge is-error" : "discovery-badge"}>
+          {discoveryCopy.label}
+        </span>
       </div>
 
       {devices.length > 0 ? (
@@ -654,7 +688,7 @@ function NearbyDevices({
               <span className="device-main">
                 <strong>{device.name}</strong>
                 <small>
-                  {devicePlatformLabel(device.platform)} · {device.host}:{device.port}
+                  {devicePlatformLabel(device.platform)} · {trustStateLabel(device.trust_state)} · {device.host}:{device.port}
                 </small>
               </span>
               <span>{transferCount > 0 ? "发送" : "先选文件"}</span>
@@ -662,8 +696,18 @@ function NearbyDevices({
           ))}
         </div>
       ) : (
-        <div className="nearby-empty">
-          <span>同一局域网内打开 NekoDrop 后会出现在这里。</span>
+        <div className={discoveryCopy.isError ? "nearby-empty is-warning" : "nearby-empty"}>
+          <strong>{discoveryCopy.emptyTitle}</strong>
+          <span>{discoveryCopy.emptyBody}</span>
+          {discoveryStatus ? (
+            <small>
+              {discoveryStatus.advertised && discoveryStatus.lan_ip && discoveryStatus.port
+                ? `本机广播 ${discoveryStatus.lan_ip}:${discoveryStatus.port}`
+                : "本机暂未广播"}
+              {" · "}
+              {discoveryStatus.service_type}
+            </small>
+          ) : null}
         </div>
       )}
     </section>
@@ -999,6 +1043,56 @@ function formatDuration(seconds: number) {
   return minuteRest > 0 ? `${hours}h ${minuteRest}m` : `${hours}h`;
 }
 
+function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: number) {
+  if (!status) {
+    return {
+      label: "启动中",
+      subtitle: "正在读取自动发现状态",
+      emptyTitle: "正在启动自动发现",
+      emptyBody: "稍等几秒；如果长时间没有设备，可使用连接码兜底。",
+      isError: false
+    };
+  }
+
+  if (status.phase === "unavailable") {
+    return {
+      label: "发现不可用",
+      subtitle: status.last_error ?? status.message,
+      emptyTitle: "自动发现暂不可用",
+      emptyBody: "请检查系统网络权限或防火墙；当前仍可复制对方连接码发送。",
+      isError: true
+    };
+  }
+
+  if (!status.advertised) {
+    return {
+      label: "未广播",
+      subtitle: status.message,
+      emptyTitle: "本机还没有对外广播",
+      emptyBody: "请确认后台收件已打开，并且当前网络不是代理、虚拟网卡或隔离网络。",
+      isError: Boolean(status.last_error)
+    };
+  }
+
+  if (deviceCount > 0) {
+    return {
+      label: `${deviceCount} 台在线`,
+      subtitle: status.last_seen_seconds_ago == null ? "已发现可投递设备" : `最近发现：${status.last_seen_seconds_ago}s 前`,
+      emptyTitle: "",
+      emptyBody: "",
+      isError: false
+    };
+  }
+
+  return {
+    label: "扫描中",
+    subtitle: status.message,
+    emptyTitle: "正在扫描附近设备",
+    emptyBody: "两台电脑需要在可互通的局域网；Windows 首次运行请允许专用网络防火墙访问。有线和无线如果被路由器隔离，自动发现可能看不到对方。",
+    isError: false
+  };
+}
+
 function platformLabel(platform: string) {
   if (platform === "macos") return "macOS";
   if (platform === "windows") return "Windows";
@@ -1017,6 +1111,14 @@ function devicePlatformLabel(platform: string) {
   return platform || "Unknown";
 }
 
+function trustStateLabel(trustState: string) {
+  if (trustState === "Trusted") return "已信任";
+  if (trustState === "Pairing") return "配对中";
+  if (trustState === "Blocked") return "已阻止";
+  if (trustState === "Local") return "本机";
+  return "未配对";
+}
+
 function shortDeviceId(deviceId: string) {
   if (deviceId.length <= 22) return deviceId;
   return `${deviceId.slice(0, 17)}…${deviceId.slice(-4)}`;
@@ -1031,4 +1133,16 @@ function shortFingerprint(fingerprint: string) {
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function deviceSendErrorMessage(message: string) {
+  if (
+    message.includes("failed to connect") ||
+    message.includes("Connection refused") ||
+    message.includes("连接") ||
+    message.includes("不在线")
+  ) {
+    return `${message} 可先确认对方 NekoDrop 已打开收件、Windows 防火墙允许专用网络访问；如果自动发现不可用，复制对方连接码兜底发送。`;
+  }
+  return message;
 }

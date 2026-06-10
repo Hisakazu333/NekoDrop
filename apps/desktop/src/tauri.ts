@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 type CommandName =
   | "get_app_snapshot"
+  | "get_discovery_status"
   | "list_nearby_devices"
   | "list_transfers"
   | "create_transfer_plan"

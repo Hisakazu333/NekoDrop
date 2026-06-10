@@ -8,6 +8,33 @@ use nekodrop_service::TransferReceiveReport;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
 
 #[derive(Debug, Clone)]
+pub struct DiscoveryStatusState {
+    pub phase: String,
+    pub message: String,
+    pub service_type: String,
+    pub advertised: bool,
+    pub lan_ip: Option<String>,
+    pub port: Option<u16>,
+    pub last_seen_at: Option<Instant>,
+    pub last_error: Option<String>,
+}
+
+impl DiscoveryStatusState {
+    pub fn starting() -> Self {
+        Self {
+            phase: "starting".to_string(),
+            message: "正在启动自动发现".to_string(),
+            service_type: "_nekodrop._tcp.local.".to_string(),
+            advertised: false,
+            lan_ip: None,
+            port: None,
+            last_seen_at: None,
+            last_error: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ActiveReceiveSession {
     pub bind_addr: String,
     pub receive_dir: String,
@@ -58,6 +85,7 @@ pub struct AppState {
     pub device_identity: LocalDeviceIdentity,
     pub nearby_devices: Arc<Mutex<Vec<Device>>>,
     pub nearby_devices_seen_at: Arc<Mutex<HashMap<String, Instant>>>,
+    pub discovery_status: Arc<Mutex<DiscoveryStatusState>>,
     pub transfers: Mutex<Vec<TransferJob>>,
     pub receive_status: Arc<Mutex<Option<String>>>,
     pub receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
@@ -77,6 +105,7 @@ impl AppState {
             device_identity,
             nearby_devices: Arc::new(Mutex::new(Vec::new())),
             nearby_devices_seen_at: Arc::new(Mutex::new(HashMap::new())),
+            discovery_status: Arc::new(Mutex::new(DiscoveryStatusState::starting())),
             transfers: Mutex::new(Vec::new()),
             receive_status: Arc::new(Mutex::new(None)),
             receive_session: Arc::new(Mutex::new(None)),

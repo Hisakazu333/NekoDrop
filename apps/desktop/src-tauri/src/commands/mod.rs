@@ -162,6 +162,19 @@ pub struct TransferStatusDto {
     pub updated_at_ms: u128,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct DiscoveryStatusDto {
+    pub phase: String,
+    pub message: String,
+    pub service_type: String,
+    pub advertised: bool,
+    pub lan_ip: Option<String>,
+    pub port: Option<u16>,
+    pub device_count: usize,
+    pub last_seen_seconds_ago: Option<u64>,
+    pub last_error: Option<String>,
+}
+
 #[tauri::command]
 pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let config = state.config.lock().map_err(|error| error.to_string())?;
@@ -182,6 +195,33 @@ pub fn list_nearby_devices(state: State<'_, AppState>) -> Result<Vec<DeviceDto>,
         .lock()
         .map_err(|error| error.to_string())?;
     Ok(devices.iter().map(device_to_dto).collect())
+}
+
+#[tauri::command]
+pub fn get_discovery_status(state: State<'_, AppState>) -> Result<DiscoveryStatusDto, String> {
+    let status = state
+        .discovery_status
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let device_count = state
+        .nearby_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .len();
+
+    Ok(DiscoveryStatusDto {
+        phase: status.phase.clone(),
+        message: status.message.clone(),
+        service_type: status.service_type.clone(),
+        advertised: status.advertised,
+        lan_ip: status.lan_ip.clone(),
+        port: status.port,
+        device_count,
+        last_seen_seconds_ago: status
+            .last_seen_at
+            .map(|seen_at| seen_at.elapsed().as_secs()),
+        last_error: status.last_error.clone(),
+    })
 }
 
 #[tauri::command]
