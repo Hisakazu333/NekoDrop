@@ -28,7 +28,9 @@ type CommandName =
   | "get_pending_pairing_request"
   | "respond_receive_offer"
   | "respond_pairing_request"
-  | "get_transfer_status";
+  | "get_transfer_status"
+  | "delete_transfer"
+  | "clear_transfer_history";
 
 export async function invokeCommand<T>(
   command: CommandName,

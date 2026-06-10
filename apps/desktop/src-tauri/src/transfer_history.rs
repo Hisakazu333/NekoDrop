@@ -62,6 +62,27 @@ pub fn push_transfer_history_record(
     save_transfer_history(&records)
 }
 
+pub fn delete_transfer_history_record(
+    records: &Arc<Mutex<Vec<TransferHistoryRecord>>>,
+    transfer_id: &str,
+) -> Result<(), String> {
+    let mut records = records.lock().map_err(|error| error.to_string())?;
+    let before_len = records.len();
+    records.retain(|item| item.id != transfer_id);
+    if records.len() == before_len {
+        return Err("找不到这条传输历史".to_string());
+    }
+    save_transfer_history(&records)
+}
+
+pub fn clear_transfer_history_records(
+    records: &Arc<Mutex<Vec<TransferHistoryRecord>>>,
+) -> Result<(), String> {
+    let mut records = records.lock().map_err(|error| error.to_string())?;
+    records.clear();
+    save_transfer_history(&records)
+}
+
 fn save_transfer_history(records: &[TransferHistoryRecord]) -> Result<(), String> {
     let path = transfer_history_file_path()?;
     if let Some(parent) = path.parent() {

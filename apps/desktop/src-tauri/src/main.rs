@@ -42,7 +42,9 @@ pub fn run() {
             commands::get_pending_pairing_request,
             commands::respond_receive_offer,
             commands::respond_pairing_request,
-            commands::get_transfer_status
+            commands::get_transfer_status,
+            commands::delete_transfer,
+            commands::clear_transfer_history
         ])
         .setup(|app| {
             tray::setup_tray(app)?;

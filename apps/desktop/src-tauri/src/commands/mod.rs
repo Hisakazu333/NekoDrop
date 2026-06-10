@@ -30,7 +30,8 @@ use crate::app_state::{
 };
 use crate::network::primary_lan_ip;
 use crate::transfer_history::{
-    new_transfer_history_record, push_transfer_history_record, TransferHistoryRecord,
+    clear_transfer_history_records, delete_transfer_history_record, new_transfer_history_record,
+    push_transfer_history_record, TransferHistoryRecord,
 };
 use crate::trusted_devices::{
     pairing_code_for_device, pairing_code_for_values, save_trusted_devices, trust_device_record,
@@ -442,6 +443,16 @@ pub fn list_transfers(state: State<'_, AppState>) -> Result<Vec<TransferDto>, St
         .lock()
         .map_err(|error| error.to_string())?;
     Ok(transfers.iter().map(transfer_to_dto).collect())
+}
+
+#[tauri::command]
+pub fn delete_transfer(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
+    delete_transfer_history_record(&state.transfer_history, &transfer_id)
+}
+
+#[tauri::command]
+pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> {
+    clear_transfer_history_records(&state.transfer_history)
 }
 
 #[tauri::command]

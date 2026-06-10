@@ -26,6 +26,7 @@ type BusyMode =
   | "pick-receive"
   | "stop-receive"
   | "pair"
+  | "history"
   | "resend"
   | "open";
 
@@ -463,6 +464,37 @@ export function App() {
     }
   }
 
+  async function deleteTransfer(transfer: TransferDto) {
+    setBusy("history");
+    setError(null);
+    try {
+      await invokeCommand<void>("delete_transfer", {
+        transferId: transfer.id
+      });
+      setSelectedTransferId((current) => current === transfer.id ? null : current);
+      await refreshTransfers();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function clearTransferHistory() {
+    if (transfers.length === 0) return;
+    setBusy("history");
+    setError(null);
+    try {
+      await invokeCommand<void>("clear_transfer_history");
+      setSelectedTransferId(null);
+      await refreshTransfers();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function requestPairing(device: DeviceDto) {
     setBusy("pair");
     setError(null);
@@ -766,6 +798,8 @@ export function App() {
                 busy={busy}
                 selectedTransferId={selectedTransferId}
                 transfers={transfers}
+                onClearTransfers={clearTransferHistory}
+                onDeleteTransfer={deleteTransfer}
                 onOpenTransfer={openTransferLocation}
                 onResendTransfer={resendTransfer}
                 onSelectTransfer={(transfer) =>
@@ -847,6 +881,8 @@ export function App() {
                   setSendReport(null);
                 }}
                 onClearQueue={clearQueue}
+                onClearTransfers={clearTransferHistory}
+                onDeleteTransfer={deleteTransfer}
                 onRemovePath={removePath}
                 onScan={() => scanPaths()}
                 onOpenTransfer={openTransferLocation}
@@ -1312,6 +1348,8 @@ function QueuePanel({
   transfers,
   setManualPaths,
   onClearQueue,
+  onClearTransfers,
+  onDeleteTransfer,
   onRemovePath,
   onScan,
   onOpenTransfer,
@@ -1326,6 +1364,8 @@ function QueuePanel({
   transfers: TransferDto[];
   setManualPaths: (value: string) => void;
   onClearQueue: () => void;
+  onClearTransfers: () => void;
+  onDeleteTransfer: (transfer: TransferDto) => void;
   onRemovePath: (path: string) => void;
   onScan: () => void;
   onOpenTransfer: (transfer: TransferDto) => void;
@@ -1374,6 +1414,8 @@ function QueuePanel({
         compact
         selectedTransferId={selectedTransferId}
         transfers={transfers}
+        onClearTransfers={onClearTransfers}
+        onDeleteTransfer={onDeleteTransfer}
         onOpenTransfer={onOpenTransfer}
         onResendTransfer={onResendTransfer}
         onSelectTransfer={onSelectTransfer}
@@ -1450,6 +1492,8 @@ function RecentActivity({
   compact = false,
   selectedTransferId,
   transfers,
+  onClearTransfers,
+  onDeleteTransfer,
   onOpenTransfer,
   onResendTransfer,
   onSelectTransfer
@@ -1458,6 +1502,8 @@ function RecentActivity({
   compact?: boolean;
   selectedTransferId: string | null;
   transfers: TransferDto[];
+  onClearTransfers: () => void;
+  onDeleteTransfer: (transfer: TransferDto) => void;
   onOpenTransfer: (transfer: TransferDto) => void;
   onResendTransfer: (transfer: TransferDto) => void;
   onSelectTransfer: (transfer: TransferDto) => void;
@@ -1469,6 +1515,9 @@ function RecentActivity({
     <section className={compact ? "recent-block is-compact" : "recent-block"}>
       <div className="section-head">
         <strong>最近</strong>
+        <button className="text-button" disabled={busy === "history"} onClick={onClearTransfers} type="button">
+          清空
+        </button>
       </div>
       <div className="recent-list">
         {recentTransfers.map((transfer) => {
@@ -1507,6 +1556,9 @@ function RecentActivity({
                         重发
                       </button>
                     ) : null}
+                    <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
+                      删除
+                    </button>
                   </div>
                 </div>
               ) : null}
