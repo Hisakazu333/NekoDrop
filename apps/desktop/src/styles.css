@@ -316,11 +316,71 @@ p {
 
 .drop-home {
   display: grid;
-  justify-items: center;
+  justify-items: stretch;
   align-content: start;
-  gap: 18px;
-  width: min(100%, 760px);
+  gap: 22px;
+  width: min(100%, 1120px);
   margin: 0 auto;
+}
+
+.brand-line {
+  justify-self: center;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 760px) minmax(260px, 320px);
+  gap: 34px;
+  align-items: start;
+  width: 100%;
+}
+
+.home-primary,
+.home-side {
+  display: grid;
+  gap: 18px;
+  min-width: 0;
+}
+
+.home-side {
+  align-content: start;
+  padding-top: 10px;
+}
+
+.home-side .status-line {
+  justify-content: flex-start;
+}
+
+.home-side .transfer-status-meta {
+  display: grid;
+  gap: 4px;
+}
+
+.home-side .recent-block {
+  margin-top: 2px;
+}
+
+.home-state-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 32px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.home-state-line strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-state-line span {
+  flex: 0 0 auto;
 }
 
 .brand-line {
@@ -1144,4 +1204,20 @@ input {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+@media (max-width: 1180px) {
+  .work-surface {
+    padding-top: 44px;
+  }
+
+  .home-grid {
+    grid-template-columns: minmax(0, 760px);
+    justify-content: center;
+  }
+
+  .home-side {
+    width: min(100%, 760px);
+    padding-top: 0;
+  }
 }

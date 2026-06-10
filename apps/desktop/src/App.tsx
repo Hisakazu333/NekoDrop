@@ -701,111 +701,120 @@ export function App() {
                 <strong>NekoDrop</strong>
               </div>
 
-              <section className={dragActive ? "composer is-dragging" : "composer"}>
-                <div className="composer-main">
-                  <strong>{composerTitle}</strong>
-                  <span>{composerSubtitle}</span>
-                </div>
-                {connectionCodeOpen ? (
-                  <textarea
-                    className="composer-code"
-                    value={connectionCode}
-                    onChange={(event) => {
-                      setConnectionCode(event.target.value);
-                      setSelectedDeviceId(null);
-                      setSelectedDeviceSnapshot(null);
+              <div className="home-grid">
+                <section className="home-primary">
+                  <section className={dragActive ? "composer is-dragging" : "composer"}>
+                    <div className="composer-main">
+                      <strong>{composerTitle}</strong>
+                      <span>{composerSubtitle}</span>
+                    </div>
+                    {connectionCodeOpen ? (
+                      <textarea
+                        className="composer-code"
+                        value={connectionCode}
+                        onChange={(event) => {
+                          setConnectionCode(event.target.value);
+                          setSelectedDeviceId(null);
+                          setSelectedDeviceSnapshot(null);
+                        }}
+                        aria-label="对方连接码"
+                        placeholder="连接码"
+                      />
+                    ) : null}
+                    <div className="composer-actions">
+                      <div className="composer-toolset">
+                        <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} title="文件" type="button">
+                          <Icon name="file" />
+                        </button>
+                        <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} title="文件夹" type="button">
+                          <Icon name="folder" />
+                        </button>
+                        <button
+                          className={connectionCodeOpen ? "tool-button is-active" : "tool-button"}
+                          onClick={() => {
+                            setConnectionCodeOpen((open) => !open);
+                            setSelectedDeviceId(null);
+                            setSelectedDeviceSnapshot(null);
+                          }}
+                          title="备用码"
+                          type="button"
+                        >
+                          <Icon name="link" />
+                        </button>
+                        <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} title="清空" type="button">
+                          <Icon name="trash" />
+                        </button>
+                      </div>
+                      <div className="composer-submit">
+                        <span>{targetLabel}</span>
+                        <button
+                          className="composer-send"
+                          disabled={!canSend}
+                          onClick={sendCurrentTransfer}
+                          title={`发送到 ${targetLabel}`}
+                          type="button"
+                        >
+                          <Icon name="arrow-up" />
+                        </button>
+                      </div>
+                    </div>
+                  </section>
+
+                  <TargetStrip
+                    busy={busy}
+                    discoveryStatus={discoveryStatus}
+                    devices={nearbyDevices}
+                    selectedDeviceId={selectedDeviceId}
+                    onSelectDevice={(device) => {
+                      setSelectedDeviceId(device.id);
+                      setSelectedDeviceSnapshot(device);
+                      setConnectionCodeOpen(false);
+                      setConnectionCode("");
+                      setError(null);
                     }}
-                    aria-label="对方连接码"
-                    placeholder="连接码"
+                    onTrustDevice={requestPairing}
                   />
-                ) : null}
-                <div className="composer-actions">
-                  <div className="composer-toolset">
-                    <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} title="文件" type="button">
-                      <Icon name="file" />
-                    </button>
-                    <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} title="文件夹" type="button">
-                      <Icon name="folder" />
-                    </button>
-                    <button
-                      className={connectionCodeOpen ? "tool-button is-active" : "tool-button"}
-                      onClick={() => {
-                        setConnectionCodeOpen((open) => !open);
-                        setSelectedDeviceId(null);
-                        setSelectedDeviceSnapshot(null);
-                      }}
-                      title="备用码"
-                      type="button"
-                    >
-                      <Icon name="link" />
-                    </button>
-                    <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} title="清空" type="button">
-                      <Icon name="trash" />
-                    </button>
-                  </div>
-                  <div className="composer-submit">
-                    <span>{targetLabel}</span>
-                    <button
-                      className="composer-send"
-                      disabled={!canSend}
-                      onClick={sendCurrentTransfer}
-                      title={`发送到 ${targetLabel}`}
-                      type="button"
-                    >
-                      <Icon name="arrow-up" />
-                    </button>
-                  </div>
-                </div>
-              </section>
 
-              <TargetStrip
-                busy={busy}
-                discoveryStatus={discoveryStatus}
-                devices={nearbyDevices}
-                selectedDeviceId={selectedDeviceId}
-                onSelectDevice={(device) => {
-                  setSelectedDeviceId(device.id);
-                  setSelectedDeviceSnapshot(device);
-                  setConnectionCodeOpen(false);
-                  setConnectionCode("");
-                  setError(null);
-                }}
-                onTrustDevice={requestPairing}
-              />
+                  {selectedPaths.length > 0 ? (
+                    <QueuePreview
+                      plan={plan}
+                      selectedPaths={selectedPaths}
+                      onClearQueue={clearQueue}
+                      onRemovePath={removePath}
+                    />
+                  ) : null}
+                </section>
 
-              {selectedPaths.length > 0 ? (
-                <QueuePreview
-                  plan={plan}
-                  selectedPaths={selectedPaths}
-                  onClearQueue={clearQueue}
-                  onRemovePath={removePath}
-                />
-              ) : null}
+                <aside className="home-side">
+                  {(transferStatus || sendReport || receiveReport || plan) ? (
+                    <StatusLine
+                      plan={plan}
+                      receiveReport={receiveReport}
+                      receiveSession={receiveSession}
+                      sendReport={sendReport}
+                      transferMetrics={transferMetrics}
+                      transferStatus={transferStatus}
+                      transferCount={transferPaths.length}
+                    />
+                  ) : (
+                    <HomeStateLine discoveryStatus={discoveryStatus} receiveState={receiveState} transfers={transfers} />
+                  )}
 
-              {(transferStatus || sendReport || receiveReport || plan) ? (
-                <StatusLine
-                  plan={plan}
-                  receiveReport={receiveReport}
-                  receiveSession={receiveSession}
-                  sendReport={sendReport}
-                  transferMetrics={transferMetrics}
-                  transferStatus={transferStatus}
-                  transferCount={transferPaths.length}
-                />
-              ) : null}
-
-              <RecentActivity
-                busy={busy}
-                selectedTransferId={selectedTransferId}
-                transfers={transfers}
-                onClearTransfers={clearTransferHistory}
-                onDeleteTransfer={deleteTransfer}
-                onOpenTransfer={openTransferLocation}
-                onResendTransfer={resendTransfer}
-                onSelectTransfer={(transfer) =>
-                  setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
-                }
-              />
+                  <RecentActivity
+                    busy={busy}
+                    compact
+                    selectedTransferId={selectedTransferId}
+                    transfers={transfers}
+                    onClearTransfers={clearTransferHistory}
+                    onDeleteTransfer={deleteTransfer}
+                    onOpenTransfer={openTransferLocation}
+                    onResendTransfer={resendTransfer}
+                    onSelectTransfer={(transfer) =>
+                      setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
+                    }
+                  />
+                </aside>
+              </div>
             </div>
           ) : (
             <div className="single-workbench">
@@ -1121,6 +1130,26 @@ function QueuePreview({
         <div className="queue-preview-empty">未选择文件</div>
       )}
     </section>
+  );
+}
+
+function HomeStateLine({
+  discoveryStatus,
+  receiveState,
+  transfers
+}: {
+  discoveryStatus: DiscoveryStatusDto | null;
+  receiveState: string;
+  transfers: TransferDto[];
+}) {
+  const discoveryCopy = discoveryStateCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
+  const latest = transfers[0];
+
+  return (
+    <div className="home-state-line">
+      <span>{receiveState}</span>
+      <strong>{latest ? transferDirectionLabel(latest) : discoveryCopy.label}</strong>
+    </div>
   );
 }
 
