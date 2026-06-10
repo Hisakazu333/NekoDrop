@@ -76,40 +76,6 @@ export function App() {
       : receiveStatus?.startsWith("接收失败")
         ? "接收失败"
         : "收件关闭";
-  const stageCopy = useMemo(() => {
-    if (mode === "receive") {
-      return receiveSession
-        ? {
-            eyebrow: "收件",
-            title: pendingPairingRequest
-              ? "配对请求"
-              : pendingReceiveOffer
-                ? "传输请求"
-                : "收件开启"
-          }
-        : {
-            eyebrow: "收件",
-            title: "收件关闭"
-          };
-    }
-
-    if (mode === "queue") {
-      return plan
-        ? {
-            eyebrow: "队列",
-            title: `${plan.file_count} 个文件，${formatBytes(plan.total_bytes)}`
-          }
-        : {
-            eyebrow: "队列",
-            title: transferPaths.length > 0 ? "待扫描" : "空队列"
-          };
-    }
-
-    return {
-      eyebrow: "投递",
-      title: "选择文件"
-    };
-  }, [mode, pendingPairingRequest, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
@@ -463,78 +429,81 @@ export function App() {
     setSendReport(null);
   }
 
+  const discoveryCopy = discoveryStateCopy(discoveryStatus, nearbyDevices.length);
+  const pageTitle =
+    mode === "receive" ? "收件" : mode === "queue" ? "发送队列" : "把文件发到哪台设备？";
+  const composerTitle = plan
+    ? plan.root_name
+    : transferPaths.length > 0
+      ? `${transferPaths.length} 个路径已加入`
+      : "拖入文件";
+  const composerSubtitle = plan
+    ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
+    : transferPaths.length > 0
+      ? transferPaths[0]
+      : "文件 / 文件夹";
+
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="NekoDrop">
-        <div className="sidebar-brand">
-          <strong>NekoDrop</strong>
-          <span>桌面互传</span>
+      <aside className="rail" aria-label="NekoDrop">
+        <div className="rail-brand" title="NekoDrop">
+          N
         </div>
 
-        <nav className="nav-list" aria-label="主导航">
-          <span className="nav-label">功能</span>
-          <button className={mode === "send" ? "nav-item is-active" : "nav-item"} onClick={() => setMode("send")} type="button">
-            <span>01</span>
-            新投递
+        <nav className="rail-nav" aria-label="主导航">
+          <button
+            className={mode === "send" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("send")}
+            title="投递"
+            type="button"
+          >
+            投递
           </button>
-          <button className={mode === "receive" ? "nav-item is-active" : "nav-item"} onClick={() => setMode("receive")} type="button">
-            <span>02</span>
+          <button
+            className={mode === "receive" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("receive")}
+            title="收件"
+            type="button"
+          >
             收件
           </button>
-          <button className={mode === "queue" ? "nav-item is-active" : "nav-item"} onClick={() => setMode("queue")} type="button">
-            <span>03</span>
+          <button
+            className={mode === "queue" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("queue")}
+            title="队列"
+            type="button"
+          >
             队列
           </button>
-          <span className="nav-item is-roadmap is-ready">
-            <span>04</span>
-            <strong>设备身份</strong>
-            <small>已接入</small>
-          </span>
-          <span className="nav-item is-roadmap is-ready">
-            <span>05</span>
-            <strong>本机信任</strong>
-            <small>已接入</small>
-          </span>
-          <span className="nav-label">计划</span>
-          <span className="nav-item is-roadmap is-ready">
-            <span>06</span>
-            <strong>配对握手</strong>
-            <small>已接入</small>
-          </span>
-          <span className="nav-item is-roadmap">
-            <span>07</span>
-            <strong>历史</strong>
-            <small>待接入</small>
-          </span>
-          <span className="nav-item is-roadmap">
-            <span>08</span>
-            <strong>OpenNeko 支撑</strong>
-            <small>待接入</small>
-          </span>
         </nav>
 
-        <span className="nav-item is-roadmap sidebar-settings">
-          <span>09</span>
-          <strong>设置</strong>
-          <small>待接入</small>
-        </span>
+        <button
+          className="rail-item rail-bottom"
+          disabled={busy === "open"}
+          onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+          title="接收目录"
+          type="button"
+        >
+          目录
+        </button>
       </aside>
 
       <section className="workspace">
         <header className="topbar">
-          <div className="breadcrumb">
-            <strong>设备投递</strong>
+          <div className="title-tab">
+            <strong>NekoDrop</strong>
             <span>{snapshot?.device_name ?? "这台电脑"}</span>
           </div>
 
-          {snapshot ? (
-            <div className="identity-strip" title={snapshot.device_identity.public_key_fingerprint}>
-              <span>{platformLabel(snapshot.device_identity.platform)}</span>
-              <code>{shortDeviceId(snapshot.device_identity.device_id)}</code>
-            </div>
-          ) : null}
-
           <div className="topbar-actions">
+            <span className={discoveryCopy.isError ? "status-pill is-error" : "status-pill"}>
+              {discoveryCopy.label}
+            </span>
+            {snapshot ? (
+              <span className="device-pill" title={snapshot.device_identity.public_key_fingerprint}>
+                {platformLabel(snapshot.device_identity.platform)} · {shortDeviceId(snapshot.device_identity.device_id)}
+              </span>
+            ) : null}
             <button className={receiveSession ? "receive-pill is-on" : "receive-pill"} onClick={() => setMode("receive")} type="button">
               {receiveState}
             </button>
@@ -550,147 +519,135 @@ export function App() {
               }}
               type="button"
             >
-              {receiveSession ? "连接码" : "打开收件"}
-            </button>
-            <button className="ghost-pill" onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)} type="button">
-              接收目录
+              {receiveSession ? "收件" : "打开"}
             </button>
           </div>
         </header>
 
-        {error ? (
-          <section className="notice is-error">
-            <strong>操作失败</strong>
-            <span>{error}</span>
-          </section>
-        ) : null}
-
-        {toast ? (
-          <section className="notice is-info">
-            <strong>已处理</strong>
-            <span>{toast}</span>
-          </section>
-        ) : null}
-
-        <section className="stage">
-          <div className="hero-copy">
-            <p>{stageCopy.eyebrow}</p>
-            <h1>{stageCopy.title}</h1>
+        {(error || toast) ? (
+          <div className="notice-stack">
+            {error ? (
+              <section className="notice is-error">
+                <strong>失败</strong>
+                <span>{error}</span>
+              </section>
+            ) : null}
+            {toast ? (
+              <section className="notice is-info">
+                <strong>完成</strong>
+                <span>{toast}</span>
+              </section>
+            ) : null}
           </div>
+        ) : null}
 
-          <section className={dragActive ? "composer file-composer is-dragging" : "composer file-composer"}>
-            <div className="composer-header">
-              <div>
-                <strong>发送内容</strong>
-                <span>{plan ? `${plan.file_count} 个文件` : `${transferPaths.length} 个路径`}</span>
-              </div>
-              <span>{transferPaths.length} 个路径</span>
+        <section className="home-surface">
+          <div className="home-center">
+            <div className="product-line">
+              <span>N</span>
+              <strong>NekoDrop</strong>
             </div>
-            <div className="drop-target">
-              <strong>{transferPaths.length > 0 ? `${transferPaths.length} 个路径已加入` : "拖入文件"}</strong>
-              <span>
-                {plan
-                  ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
-                  : transferPaths.length > 0
-                    ? transferPaths[0]
-                    : "拖拽到此处"}
-              </span>
-            </div>
-            <div className="composer-bottom">
-              <div className="composer-tools">
-                <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
-                  + 文件
-                </button>
-                <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
-                  文件夹
-                </button>
-                <button className="tool-button" disabled={transferPaths.length === 0 || busy === "scan"} onClick={() => scanPaths()} type="button">
-                  扫描
-                </button>
-                <button className="tool-button" onClick={() => setMode("queue")} type="button">
-                  队列 {transferPaths.length}
-                </button>
-              </div>
-              <span className="composer-hint">{nearbyDevices.length > 0 ? "设备在线" : "扫描中"}</span>
-            </div>
-          </section>
+            <h1>{pageTitle}</h1>
 
-          <NearbyDevices
-            busy={busy}
-            discoveryStatus={discoveryStatus}
-            devices={nearbyDevices}
-            transferCount={transferPaths.length}
-            onSendToDevice={sendFilesToDevice}
-            onTrustDevice={requestPairing}
-          />
+            {mode === "send" ? (
+              <>
+                <section className={dragActive ? "composer is-dragging" : "composer"}>
+                  <div className="composer-main">
+                    <strong>{composerTitle}</strong>
+                    <span>{composerSubtitle}</span>
+                  </div>
+                  <div className="composer-actions">
+                    <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
+                      文件
+                    </button>
+                    <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
+                      文件夹
+                    </button>
+                    <button className="tool-button" disabled={transferPaths.length === 0 || busy === "scan"} onClick={() => scanPaths()} type="button">
+                      扫描
+                    </button>
+                    <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} type="button">
+                      清空
+                    </button>
+                  </div>
+                </section>
 
-          <section className="fallback-strip">
-            <div className="fallback-copy">
-              <strong>备用码</strong>
-              <span>手动投递</span>
-            </div>
-            <textarea
-              className="fallback-code"
-              value={connectionCode}
-              onChange={(event) => {
-                setConnectionCode(event.target.value);
-                setMode("send");
-              }}
-              aria-label="对方连接码"
-              placeholder="连接码"
-            />
-            <button className="send-button" disabled={!canSend} onClick={sendFiles} type="button">
-              发送
-            </button>
-          </section>
+                <NearbyDevices
+                  busy={busy}
+                  discoveryStatus={discoveryStatus}
+                  devices={nearbyDevices}
+                  transferCount={transferPaths.length}
+                  onSendToDevice={sendFilesToDevice}
+                  onTrustDevice={requestPairing}
+                />
 
-          <StatusLine
-            plan={plan}
-            receiveReport={receiveReport}
-            receiveSession={receiveSession}
-            sendReport={sendReport}
-            transferMetrics={transferMetrics}
-            transferStatus={transferStatus}
-            transferCount={transferPaths.length}
-          />
+                <section className="manual-send">
+                  <textarea
+                    value={connectionCode}
+                    onChange={(event) => {
+                      setConnectionCode(event.target.value);
+                      setMode("send");
+                    }}
+                    aria-label="对方连接码"
+                    placeholder="备用码"
+                  />
+                  <button className="send-button" disabled={!canSend} onClick={sendFiles} type="button">
+                    发送
+                  </button>
+                </section>
+              </>
+            ) : null}
 
-          {mode === "receive" ? (
-            <ReceivePanel
-              bindPort={bindPort}
-              busy={busy}
-              receiveDir={receiveDir}
-              pendingOffer={pendingReceiveOffer}
-              pendingPairingRequest={pendingPairingRequest}
+            {mode === "receive" ? (
+              <ReceivePanel
+                bindPort={bindPort}
+                busy={busy}
+                receiveDir={receiveDir}
+                pendingOffer={pendingReceiveOffer}
+                pendingPairingRequest={pendingPairingRequest}
+                receiveReport={receiveReport}
+                receiveSession={receiveSession}
+                setBindPort={setBindPort}
+                setReceiveDir={setReceiveDir}
+                onChooseReceiveDir={chooseReceiveDir}
+                onCopyConnectionCode={copyConnectionCode}
+                onOpenPath={openPath}
+                onRespondReceiveOffer={respondReceiveOffer}
+                onRespondPairingRequest={respondPairingRequest}
+                onStartReceive={startReceive}
+                onStopReceive={stopReceive}
+              />
+            ) : null}
+
+            {mode === "queue" ? (
+              <QueuePanel
+                busy={busy}
+                manualPaths={manualPaths}
+                plan={plan}
+                selectedPaths={selectedPaths}
+                setManualPaths={(value) => {
+                  setManualPaths(value);
+                  setPlan(null);
+                  setSendReport(null);
+                }}
+                onClearQueue={clearQueue}
+                onRemovePath={removePath}
+                onScan={() => scanPaths()}
+              />
+            ) : null}
+
+            <StatusLine
+              plan={plan}
               receiveReport={receiveReport}
               receiveSession={receiveSession}
-              setBindPort={setBindPort}
-              setReceiveDir={setReceiveDir}
-              onChooseReceiveDir={chooseReceiveDir}
-              onCopyConnectionCode={copyConnectionCode}
-              onOpenPath={openPath}
-              onRespondReceiveOffer={respondReceiveOffer}
-              onRespondPairingRequest={respondPairingRequest}
-              onStartReceive={startReceive}
-              onStopReceive={stopReceive}
+              sendReport={sendReport}
+              transferMetrics={transferMetrics}
+              transferStatus={transferStatus}
+              transferCount={transferPaths.length}
             />
-          ) : null}
 
-          {mode === "queue" ? (
-            <QueuePanel
-              busy={busy}
-              manualPaths={manualPaths}
-              plan={plan}
-              selectedPaths={selectedPaths}
-              setManualPaths={(value) => {
-                setManualPaths(value);
-                setPlan(null);
-                setSendReport(null);
-              }}
-              onClearQueue={clearQueue}
-              onRemovePath={removePath}
-              onScan={() => scanPaths()}
-            />
-          ) : null}
+            <RecentActivity sendReport={sendReport} receiveReport={receiveReport} />
+          </div>
         </section>
       </section>
     </main>
@@ -737,7 +694,7 @@ function NearbyDevices({
                   <strong>{device.name}</strong>
                   <small>
                     {devicePlatformLabel(device.platform)} · {trustStateLabel(device.trust_state)}
-                    {device.pairing_code ? ` · 配对码 ${device.pairing_code}` : ""} · {device.host}:{device.port}
+                    {device.pairing_code ? ` · ${device.pairing_code}` : ""}
                   </small>
                 </span>
                 <span className="device-actions">
@@ -1037,6 +994,42 @@ function StatusLine({
   }
 
   return null;
+}
+
+function RecentActivity({
+  receiveReport,
+  sendReport
+}: {
+  receiveReport: ReceiveReportDto | null;
+  sendReport: SendReportDto | null;
+}) {
+  if (!sendReport && !receiveReport) return null;
+
+  return (
+    <section className="recent-block">
+      <div className="section-head">
+        <strong>最近</strong>
+      </div>
+      <div className="recent-list">
+        {sendReport ? (
+          <div className="recent-row">
+            <span>已发送</span>
+            <strong>{sendReport.root_name}</strong>
+            <small>
+              {sendReport.file_count} 个文件 · {formatBytes(sendReport.total_bytes)}
+            </small>
+          </div>
+        ) : null}
+        {receiveReport ? (
+          <div className="recent-row">
+            <span>已接收</span>
+            <strong>{receiveReport.files.length} 个文件</strong>
+            <small>{receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</small>
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
 }
 
 function TransferStatusView({
