@@ -112,3 +112,13 @@ else
   echo "==> Bundle output"
   echo "$CARGO_TARGET_DIR/release/bundle"
 fi
+
+if [[ "$BUNDLES" == *dmg* ]]; then
+  # Keep the installer DMG as the install artifact. Leaving generated .app
+  # bundles in project folders makes Launchpad show duplicate apps.
+  find "$CARGO_TARGET_DIR/release/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+  if [[ "$COPY_BUNDLES" -eq 1 ]]; then
+    find "$ROOT_DIR/release/desktop/$STAMP/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  fi
+fi
