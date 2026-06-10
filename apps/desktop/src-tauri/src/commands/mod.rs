@@ -573,23 +573,49 @@ fn endpoint_and_peer_from_nearby_device(
     state: &AppState,
     device_id: &str,
 ) -> Result<Option<(Endpoint, TransferPeer)>, String> {
-    let devices = state
-        .nearby_devices
+    let device = {
+        let devices = state
+            .nearby_devices
+            .lock()
+            .map_err(|error| error.to_string())?;
+        devices
+            .iter()
+            .find(|item| item.id.as_str() == device_id)
+            .cloned()
+    };
+    let Some(device) = device else {
+        return Ok(None);
+    };
+
+    let trusted_devices = state
+        .trusted_devices
         .lock()
         .map_err(|error| error.to_string())?;
-    Ok(devices
+    Ok(Some(trusted_peer_from_nearby_device(
+        &device,
+        &trusted_devices,
+    )?))
+}
+
+fn trusted_peer_from_nearby_device(
+    device: &Device,
+    trusted_devices: &[TrustedDeviceRecord],
+) -> Result<(Endpoint, TransferPeer), String> {
+    let is_trusted = trusted_devices
         .iter()
-        .find(|item| item.id.as_str() == device_id)
-        .map(|device| {
-            let endpoint = Endpoint::tcp(device.host.clone(), device.port);
-            let peer = TransferPeer {
-                device_id: Some(device.id.as_str().to_string()),
-                name: Some(device.name.clone()),
-                fingerprint: device.public_key_fingerprint.clone(),
-                target_host: Some(endpoint_label(&endpoint)),
-            };
-            (endpoint, peer)
-        }))
+        .any(|record| trusted_record_matches(device, record));
+    if !is_trusted {
+        return Err("这台设备还没有可信配对，请先完成配对再发送文件。".to_string());
+    }
+
+    let endpoint = Endpoint::tcp(device.host.clone(), device.port);
+    let peer = TransferPeer {
+        device_id: Some(device.id.as_str().to_string()),
+        name: Some(device.name.clone()),
+        fingerprint: device.public_key_fingerprint.clone(),
+        target_host: Some(endpoint_label(&endpoint)),
+    };
+    Ok((endpoint, peer))
 }
 
 fn endpoint_and_peer_from_trusted_device(
@@ -2454,6 +2480,27 @@ mod tests {
     }
 
     #[test]
+    fn nearby_device_requires_trusted_identity_before_send() {
+        let device = nearby_device("device-a", "sha256:device-a");
+
+        let result = trusted_peer_from_nearby_device(&device, &[]);
+
+        assert!(result.unwrap_err().contains("可信配对"));
+    }
+
+    #[test]
+    fn nearby_device_uses_current_endpoint_after_trust_match() {
+        let device = nearby_device("device-a", "sha256:device-a");
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+
+        let (endpoint, peer) = trusted_peer_from_nearby_device(&device, &trusted).unwrap();
+
+        assert_eq!(endpoint, Endpoint::tcp("192.168.1.20", 45821));
+        assert_eq!(peer.device_id.as_deref(), Some("device-a"));
+        assert_eq!(peer.fingerprint.as_deref(), Some("sha256:device-a"));
+    }
+
+    #[test]
     fn receive_policy_block_all_rejects_offer_without_pending_prompt() {
         let pending = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(None));
@@ -2541,6 +2588,38 @@ mod tests {
         assert_eq!(file_index, 1);
         assert_eq!(current_file.as_deref(), Some("drop/a.txt"));
         assert_eq!(bytes_transferred, 42);
+    }
+
+    fn nearby_device(device_id: &str, fingerprint: &str) -> Device {
+        let mut device = Device::new(
+            nekodrop_core::DeviceId::new(device_id).unwrap(),
+            "MacBook",
+            nekodrop_core::DevicePlatform::MacOS,
+            "192.168.1.20",
+            45821,
+        )
+        .unwrap();
+        device.public_key_fingerprint = Some(fingerprint.to_string());
+        device
+    }
+
+    fn trusted_record(
+        device_id: &str,
+        device_name: &str,
+        public_key_fingerprint: &str,
+    ) -> TrustedDeviceRecord {
+        TrustedDeviceRecord {
+            schema_version: 1,
+            device_id: device_id.to_string(),
+            device_name: device_name.to_string(),
+            platform: "macos".to_string(),
+            host: "192.168.1.20".to_string(),
+            port: 45821,
+            public_key_fingerprint: public_key_fingerprint.to_string(),
+            pairing_code: "AAA-BBB".to_string(),
+            paired_at_ms: 1,
+            last_seen_at_ms: 1,
+        }
     }
 }
 
