@@ -519,7 +519,7 @@ export function App() {
             title="投递"
             type="button"
           >
-            投递
+            <Icon name="send" />
           </button>
           <button
             className={mode === "receive" ? "rail-item is-active" : "rail-item"}
@@ -527,7 +527,7 @@ export function App() {
             title="收件"
             type="button"
           >
-            收件
+            <Icon name="inbox" />
           </button>
           <button
             className={mode === "queue" ? "rail-item is-active" : "rail-item"}
@@ -535,7 +535,7 @@ export function App() {
             title="队列"
             type="button"
           >
-            队列
+            <Icon name="list" />
           </button>
         </nav>
 
@@ -546,7 +546,7 @@ export function App() {
           title="接收目录"
           type="button"
         >
-          目录
+          <Icon name="folder" />
         </button>
       </aside>
 
@@ -563,7 +563,7 @@ export function App() {
             </span>
             {snapshot ? (
               <span className="device-pill" title={snapshot.device_identity.public_key_fingerprint}>
-                {platformLabel(snapshot.device_identity.platform)} · {shortDeviceId(snapshot.device_identity.device_id)}
+                {platformLabel(snapshot.device_identity.platform)}
               </span>
             ) : null}
             <button className={receiveSession ? "receive-pill is-on" : "receive-pill"} onClick={() => setMode("receive")} type="button">
@@ -605,67 +605,91 @@ export function App() {
 
         <section className={mode === "send" ? "work-surface" : "work-surface is-single"}>
           {mode === "send" ? (
-            <div className="send-workbench">
-              <section className="task-pane">
-                <div className="pane-head">
-                  <div>
-                    <strong>投递任务</strong>
-                    <span>{composerSubtitle}</span>
-                  </div>
-                  <span className={canSend ? "target-state is-ready" : "target-state"}>
-                    {targetLabel}
-                  </span>
+            <div className="drop-home">
+              <div className="brand-line">
+                <span>N</span>
+                <strong>NekoDrop</strong>
+              </div>
+
+              <section className={dragActive ? "composer is-dragging" : "composer"}>
+                <div className="composer-main">
+                  <strong>{composerTitle}</strong>
+                  <span>{composerSubtitle}</span>
                 </div>
-
-                <section className={dragActive ? "composer is-dragging" : "composer"}>
-                  <div className="composer-main">
-                    <strong>{composerTitle}</strong>
-                    <span>{composerSubtitle}</span>
+                {connectionCodeOpen ? (
+                  <textarea
+                    className="composer-code"
+                    value={connectionCode}
+                    onChange={(event) => {
+                      setConnectionCode(event.target.value);
+                      setSelectedDeviceId(null);
+                    }}
+                    aria-label="对方连接码"
+                    placeholder="连接码"
+                  />
+                ) : null}
+                <div className="composer-actions">
+                  <div className="composer-toolset">
+                    <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} title="文件" type="button">
+                      <Icon name="file" />
+                    </button>
+                    <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} title="文件夹" type="button">
+                      <Icon name="folder" />
+                    </button>
+                    <button
+                      className={connectionCodeOpen ? "tool-button is-active" : "tool-button"}
+                      onClick={() => {
+                        setConnectionCodeOpen((open) => !open);
+                        setSelectedDeviceId(null);
+                      }}
+                      title="备用码"
+                      type="button"
+                    >
+                      <Icon name="link" />
+                    </button>
+                    <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} title="清空" type="button">
+                      <Icon name="trash" />
+                    </button>
                   </div>
-                  <div className="composer-actions">
-                    <div className="composer-toolset">
-                      <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
-                        文件
-                      </button>
-                      <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
-                        文件夹
-                      </button>
-                      <button
-                        className={connectionCodeOpen ? "tool-button is-active" : "tool-button"}
-                        onClick={() => {
-                          setConnectionCodeOpen((open) => !open);
-                          setSelectedDeviceId(null);
-                        }}
-                        type="button"
-                      >
-                        备用码
-                      </button>
-                      <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} type="button">
-                        清空
-                      </button>
-                    </div>
-                    <div className="composer-submit">
-                      <span>{targetLabel}</span>
-                      <button
-                        className="composer-send"
-                        disabled={!canSend}
-                        onClick={sendCurrentTransfer}
-                        title={`发送到 ${targetLabel}`}
-                        type="button"
-                      >
-                        ↑
-                      </button>
-                    </div>
+                  <div className="composer-submit">
+                    <span>{targetLabel}</span>
+                    <button
+                      className="composer-send"
+                      disabled={!canSend}
+                      onClick={sendCurrentTransfer}
+                      title={`发送到 ${targetLabel}`}
+                      type="button"
+                    >
+                      <Icon name="arrow-up" />
+                    </button>
                   </div>
-                </section>
+                </div>
+              </section>
 
+              <TargetStrip
+                busy={busy}
+                discoveryStatus={discoveryStatus}
+                devices={nearbyDevices}
+                selectedDeviceId={selectedDeviceId}
+                onSelectDevice={(device) => {
+                  setSelectedDeviceId(device.id);
+                  setConnectionCodeOpen(false);
+                  setConnectionCode("");
+                  setError(null);
+                }}
+                onTrustDevice={requestPairing}
+              />
+
+              {selectedPaths.length > 0 ? (
                 <QueuePreview
                   plan={plan}
                   selectedPaths={selectedPaths}
                   onClearQueue={clearQueue}
                   onRemovePath={removePath}
                 />
+              ) : null}
 
+              {(transferStatus || sendReport || receiveReport || plan) ? (
                 <StatusLine
                   plan={plan}
                   receiveReport={receiveReport}
@@ -675,15 +699,25 @@ export function App() {
                   transferStatus={transferStatus}
                   transferCount={transferPaths.length}
                 />
+              ) : null}
 
-                <RecentActivity sendReport={sendReport} receiveReport={receiveReport} />
-              </section>
+              <RecentActivity sendReport={sendReport} receiveReport={receiveReport} />
+            </div>
+          ) : (
+            <div className="single-workbench">
+              <div className="pane-head">
+                <div>
+                  <strong>{pageTitle}</strong>
+                  <span>{mode === "receive" ? receiveState : composerSubtitle}</span>
+                </div>
+              </div>
 
-              <aside className="target-pane">
-                <TargetPanel
-                  busy={busy}
-                  connectionCode={connectionCode}
-                  connectionCodeOpen={connectionCodeOpen}
+              {mode === "receive" ? (
+                <>
+                  <TargetPanel
+                    busy={busy}
+                    connectionCode={connectionCode}
+                    connectionCodeOpen={connectionCodeOpen}
                   discoveryStatus={discoveryStatus}
                   devices={nearbyDevices}
                   receiveSession={receiveSession}
@@ -706,36 +740,25 @@ export function App() {
                   onStopReceive={stopReceive}
                   onTrustDevice={requestPairing}
                 />
-              </aside>
-            </div>
-          ) : (
-            <div className="single-workbench">
-              <div className="pane-head">
-                <div>
-                  <strong>{pageTitle}</strong>
-                  <span>{mode === "receive" ? receiveState : composerSubtitle}</span>
-                </div>
-              </div>
-
-              {mode === "receive" ? (
-              <ReceivePanel
-                bindPort={bindPort}
-                busy={busy}
-                receiveDir={receiveDir}
-                pendingOffer={pendingReceiveOffer}
-                pendingPairingRequest={pendingPairingRequest}
-                receiveReport={receiveReport}
-                receiveSession={receiveSession}
-                setBindPort={setBindPort}
-                setReceiveDir={setReceiveDir}
-                onChooseReceiveDir={chooseReceiveDir}
-                onCopyConnectionCode={copyConnectionCode}
-                onOpenPath={openPath}
-                onRespondReceiveOffer={respondReceiveOffer}
-                onRespondPairingRequest={respondPairingRequest}
-                onStartReceive={startReceive}
-                onStopReceive={stopReceive}
-              />
+                  <ReceivePanel
+                    bindPort={bindPort}
+                    busy={busy}
+                    receiveDir={receiveDir}
+                    pendingOffer={pendingReceiveOffer}
+                    pendingPairingRequest={pendingPairingRequest}
+                    receiveReport={receiveReport}
+                    receiveSession={receiveSession}
+                    setBindPort={setBindPort}
+                    setReceiveDir={setReceiveDir}
+                    onChooseReceiveDir={chooseReceiveDir}
+                    onCopyConnectionCode={copyConnectionCode}
+                    onOpenPath={openPath}
+                    onRespondReceiveOffer={respondReceiveOffer}
+                    onRespondPairingRequest={respondPairingRequest}
+                    onStartReceive={startReceive}
+                    onStopReceive={stopReceive}
+                  />
+                </>
               ) : null}
 
               {mode === "queue" ? (
@@ -759,6 +782,87 @@ export function App() {
         </section>
       </section>
     </main>
+  );
+}
+
+type IconName =
+  | "arrow-up"
+  | "file"
+  | "folder"
+  | "inbox"
+  | "link"
+  | "list"
+  | "send"
+  | "trash";
+
+function Icon({ name }: { name: IconName }) {
+  return (
+    <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24">
+      {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
+      {name === "file" ? <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5" /> : null}
+      {name === "folder" ? <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /> : null}
+      {name === "inbox" ? <path d="M4 4h16v11l-3 5H7l-3-5V4Zm0 11h5l2 2h2l2-2h5" /> : null}
+      {name === "link" ? <path d="M10 13a5 5 0 0 0 7.07 0l2-2A5 5 0 0 0 12 4l-1.2 1.2M14 11a5 5 0 0 0-7.07 0l-2 2A5 5 0 0 0 12 20l1.2-1.2" /> : null}
+      {name === "list" ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : null}
+      {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
+      {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
+    </svg>
+  );
+}
+
+function TargetStrip({
+  busy,
+  discoveryStatus,
+  devices,
+  selectedDeviceId,
+  onSelectDevice,
+  onTrustDevice
+}: {
+  busy: BusyMode | null;
+  discoveryStatus: DiscoveryStatusDto | null;
+  devices: DeviceDto[];
+  selectedDeviceId: string | null;
+  onSelectDevice: (device: DeviceDto) => void;
+  onTrustDevice: (device: DeviceDto) => void;
+}) {
+  const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
+
+  return (
+    <section className="target-strip" aria-label="附近设备">
+      {devices.length > 0 ? (
+        devices.map((device) => {
+          const trusted = device.trust_state === "Trusted";
+          const selected = device.id === selectedDeviceId;
+          return (
+            <button
+              className={[
+                "target-chip",
+                trusted ? "is-trusted" : "",
+                selected ? "is-selected" : ""
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              disabled={!trusted && busy === "pair"}
+              key={device.id}
+              onClick={() => {
+                if (trusted) {
+                  onSelectDevice(device);
+                  return;
+                }
+                onTrustDevice(device);
+              }}
+              type="button"
+            >
+              <span className="device-dot" />
+              <strong>{device.name}</strong>
+              <small>{trusted ? (selected ? "已选" : "选择") : "配对"}</small>
+            </button>
+          );
+        })
+      ) : (
+        <span className="target-empty">{discoveryCopy.label}</span>
+      )}
+    </section>
   );
 }
 
@@ -1226,15 +1330,6 @@ function StatusLine({
       <div className="status-line">
         <strong>已选择</strong>
         <span>{plan.file_count} 个文件 · {formatBytes(plan.total_bytes)}</span>
-      </div>
-    );
-  }
-
-  if (receiveSession) {
-    return (
-      <div className="status-line">
-        <strong>收件中</strong>
-        <span>{receiveSession.bind_addr}</span>
       </div>
     );
   }
