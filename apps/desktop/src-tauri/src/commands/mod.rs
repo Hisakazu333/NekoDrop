@@ -618,6 +618,17 @@ fn trusted_peer_from_nearby_device(
     Ok((endpoint, peer))
 }
 
+fn reject_self_peer(local_identity: &DeviceIdentity, peer: &TransferPeer) -> Result<(), String> {
+    if peer
+        .device_id
+        .as_deref()
+        .is_some_and(|device_id| device_id == local_identity.device_id)
+    {
+        return Err("不能把文件发送给本机，请选择另一台设备。".to_string());
+    }
+    Ok(())
+}
+
 fn endpoint_and_peer_from_trusted_device(
     state: &AppState,
     device_id: &str,
@@ -740,6 +751,7 @@ fn send_paths_to_endpoint(
     let source_paths = path_bufs_to_strings(&paths);
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
     let sender_identity = state.device_identity.public_identity();
+    reject_self_peer(&sender_identity, &peer)?;
     let started_at_ms = now_ms();
     let transfer_id = format!("send-{started_at_ms}");
     let cancel = Arc::new(AtomicBool::new(false));
@@ -2501,6 +2513,34 @@ mod tests {
     }
 
     #[test]
+    fn self_peer_is_rejected_by_device_id() {
+        let identity = test_identity("device-a");
+        let peer = TransferPeer {
+            device_id: Some("device-a".to_string()),
+            name: Some("This Mac".to_string()),
+            fingerprint: Some("sha256:self".to_string()),
+            target_host: Some("192.168.1.20:45821".to_string()),
+        };
+
+        let error = reject_self_peer(&identity, &peer).unwrap_err();
+
+        assert!(error.contains("本机"));
+    }
+
+    #[test]
+    fn manual_endpoint_without_identity_is_not_self_rejected() {
+        let identity = test_identity("device-a");
+        let peer = TransferPeer {
+            device_id: None,
+            name: None,
+            fingerprint: None,
+            target_host: Some("192.168.1.30:45821".to_string()),
+        };
+
+        assert!(reject_self_peer(&identity, &peer).is_ok());
+    }
+
+    #[test]
     fn receive_policy_block_all_rejects_offer_without_pending_prompt() {
         let pending = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(None));
@@ -2620,6 +2660,17 @@ mod tests {
             paired_at_ms: 1,
             last_seen_at_ms: 1,
         }
+    }
+
+    fn test_identity(device_id: &str) -> DeviceIdentity {
+        DeviceIdentity::new(
+            device_id,
+            "This Mac",
+            nekolink_protocol::DeviceKind::Desktop,
+            nekolink_protocol::PlatformKind::Macos,
+            "sha256:self",
+            [],
+        )
     }
 }
 
