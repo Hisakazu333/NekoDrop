@@ -2287,6 +2287,12 @@ fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String>
                 endpoint.port
             )));
         }
+        if is_current_lan_ip(ip, primary_lan_ip()) {
+            return Err(
+                "目标地址是本机局域网地址，不能把文件发送给自己。请选择另一台设备或复制对方连接码。"
+                    .to_string(),
+            );
+        }
         if ip.is_unspecified() {
             return Err(
                 "目标地址是 0.0.0.0 或 ::，这只是监听地址，不能被另一台设备连接。请重新复制接收端连接码。"
@@ -2311,6 +2317,10 @@ fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String>
     }
 
     Ok(())
+}
+
+fn is_current_lan_ip(target: IpAddr, current_lan_ip: Option<IpAddr>) -> bool {
+    current_lan_ip.is_some_and(|current| current == target)
 }
 
 fn friendly_transfer_error(error: &str) -> String {
@@ -2462,6 +2472,14 @@ mod tests {
         let link_local =
             validate_endpoint_for_desktop_send(&Endpoint::tcp("169.254.0.2", 45821)).unwrap_err();
         assert!(link_local.contains("169.254"));
+    }
+
+    #[test]
+    fn current_lan_ip_is_treated_as_self_target() {
+        let current = Some(IpAddr::from([192, 168, 1, 20]));
+
+        assert!(is_current_lan_ip(IpAddr::from([192, 168, 1, 20]), current));
+        assert!(!is_current_lan_ip(IpAddr::from([192, 168, 1, 30]), current));
     }
 
     #[test]
