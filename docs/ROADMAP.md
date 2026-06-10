@@ -80,7 +80,7 @@ Exit criteria:
 - two app instances can transfer files by connection code
 - receiver can reject before any file bytes are sent
 - received files fail if headers do not match the accepted offer
-- no fake devices, fake history, or simulated transfer rows appear in the UI
+- UI transfer rows, devices, and history are backed by real service state
 
 ## Phase 4: NekoLink Protocol V0.3
 
@@ -102,7 +102,7 @@ Exit criteria:
 - existing connection-code file transfer still works
 - offer and decision frames are wrapped in `nekolink` envelopes
 - protocol crate has no desktop or storage dependency
-- OpenNeko-facing message kinds are reserved without adding fake product features
+- OpenNeko-facing message kinds are reserved without presenting planned product features as shipped
 
 ## Phase 5: Device Identity V0.4
 
@@ -124,7 +124,7 @@ Exit criteria:
 - restarting the desktop app keeps the same device ID
 - connection-code transfer still works
 - old connection codes remain parseable
-- no trusted-pairing UI is faked before it exists
+- trusted-pairing UI is only shown when backed by implemented pairing behavior
 
 ## Phase 6: LAN Discovery
 

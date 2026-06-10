@@ -1,16 +1,32 @@
 # Third Party Notices
 
-NekoDrop uses open source dependencies. This file records notable direct dependencies that affect product architecture or distribution obligations.
+NekoDrop uses third-party open source software. This file is a human-readable notice for notable direct dependencies. It is not a complete generated software bill of materials.
 
-## mdns-sd
+The exact dependency graph is recorded in:
 
-- Purpose: local network service discovery for nearby NekoDrop devices.
-- License: Apache-2.0 OR MIT.
-- Repository: https://github.com/keepsimple1/mdns-sd
+- `Cargo.lock`
+- `package-lock.json`
 
-NekoDrop uses `mdns-sd` as a library dependency. It is not listed as a NekoDrop contributor unless maintainers directly contribute to this repository.
+Before a stable public release, generate a complete third-party license report from the lockfiles and include it with release artifacts.
 
-Distribution notes:
+## Notable Direct Dependencies
 
-- Keep this notice with packaged releases.
-- Keep upstream license terms available in release artifacts or the app's future open source licenses view.
+| Dependency | Area | License |
+| --- | --- | --- |
+| Tauri | Desktop runtime and bundling | Apache-2.0 OR MIT |
+| `@tauri-apps/api` | JavaScript bridge to Tauri commands | Apache-2.0 OR MIT |
+| React / React DOM | Desktop WebView UI | MIT |
+| Vite / `@vitejs/plugin-react` | Frontend build tooling | MIT |
+| TypeScript | Type checking and frontend build support | Apache-2.0 |
+| `serde` / `serde_json` | Rust serialization | MIT OR Apache-2.0 |
+| `mdns-sd` | Local network service discovery | Apache-2.0 OR MIT |
+| `sha2` / `hex` | Checksums and encoding | MIT OR Apache-2.0 |
+| `walkdir` | Directory traversal for transfer manifests | Unlicense OR MIT |
+| `getrandom` | Randomness used by desktop identity code | MIT OR Apache-2.0 |
+
+## Distribution Notes
+
+- Keep this file and the root `LICENSE` with source releases.
+- Packaged desktop releases should include a complete generated third-party notice before a stable release.
+- Do not place signing certificates, private keys, local device identities, user transfer history, or OpenNeko commercial assets in this repository.
+- Third-party project names and trademarks belong to their respective owners.

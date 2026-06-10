@@ -224,7 +224,7 @@ state.read
 state.write
 ```
 
-默认不允许：
+默认禁用的高风险权限：
 
 ```text
 script.run

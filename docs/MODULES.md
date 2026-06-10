@@ -1,192 +1,129 @@
-# NekoDrop / NekoLink 模块边界
+# Module Boundaries
 
-这份文档用于防止项目后续糊成一团。
+This document defines how the NekoDrop repository is divided. It is intended for contributors and maintainers.
 
-NekoDrop 现在不是单纯做一个文件互传界面，而是在孵化一套个人设备网络底座。后续必须把协议、传输、产品、UI、OpenNeko 接入、手机端和同步层拆清楚。
+The current repository contains the NekoDrop desktop product and the early NekoLink protocol code used by that product. Long-term OpenNeko, NekoState, mobile, Relay, and iroh work may integrate with this code later, but those areas should not be mixed into the desktop file transfer path before they are implemented.
 
-## 1. 总体分层
-
-```text
-OpenNeko
-  AI 伴侣 / Agent / 多设备任务入口
-
-NekoState
-  跨设备状态同步层
-
-NekoDrop
-  文件互传产品
-
-NekoLink
-  个人设备可信通信协议
-
-Transport
-  TCP / Local discovery / iroh / Relay / P2P / QUIC
-```
-
-核心原则：
-
-- NekoLink 是底座，不属于某一个 UI。
-- NekoDrop 是第一个产品，不应该吞掉所有协议概念。
-- OpenNeko 是上层体验，不应该直接依赖 NekoDrop 的内部文件传输实现。
-- NekoState 是后续状态同步层，不要提前塞进文件传输代码里。
-- UI 只展示真实能力，未完成能力必须标记为待接入。
-
-## 2. 当前仓库策略
-
-当前不单独开 NekoLink 仓库。
-
-先在 NekoDrop monorepo 内孵化：
+## Layers
 
 ```text
-NekoDrop/
-  apps/
-    desktop/
+Desktop UI
+  User workflow, visible state, and error presentation
 
-  crates/
-    nekolink-protocol/
-    nekodrop-core/
-    nekodrop-network/
-    nekodrop-service/
-    nekodrop-storage/
+NekoDrop Service
+  Application use cases: send, receive, pairing, history, and desktop commands
 
-  docs/
+NekoDrop Storage
+  Manifest creation, checksum, safe receive paths, partial files, and resume state
+
+NekoDrop Network
+  TCP file frames, connection codes, discovery, transport abstraction
+
+NekoLink Protocol
+  Message envelope, device identity, capabilities, transfer offer/decision payloads
+
+Future Integrations
+  iroh, Relay, mobile apps, NekoState, OpenNeko Agent channels
 ```
 
-等 NekoLink 协议、传输抽象、SDK 和 OpenNeko 接入点稳定后，再拆独立仓库。
+## Current Repository Strategy
 
-拆仓库条件：
+NekoLink is currently developed inside this repository because the desktop transfer product is the first real integration target.
 
-- `nekolink-protocol` 可独立使用
-- `nekolink-transport` 至少支持 TCP 和 iroh
-- 设备身份、可信配对、加密会话有稳定格式
-- NekoDrop 桌面端和手机端都真实使用 NekoLink
-- OpenNeko Agent 有实际跨设备调用
-- 文档、测试和版本兼容策略稳定
+Do not split NekoLink into a separate repository until at least one of these is true:
 
-## 3. 模块文档
+- mobile clients need the same protocol crate or SDK;
+- OpenNeko needs NekoLink without depending on NekoDrop desktop internals;
+- Relay or iroh transport work needs independent release cadence;
+- external contributors need a stable protocol package.
 
-建议按下面几份文档维护：
+Until then, keep NekoLink code isolated in `crates/nekolink-protocol` and keep product-specific file transfer code outside that crate.
 
-- [NekoLink 协议层](modules/NEKOLINK.md)
-- [NekoDrop 产品层](modules/NEKODROP.md)
-- [发现与传输层](modules/DISCOVERY_AND_TRANSPORT.md)
-- [OpenNeko 生态层](modules/OPENNEKO_ECOSYSTEM.md)
-- [模块化路线图](modules/MODULE_ROADMAP.md)
+## Module Responsibilities
 
-## 4. 状态标记
-
-所有文档和 UI 都统一用这几种状态：
-
-```text
-已接入
-  真实代码存在，当前版本可以运行。
-
-实验中
-  有代码或技术验证，但还不能作为主流程。
-
-待接入
-  只允许出现在 roadmap / 文档 / 明确的 UI 预告里。
-
-不做
-  当前阶段明确不进入范围。
-```
-
-禁止状态：
-
-```text
-看起来可用但其实是 mock
-假设备
-假历史
-假扫描
-假进度
-假配对
-假 Agent
-```
-
-## 5. 模块责任表
-
-| 模块 | 职责 | 不负责 |
+| Module | Owns | Does Not Own |
 | --- | --- | --- |
-| NekoLink Protocol | Envelope、消息类型、能力协商、版本 | UI、文件系统、Tauri |
-| NekoLink Identity | device_id、fingerprint、密钥、平台身份 | 发送文件、页面展示 |
-| NekoLink Pairing | 可信配对、撤销、trusted device | LAN 扫描、文件写入 |
-| NekoLink Transport | TCP、iroh、Relay、P2P 抽象 | 产品流程、按钮逻辑 |
-| NekoDrop Service | 文件发送/接收业务流程 | 协议长期演进 |
-| NekoDrop Storage | manifest、checksum、partial、resume | 网络连接 |
-| Desktop UI | 用户操作、状态展示、错误恢复 | 协议判断、传输实现 |
-| NekoState | 跨设备状态同步 | 大文件传输 |
-| OpenNeko | Agent、Live2D、任务编排 | 底层传输细节 |
+| `apps/desktop` | React UI, desktop interaction, Tauri IPC calls | Protocol rules, file hashing, transport internals |
+| `apps/desktop/src-tauri` | Tauri command handlers, app state, persisted config, device/history stores | Core protocol definitions |
+| `crates/nekolink-protocol` | Envelope, message kinds, capabilities, device identity payloads, transfer offer/decision payloads | TCP sockets, files, UI, Tauri |
+| `crates/nekodrop-network` | Endpoint parsing, connection code, TCP transport, file frames, discovery models | UI state, receive directory policy |
+| `crates/nekodrop-storage` | Manifest building, SHA-256, safe receive paths, partial files, resume plan inspection | TCP streams, device pairing |
+| `crates/nekodrop-service` | Product workflows built from protocol, network, and storage | Rendering, component layout |
+| `apps/sidecar` | CLI/sidecar experiments and diagnostics | Main desktop UX |
+| `docs/` | Current status, architecture, protocol, security, roadmap | Unverified feature claims |
 
-## 6. 当前主流程目标
+## Dependency Direction
 
-短期主流程必须变成：
-
-```text
-打开 NekoDrop
-  -> 自动发现附近设备
-  -> 选择设备或拖文件到设备
-  -> 对方确认接收
-  -> 传输
-  -> 校验
-  -> 打开接收目录
-```
-
-连接码只保留为兜底：
+Preferred dependency direction:
 
 ```text
-自动发现失败
-不同网段
-防火墙阻断
-Relay/P2P 未接入
-用户手动配对
+apps/desktop/src-tauri
+  -> nekodrop-service
+  -> nekodrop-network
+  -> nekodrop-storage
+  -> nekodrop-core
+
+nekodrop-network
+  -> nekolink-protocol
+
+nekodrop-service
+  -> nekolink-protocol
+  -> nekodrop-network
+  -> nekodrop-storage
 ```
 
-## 7. 技术选型原则
+Avoid reverse dependencies. For example, `nekolink-protocol` must not depend on Tauri, React, TCP sockets, local filesystem behavior, or NekoDrop desktop state.
 
-优先借成熟开源项目缩短周期：
+## Feature Status Policy
 
-- 局域网发现和互传流程参考 LocalSend Protocol
-- Rust 发现库可考虑 `mdns-sd`
-- 长期 P2P / Relay / QUIC 传输选 iroh
-- 文件夹同步和状态同步参考 Syncthing，不直接吞进当前 MVP
-- 手机桌面生态参考 KDE Connect，不直接集成
+The UI and README can only present a feature as available when it is backed by implemented code and tests.
 
-## 8. 开源策略
+Examples:
 
-建议采用 open-core：
+- If TCP transfer is implemented, document it as implemented.
+- If iroh has only placeholder types, document it as experimental or planned.
+- If mobile support is only a future integration target, document it as planned.
+- If OpenNeko Agent messages are reserved in the protocol but not wired into the product, document them as planned.
 
-```text
-开源：
-  NekoLink protocol
-  NekoLink Rust SDK
-  NekoDrop 基础互传产品
-  协议文档和测试
+## Current Implemented Areas
 
-暂不开源或延后：
-  OpenNeko Live2D 角色资产
-  Agent 产品编排
-  官方 relay 运维配置
-  商业化服务
-  品牌视觉资源
-```
+Implemented in the current desktop path:
 
-推荐许可证：
+- macOS / Windows desktop app structure
+- file and folder selection
+- manifest creation
+- SHA-256 verification
+- transfer offer / accept / decline
+- TCP file transfer
+- TCP partial offset resume foundation
+- send and receive progress
+- send and receive cancellation
+- mDNS / DNS-SD discovery
+- stable device identity
+- trusted pairing foundation
+- transfer history
+- macOS and Windows packaging scripts
 
-```text
-NekoLink:
-  MIT OR Apache-2.0
+Experimental or planned:
 
-NekoDrop:
-  Apache-2.0 或 MIT OR Apache-2.0
-```
+- encrypted sessions
+- iroh transport
+- Relay / P2P transport
+- mobile main flow
+- NekoState synchronization
+- OpenNeko Agent command channel
 
-不要用 GPL 作为主许可证，避免影响后续商业桌面端、手机端和 OpenNeko 集成。
+See [Current Status](STATUS.md) for the authoritative feature list.
 
-## 9. 文档维护规则
+## Open Source Boundary
 
-- 协议字段改动必须同步 `modules/NEKOLINK.md`。
-- 传输方式改动必须同步 `modules/DISCOVERY_AND_TRANSPORT.md`。
-- UI 主流程改动必须同步 `modules/NEKODROP.md`。
-- OpenNeko 接入方案改动必须同步 `modules/OPENNEKO_ECOSYSTEM.md`。
-- 每个版本完成后更新 `modules/MODULE_ROADMAP.md`。
-- 不允许只改代码不改模块文档。
+This repository is licensed under Apache-2.0.
+
+The license applies to source code and documentation committed to this repository. It does not automatically grant rights to:
+
+- signing certificates or private keys;
+- user data, device identities, or transfer history;
+- OpenNeko commercial client code outside this repository;
+- Live2D models, character assets, brand assets, or other commercial resources not committed here.
+
+Keep those assets out of this repository.
