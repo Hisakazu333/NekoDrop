@@ -82,7 +82,29 @@ Exit criteria:
 - received files fail if headers do not match the accepted offer
 - no fake devices, fake history, or simulated transfer rows appear in the UI
 
-## Phase 4: LAN Discovery
+## Phase 4: NekoLink Protocol V0.3
+
+Goal: turn the current file-transfer frames into a reusable communication protocol surface.
+
+Status: implemented for transfer offer and decision messages.
+
+Deliverables:
+
+- `nekolink-protocol` crate
+- `Envelope` with protocol name, version, session ID, message ID, kind, timestamp, and capabilities
+- protocol message kinds for files, devices, Agent commands, companion state, and state sync
+- capability flags for file transfer, SHA-256, resume, pairing, encrypted sessions, Agent commands, companion state, and state sync
+- file offer and accept/decline messages moved into NekoLink envelopes
+- protocol validation tests
+
+Exit criteria:
+
+- existing connection-code file transfer still works
+- offer and decision frames are wrapped in `nekolink` envelopes
+- protocol crate has no desktop or storage dependency
+- OpenNeko-facing message kinds are reserved without adding fake product features
+
+## Phase 5: LAN Discovery
 
 Goal: show nearby devices.
 
@@ -99,7 +121,7 @@ Exit criteria:
 - two app instances on the same LAN can see each other
 - device name and platform appear correctly
 
-## Phase 5: Pairing
+## Phase 6: Device Identity and Pairing
 
 Goal: trusted device relationship.
 
@@ -116,7 +138,7 @@ Exit criteria:
 - untrusted device cannot receive file offers
 - trusted devices persist after restart
 
-## Phase 6: File Transfer Productization
+## Phase 7: Encrypted Session and File Transfer Productization
 
 Goal: move from connection-code transfer to trusted-device transfer.
 
@@ -138,7 +160,7 @@ Exit criteria:
 - Windows to Mac file transfer works
 - completed file verifies correctly
 
-## Phase 7: Folder Transfer and Resume
+## Phase 8: Folder Transfer and Resume
 
 Goal: make large practical transfers reliable.
 
@@ -155,7 +177,7 @@ Exit criteria:
 - folder transfer preserves structure
 - interrupted large file can resume from a partial state
 
-## Phase 8: Polish
+## Phase 9: Polish
 
 Goal: make the app feel like a real utility.
 

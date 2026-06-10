@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     read_transfer_decision, read_transfer_offer, receive_file_frames,
-    send_file_frames_with_progress, write_transfer_decision, write_transfer_offer,
+    send_file_frames_with_progress, write_transfer_decision_for_transfer, write_transfer_offer,
     ConnectionTicket, Endpoint, OutgoingFileFrame, SentFileFrame, TransferDecision, TransferOffer,
     TransferOfferFile, TransferProgress, TransportKind,
 };
@@ -161,15 +161,16 @@ where
 {
     let offer = read_transfer_offer(stream)?;
     if !decide(&offer) {
-        write_transfer_decision(
+        write_transfer_decision_for_transfer(
             stream,
+            &offer.transfer_id,
             &TransferDecision::decline("receiver declined this transfer"),
         )?;
         return Err(NekoDropError::Network(
             "transfer declined by receiver".into(),
         ));
     }
-    write_transfer_decision(stream, &TransferDecision::accept())?;
+    write_transfer_decision_for_transfer(stream, &offer.transfer_id, &TransferDecision::accept())?;
 
     let mut bytes_transferred = 0_u64;
     let mut file_index = 0_usize;

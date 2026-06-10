@@ -1819,6 +1819,7 @@ version = "0.1.0"
 dependencies = [
  "nekodrop-core",
  "nekodrop-storage",
+ "nekolink-protocol",
  "serde",
  "serde_json",
 ]
@@ -1848,6 +1849,14 @@ dependencies = [
  "nekodrop-core",
  "sha2",
  "walkdir",
+]
+
+[[package]]
+name = "nekolink-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

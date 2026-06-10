@@ -3,7 +3,10 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
+pub use nekolink_protocol::{TransferDecision, TransferOffer, TransferOfferFile};
+
 use nekodrop_core::{NekoDropError, NekoDropResult};
+use nekolink_protocol::{Capability, Envelope, ErrorCode, MessageKind, ProtocolError};
 use serde::{Deserialize, Serialize};
 
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
@@ -14,64 +17,6 @@ pub struct FileFrameHeader {
     pub manifest_path: String,
     pub size: u64,
     pub sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TransferOfferFile {
-    pub manifest_path: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TransferOffer {
-    pub protocol: String,
-    pub transfer_id: String,
-    pub root_name: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub files: Vec<TransferOfferFile>,
-}
-
-impl TransferOffer {
-    pub fn new(
-        transfer_id: impl Into<String>,
-        root_name: impl Into<String>,
-        files: Vec<TransferOfferFile>,
-    ) -> Self {
-        let file_count = files.len();
-        let total_bytes = files.iter().map(|file| file.size).sum();
-        Self {
-            protocol: "nekodrop-transfer-v1".to_string(),
-            transfer_id: transfer_id.into(),
-            root_name: root_name.into(),
-            file_count,
-            total_bytes,
-            files,
-        }
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct TransferDecision {
-    pub accepted: bool,
-    pub reason: Option<String>,
-}
-
-impl TransferDecision {
-    pub fn accept() -> Self {
-        Self {
-            accepted: true,
-            reason: None,
-        }
-    }
-
-    pub fn decline(reason: impl Into<String>) -> Self {
-        Self {
-            accepted: false,
-            reason: Some(reason.into()),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -266,37 +211,24 @@ where
 }
 
 pub fn write_transfer_offer(stream: &mut TcpStream, offer: &TransferOffer) -> NekoDropResult<()> {
-    if offer.protocol != "nekodrop-transfer-v1" {
-        return Err(NekoDropError::Network(format!(
-            "unsupported transfer offer protocol: {}",
-            offer.protocol
-        )));
-    }
-    write_json_frame(stream, offer)
+    offer.validate().map_err(protocol_error_to_network)?;
+    let envelope = Envelope::new(
+        offer.transfer_id.clone(),
+        format!("{}:offer", offer.transfer_id),
+        MessageKind::FileOffer,
+        offer.clone(),
+    )
+    .with_capabilities([Capability::FileTransfer, Capability::FileSha256]);
+    write_json_frame(stream, &envelope)
 }
 
 pub fn read_transfer_offer(stream: &mut TcpStream) -> NekoDropResult<TransferOffer> {
-    let offer: TransferOffer = read_json_frame(stream)?;
-    if offer.protocol != "nekodrop-transfer-v1" {
-        return Err(NekoDropError::Network(format!(
-            "unsupported transfer offer protocol: {}",
-            offer.protocol
-        )));
-    }
-    if offer.file_count != offer.files.len() {
-        return Err(NekoDropError::Network(format!(
-            "transfer offer file count mismatch: {} != {}",
-            offer.file_count,
-            offer.files.len()
-        )));
-    }
-    let total_bytes = offer.files.iter().map(|file| file.size).sum::<u64>();
-    if offer.total_bytes != total_bytes {
-        return Err(NekoDropError::Network(format!(
-            "transfer offer size mismatch: {} != {}",
-            offer.total_bytes, total_bytes
-        )));
-    }
+    let envelope: Envelope<TransferOffer> = read_json_frame(stream)?;
+    envelope
+        .validate_kind(MessageKind::FileOffer)
+        .map_err(protocol_error_to_network)?;
+    let offer = envelope.payload;
+    offer.validate().map_err(protocol_error_to_network)?;
     Ok(offer)
 }
 
@@ -304,11 +236,55 @@ pub fn write_transfer_decision(
     stream: &mut TcpStream,
     decision: &TransferDecision,
 ) -> NekoDropResult<()> {
-    write_json_frame(stream, decision)
+    write_transfer_decision_for_transfer(stream, "transfer-decision", decision)
+}
+
+pub fn write_transfer_decision_for_transfer(
+    stream: &mut TcpStream,
+    transfer_id: &str,
+    decision: &TransferDecision,
+) -> NekoDropResult<()> {
+    let kind = if decision.accepted {
+        MessageKind::FileAccept
+    } else {
+        MessageKind::FileDecline
+    };
+    let envelope = Envelope::new(
+        transfer_id,
+        format!("{transfer_id}:decision"),
+        kind,
+        decision.clone(),
+    )
+    .with_capabilities([Capability::FileTransfer]);
+    write_json_frame(stream, &envelope)
 }
 
 pub fn read_transfer_decision(stream: &mut TcpStream) -> NekoDropResult<TransferDecision> {
-    read_json_frame(stream)
+    let envelope: Envelope<TransferDecision> = read_json_frame(stream)?;
+    envelope.validate().map_err(protocol_error_to_network)?;
+    if !matches!(
+        envelope.kind,
+        MessageKind::FileAccept | MessageKind::FileDecline
+    ) {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!("unexpected decision kind: {}", envelope.kind.as_str()),
+        )));
+    }
+    let decision = envelope.payload;
+    if decision.accepted && envelope.kind != MessageKind::FileAccept {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "accepted decision must use file.accept",
+        )));
+    }
+    if !decision.accepted && envelope.kind != MessageKind::FileDecline {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "declined decision must use file.decline",
+        )));
+    }
+    Ok(decision)
 }
 
 pub fn receive_single_file_frame<F, T>(stream: &mut TcpStream, receive_file: F) -> NekoDropResult<T>
@@ -447,6 +423,10 @@ fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) -> Neko
         .map_err(|error| NekoDropError::Network(format!("failed to decode JSON frame: {error}")))
 }
 
+fn protocol_error_to_network(error: ProtocolError) -> NekoDropError {
+    NekoDropError::Network(format!("{:?}: {}", error.code, error.message))
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -559,6 +539,49 @@ mod tests {
         );
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn transfer_offer_round_trips_through_nekolink_envelope() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let offer = TransferOffer::new(
+            "transfer-1",
+            "drop",
+            vec![TransferOfferFile {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 11,
+                sha256: "abc123".to_string(),
+            }],
+        );
+
+        let receiver = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_transfer_offer(&mut stream).unwrap()
+        });
+
+        let mut stream = TcpStream::connect(address).unwrap();
+        write_transfer_offer(&mut stream, &offer).unwrap();
+        let received = receiver.join().unwrap();
+
+        assert_eq!(received, offer);
+    }
+
+    #[test]
+    fn transfer_decision_round_trips_through_nekolink_envelope() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let receiver = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            read_transfer_decision(&mut stream).unwrap()
+        });
+
+        let mut stream = TcpStream::connect(address).unwrap();
+        write_transfer_decision(&mut stream, &TransferDecision::decline("no")).unwrap();
+        let received = receiver.join().unwrap();
+
+        assert_eq!(received, TransferDecision::decline("no"));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

@@ -2,7 +2,7 @@
 
 ## Goals
 
-The MVP protocol should be simple, inspectable, and reliable on a local network.
+NekoLink should be simple, inspectable, and reliable on a local network.
 
 It must support:
 
@@ -22,8 +22,8 @@ Current implemented path:
 - TCP for transfer sessions
 - connection code contains host and port
 - receiver opens an explicit one-shot receive listener
-- sender sends a transfer offer before any file bytes
-- receiver accepts or declines before file bytes are sent
+- sender sends a `nekolink` Envelope with `file_offer` before any file bytes
+- receiver responds with `file_accept` or `file_decline` before file bytes are sent
 - receiver validates every incoming file header against the accepted offer
 - file contents are streamed as binary bytes and verified with SHA-256
 
@@ -57,19 +57,42 @@ Each device advertises:
 
 Discovery entries are not trusted by themselves. They only make devices visible.
 
-## Control Messages
+## Envelope
 
-All control messages include:
+Current control messages are wrapped in a NekoLink envelope:
 
 ```json
 {
-  "type": "MESSAGE_TYPE",
-  "protocol_version": 1,
+  "protocol": "nekolink",
+  "version": 1,
   "session_id": "uuid",
   "message_id": "uuid",
-  "sent_at": "2026-06-09T15:00:00Z"
+  "kind": "file.offer",
+  "sent_at_ms": 1781010000000,
+  "capabilities": ["file_transfer", "file_sha256"],
+  "payload": {}
 }
 ```
+
+Implemented message kinds:
+
+```text
+device.hello
+device.heartbeat
+file.offer
+file.accept
+file.decline
+file.header
+file.complete
+transfer.complete
+error
+agent.command
+agent.result
+companion.state
+state.sync
+```
+
+Only `file.offer`, `file.accept`, and `file.decline` are currently used by NekoDrop transfer sessions. The other kinds reserve the protocol surface for device identity, OpenNeko Agent commands, companion state, and future state sync.
 
 ## Pairing Messages
 
@@ -116,7 +139,7 @@ Sent after user confirmation.
 
 ### Current connection-code TCP v1
 
-The current desktop build uses a compact TCP frame format before the full trusted-device protocol is introduced.
+The current desktop build uses a compact TCP frame format with a NekoLink envelope before the full trusted-device protocol is introduced.
 
 Connection code:
 
@@ -124,31 +147,48 @@ Connection code:
 nekodrop-v1://connect?transport=tcp&host=192.168.1.24&port=45821&name=This%20Computer
 ```
 
-Transfer offer frame:
+Transfer offer envelope:
 
 ```json
 {
-  "protocol": "nekodrop-transfer-v1",
-  "transfer_id": "transfer-1781010000000",
-  "root_name": "Design Assets",
-  "file_count": 2,
-  "total_bytes": 2048,
-  "files": [
-    {
-      "manifest_path": "Design Assets/logo.png",
-      "size": 1024,
-      "sha256": "hex"
-    }
-  ]
+  "protocol": "nekolink",
+  "version": 1,
+  "session_id": "transfer-1781010000000",
+  "message_id": "transfer-1781010000000:offer",
+  "kind": "file.offer",
+  "sent_at_ms": 1781010000001,
+  "capabilities": ["file_transfer", "file_sha256"],
+  "payload": {
+    "transfer_id": "transfer-1781010000000",
+    "root_name": "Design Assets",
+    "file_count": 2,
+    "total_bytes": 2048,
+    "files": [
+      {
+        "manifest_path": "Design Assets/logo.png",
+        "size": 1024,
+        "sha256": "hex"
+      }
+    ]
+  }
 }
 ```
 
-Decision frame:
+Decision envelope:
 
 ```json
 {
-  "accepted": true,
-  "reason": null
+  "protocol": "nekolink",
+  "version": 1,
+  "session_id": "transfer-1781010000000",
+  "message_id": "transfer-1781010000000:decision",
+  "kind": "file.accept",
+  "sent_at_ms": 1781010000002,
+  "capabilities": ["file_transfer"],
+  "payload": {
+    "accepted": true,
+    "reason": null
+  }
 }
 ```
 
