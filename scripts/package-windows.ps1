@@ -98,6 +98,19 @@ if (-not $NoCopy) {
 
   Write-Host "==> Package output"
   Write-Host $OutputDir
+
+  $InstallerFiles = Get-ChildItem -Path $OutputDir -Recurse -File -Include *.exe,*.msi,*.msix,*.appx |
+    Where-Object { $_.FullName -notlike "*\release\desktop\$Stamp\nekodrop-desktop.exe" } |
+    Sort-Object FullName
+
+  if ($InstallerFiles.Count -gt 0) {
+    Write-Host "==> Installers to run on Win11"
+    foreach ($Installer in $InstallerFiles) {
+      Write-Host $Installer.FullName
+    }
+  } else {
+    Write-Host "==> No installer file was copied. Check the Tauri bundle output above."
+  }
 } else {
   Write-Host "==> Bundle output"
   Write-Host (Join-Path $env:CARGO_TARGET_DIR "release\bundle")
