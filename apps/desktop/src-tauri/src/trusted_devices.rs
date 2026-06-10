@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -39,7 +40,7 @@ pub fn load_trusted_devices() -> Result<Vec<TrustedDeviceRecord>, String> {
     for record in &records {
         validate_trusted_device(record)?;
     }
-    sort_trusted_devices(&mut records);
+    normalize_trusted_devices(&mut records);
     Ok(records)
 }
 
@@ -133,7 +134,7 @@ pub fn upsert_trusted_device(
     } else {
         records.push(next_record);
     }
-    sort_trusted_devices(records);
+    normalize_trusted_devices(records);
 }
 
 pub fn refresh_trusted_device_contact(
@@ -164,9 +165,15 @@ pub fn refresh_trusted_device_contact(
     }
 
     if changed {
-        sort_trusted_devices(records);
+        normalize_trusted_devices(records);
     }
     changed
+}
+
+fn normalize_trusted_devices(records: &mut Vec<TrustedDeviceRecord>) {
+    sort_trusted_devices(records);
+    let mut seen_device_ids = HashSet::new();
+    records.retain(|record| seen_device_ids.insert(record.device_id.clone()));
 }
 
 fn sort_trusted_devices(records: &mut [TrustedDeviceRecord]) {
@@ -279,6 +286,25 @@ mod tests {
         assert_eq!(records[0].device_id, "new");
         assert_eq!(records[1].device_id, "middle");
         assert_eq!(records[2].device_id, "old");
+    }
+
+    #[test]
+    fn normalizes_duplicate_device_ids_to_latest_record() {
+        let mut records = vec![
+            trusted_record("device-a", "Old Mac", 100),
+            trusted_record("device-a", "New Mac", 300),
+            trusted_record("device-b", "Windows", 200),
+        ];
+        records[0].public_key_fingerprint = "sha256:old".to_string();
+        records[1].public_key_fingerprint = "sha256:new".to_string();
+
+        normalize_trusted_devices(&mut records);
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].device_id, "device-a");
+        assert_eq!(records[0].device_name, "New Mac");
+        assert_eq!(records[0].public_key_fingerprint, "sha256:new");
+        assert_eq!(records[1].device_id, "device-b");
     }
 
     #[test]
