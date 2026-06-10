@@ -4,6 +4,7 @@ mod device_identity;
 mod discovery;
 mod network;
 mod tray;
+mod trusted_devices;
 
 use app_state::AppState;
 use tauri::Manager;
@@ -16,6 +17,9 @@ pub fn run() {
             commands::get_app_snapshot,
             commands::get_discovery_status,
             commands::list_nearby_devices,
+            commands::list_trusted_devices,
+            commands::trust_nearby_device,
+            commands::forget_trusted_device,
             commands::list_transfers,
             commands::create_transfer_plan,
             commands::create_transfer_plan_from_text,

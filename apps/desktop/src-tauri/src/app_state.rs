@@ -6,6 +6,7 @@ use nekodrop_core::{AppConfig, Device, TransferJob};
 use nekodrop_service::TransferReceiveReport;
 
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
+use crate::trusted_devices::{load_trusted_devices, TrustedDeviceRecord};
 
 #[derive(Debug, Clone)]
 pub struct DiscoveryStatusState {
@@ -86,6 +87,7 @@ pub struct AppState {
     pub nearby_devices: Arc<Mutex<Vec<Device>>>,
     pub nearby_devices_seen_at: Arc<Mutex<HashMap<String, Instant>>>,
     pub discovery_status: Arc<Mutex<DiscoveryStatusState>>,
+    pub trusted_devices: Arc<Mutex<Vec<TrustedDeviceRecord>>>,
     pub transfers: Mutex<Vec<TransferJob>>,
     pub receive_status: Arc<Mutex<Option<String>>>,
     pub receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
@@ -97,6 +99,7 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Result<Self, String> {
         let device_identity = load_or_create_device_identity()?;
+        let trusted_devices = load_trusted_devices()?;
         let mut config = AppConfig::default();
         config.device_name = device_identity.device_name().to_string();
 
@@ -106,6 +109,7 @@ impl AppState {
             nearby_devices: Arc::new(Mutex::new(Vec::new())),
             nearby_devices_seen_at: Arc::new(Mutex::new(HashMap::new())),
             discovery_status: Arc::new(Mutex::new(DiscoveryStatusState::starting())),
+            trusted_devices: Arc::new(Mutex::new(trusted_devices)),
             transfers: Mutex::new(Vec::new()),
             receive_status: Arc::new(Mutex::new(None)),
             receive_session: Arc::new(Mutex::new(None)),

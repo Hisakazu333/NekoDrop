@@ -585,8 +585,8 @@ button.nav-item:hover {
   grid-template-columns: 10px minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
-  padding: 0 2px;
+  min-height: 48px;
+  padding: 4px 2px;
   border: 0;
   background: transparent;
   color: var(--muted);
@@ -597,16 +597,20 @@ button.nav-item:hover {
   border-top: 1px solid #eef0f3;
 }
 
-.nearby-device:not(:disabled):hover {
+.nearby-device:hover {
   color: var(--text);
   background: #fbfcfd;
+}
+
+.nearby-device.is-trusted .device-dot {
+  background: var(--green);
 }
 
 .device-dot {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--green);
+  background: #aab1ba;
 }
 
 .device-main {
@@ -633,9 +637,51 @@ button.nav-item:hover {
   font-size: 12px;
 }
 
-.nearby-device > span:last-child {
+.device-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.trust-badge,
+.trust-button,
+.inline-send-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 30px;
+  border-radius: 8px;
   font-size: 12px;
-  font-weight: 760;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.trust-badge {
+  padding: 0 9px;
+  color: var(--green);
+  border: 1px solid #b7dfca;
+  background: var(--green-soft);
+}
+
+.trust-button,
+.inline-send-button {
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  background: #ffffff;
+  color: #4f5864;
+}
+
+.trust-button:not(:disabled):hover,
+.inline-send-button:not(:disabled):hover {
+  color: var(--text);
+  border-color: var(--line-strong);
+  background: var(--soft);
+}
+
+.inline-send-button:not(:disabled) {
+  color: #ffffff;
+  border-color: var(--accent);
+  background: var(--accent);
 }
 
 .nearby-empty {

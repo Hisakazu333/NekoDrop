@@ -11,7 +11,8 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{
-    Device, FileManifest, ManifestItem, ManifestItemKind, NekoDropError, TransferJob,
+    Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, NekoDropError,
+    TransferJob,
 };
 use nekodrop_network::{ConnectionTicket, Endpoint, TransferOffer, TransferProgress};
 use nekodrop_service::{
@@ -28,6 +29,10 @@ use crate::app_state::{
     TransferStatusState,
 };
 use crate::network::primary_lan_ip;
+use crate::trusted_devices::{
+    pairing_code_for_device, save_trusted_devices, trust_device_record, trusted_record_matches,
+    upsert_trusted_device, TrustedDeviceRecord,
+};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSnapshot {
@@ -56,6 +61,21 @@ pub struct DeviceDto {
     pub host: String,
     pub port: u16,
     pub trust_state: String,
+    pub public_key_fingerprint: Option<String>,
+    pub pairing_code: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TrustedDeviceDto {
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub host: String,
+    pub port: u16,
+    pub public_key_fingerprint: String,
+    pub pairing_code: String,
+    pub paired_at_ms: u128,
+    pub last_seen_at_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -194,7 +214,15 @@ pub fn list_nearby_devices(state: State<'_, AppState>) -> Result<Vec<DeviceDto>,
         .nearby_devices
         .lock()
         .map_err(|error| error.to_string())?;
-    Ok(devices.iter().map(device_to_dto).collect())
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let local_identity = state.device_identity.public_identity();
+    Ok(devices
+        .iter()
+        .map(|device| device_to_dto(device, &local_identity, &trusted_devices))
+        .collect())
 }
 
 #[tauri::command]
@@ -222,6 +250,79 @@ pub fn get_discovery_status(state: State<'_, AppState>) -> Result<DiscoveryStatu
             .map(|seen_at| seen_at.elapsed().as_secs()),
         last_error: status.last_error.clone(),
     })
+}
+
+#[tauri::command]
+pub fn list_trusted_devices(state: State<'_, AppState>) -> Result<Vec<TrustedDeviceDto>, String> {
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(trusted_devices.iter().map(trusted_device_to_dto).collect())
+}
+
+#[tauri::command]
+pub fn trust_nearby_device(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<TrustedDeviceDto, String> {
+    let device = {
+        let devices = state
+            .nearby_devices
+            .lock()
+            .map_err(|error| error.to_string())?;
+        devices
+            .iter()
+            .find(|device| device.id.as_str() == device_id)
+            .cloned()
+            .ok_or_else(|| "设备不在线或尚未被自动扫描到".to_string())?
+    };
+
+    let local_identity = state.device_identity.public_identity();
+    let record = trust_device_record(&local_identity, &device)?;
+    {
+        let mut trusted_devices = state
+            .trusted_devices
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut next_trusted_devices = trusted_devices.clone();
+        upsert_trusted_device(&mut next_trusted_devices, record.clone());
+        save_trusted_devices(&next_trusted_devices)?;
+        *trusted_devices = next_trusted_devices;
+    }
+    if let Ok(mut devices) = state.nearby_devices.lock() {
+        if let Some(device) = devices
+            .iter_mut()
+            .find(|device| device.id.as_str() == device_id)
+        {
+            device.trust_state = DeviceTrustState::Trusted;
+        }
+    }
+
+    Ok(trusted_device_to_dto(&record))
+}
+
+#[tauri::command]
+pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> Result<(), String> {
+    {
+        let mut trusted_devices = state
+            .trusted_devices
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let mut next_trusted_devices = trusted_devices.clone();
+        next_trusted_devices.retain(|device| device.device_id != device_id);
+        save_trusted_devices(&next_trusted_devices)?;
+        *trusted_devices = next_trusted_devices;
+    }
+    if let Ok(mut devices) = state.nearby_devices.lock() {
+        if let Some(device) = devices
+            .iter_mut()
+            .find(|device| device.id.as_str() == device_id)
+        {
+            device.trust_state = DeviceTrustState::Untrusted;
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -781,14 +882,41 @@ fn receive_session_to_dto(session: &ActiveReceiveSession) -> ReceiveSessionDto {
     }
 }
 
-fn device_to_dto(device: &Device) -> DeviceDto {
+fn device_to_dto(
+    device: &Device,
+    local_identity: &DeviceIdentity,
+    trusted_devices: &[TrustedDeviceRecord],
+) -> DeviceDto {
+    let is_trusted = trusted_devices
+        .iter()
+        .any(|record| trusted_record_matches(device, record));
     DeviceDto {
         id: device.id.as_str().to_string(),
         name: device.name.clone(),
         platform: format!("{:?}", device.platform),
         host: device.host.clone(),
         port: device.port,
-        trust_state: format!("{:?}", device.trust_state),
+        trust_state: if is_trusted {
+            "Trusted".to_string()
+        } else {
+            format!("{:?}", device.trust_state)
+        },
+        public_key_fingerprint: device.public_key_fingerprint.clone(),
+        pairing_code: pairing_code_for_device(local_identity, device),
+    }
+}
+
+fn trusted_device_to_dto(device: &TrustedDeviceRecord) -> TrustedDeviceDto {
+    TrustedDeviceDto {
+        device_id: device.device_id.clone(),
+        device_name: device.device_name.clone(),
+        platform: device.platform.clone(),
+        host: device.host.clone(),
+        port: device.port,
+        public_key_fingerprint: device.public_key_fingerprint.clone(),
+        pairing_code: device.pairing_code.clone(),
+        paired_at_ms: device.paired_at_ms,
+        last_seen_at_ms: device.last_seen_at_ms,
     }
 }
 

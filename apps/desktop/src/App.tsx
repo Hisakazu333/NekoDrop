@@ -10,6 +10,7 @@ import type {
   ReceiveReportDto,
   ReceiveSessionDto,
   SendReportDto,
+  TrustedDeviceDto,
   TransferPlanDto,
   TransferStatusDto
 } from "./types";
@@ -22,6 +23,7 @@ type BusyMode =
   | "pick-folders"
   | "pick-receive"
   | "stop-receive"
+  | "trust"
   | "open";
 
 type ComposerMode = "send" | "receive" | "queue";
@@ -385,6 +387,22 @@ export function App() {
     }
   }
 
+  async function trustNearbyDevice(device: DeviceDto) {
+    setBusy("trust");
+    setError(null);
+    try {
+      const trusted = await invokeCommand<TrustedDeviceDto>("trust_nearby_device", {
+        deviceId: device.id
+      });
+      setToast(`已信任 ${trusted.device_name} · ${trusted.pairing_code}`);
+      await refreshReceiveState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function respondReceiveOffer(accept: boolean) {
     setBusy("receive");
     setError(null);
@@ -447,26 +465,31 @@ export function App() {
             <strong>设备身份</strong>
             <small>已接入</small>
           </span>
+          <span className="nav-item is-roadmap is-ready">
+            <span>05</span>
+            <strong>本机信任</strong>
+            <small>已接入</small>
+          </span>
           <span className="nav-label">后续迭代</span>
           <span className="nav-item is-roadmap">
-            <span>05</span>
-            <strong>可信配对</strong>
-            <small>待接入</small>
-          </span>
-          <span className="nav-item is-roadmap">
             <span>06</span>
-            <strong>历史</strong>
+            <strong>配对握手</strong>
             <small>待接入</small>
           </span>
           <span className="nav-item is-roadmap">
             <span>07</span>
+            <strong>历史</strong>
+            <small>待接入</small>
+          </span>
+          <span className="nav-item is-roadmap">
+            <span>08</span>
             <strong>OpenNeko 支撑</strong>
             <small>待接入</small>
           </span>
         </nav>
 
         <span className="nav-item is-roadmap sidebar-settings">
-          <span>08</span>
+          <span>09</span>
           <strong>设置</strong>
           <small>待接入</small>
         </span>
@@ -574,6 +597,7 @@ export function App() {
             devices={nearbyDevices}
             transferCount={transferPaths.length}
             onSendToDevice={sendFilesToDevice}
+            onTrustDevice={trustNearbyDevice}
           />
 
           <section className="fallback-strip">
@@ -652,13 +676,15 @@ function NearbyDevices({
   discoveryStatus,
   devices,
   transferCount,
-  onSendToDevice
+  onSendToDevice,
+  onTrustDevice
 }: {
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
   transferCount: number;
   onSendToDevice: (device: DeviceDto) => void;
+  onTrustDevice: (device: DeviceDto) => void;
 }) {
   const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
 
@@ -676,24 +702,43 @@ function NearbyDevices({
 
       {devices.length > 0 ? (
         <div className="nearby-list">
-          {devices.map((device) => (
-            <button
-              className="nearby-device"
-              disabled={busy === "send" || transferCount === 0}
-              key={device.id}
-              onClick={() => onSendToDevice(device)}
-              type="button"
-            >
-              <span className="device-dot" />
-              <span className="device-main">
-                <strong>{device.name}</strong>
-                <small>
-                  {devicePlatformLabel(device.platform)} · {trustStateLabel(device.trust_state)} · {device.host}:{device.port}
-                </small>
-              </span>
-              <span>{transferCount > 0 ? "发送" : "先选文件"}</span>
-            </button>
-          ))}
+          {devices.map((device) => {
+            const trusted = device.trust_state === "Trusted";
+            return (
+              <div className={trusted ? "nearby-device is-trusted" : "nearby-device"} key={device.id}>
+                <span className="device-dot" />
+                <span className="device-main">
+                  <strong>{device.name}</strong>
+                  <small>
+                    {devicePlatformLabel(device.platform)} · {trustStateLabel(device.trust_state)}
+                    {device.pairing_code ? ` · 配对码 ${device.pairing_code}` : ""} · {device.host}:{device.port}
+                  </small>
+                </span>
+                <span className="device-actions">
+                  {trusted ? (
+                    <span className="trust-badge">已信任</span>
+                  ) : (
+                    <button
+                      className="trust-button"
+                      disabled={busy === "trust" || !device.public_key_fingerprint}
+                      onClick={() => onTrustDevice(device)}
+                      type="button"
+                    >
+                      信任
+                    </button>
+                  )}
+                  <button
+                    className="inline-send-button"
+                    disabled={busy === "send" || transferCount === 0}
+                    onClick={() => onSendToDevice(device)}
+                    type="button"
+                  >
+                    {transferCount > 0 ? "发送" : "先选文件"}
+                  </button>
+                </span>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className={discoveryCopy.isError ? "nearby-empty is-warning" : "nearby-empty"}>

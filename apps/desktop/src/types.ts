@@ -24,6 +24,20 @@ export interface DeviceDto {
   host: string;
   port: number;
   trust_state: string;
+  public_key_fingerprint: string | null;
+  pairing_code: string | null;
+}
+
+export interface TrustedDeviceDto {
+  device_id: string;
+  device_name: string;
+  platform: string;
+  host: string;
+  port: number;
+  public_key_fingerprint: string;
+  pairing_code: string;
+  paired_at_ms: number;
+  last_seen_at_ms: number;
 }
 
 export interface DiscoveryStatusDto {

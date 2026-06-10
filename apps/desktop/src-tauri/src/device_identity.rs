@@ -125,8 +125,11 @@ fn validate_persisted_identity(identity: &PersistedDeviceIdentity) -> Result<(),
 }
 
 fn identity_file_path() -> Result<PathBuf, String> {
-    let base = config_base_dir()?;
-    Ok(base.join("NekoDrop").join("device_identity.json"))
+    Ok(app_config_dir()?.join("device_identity.json"))
+}
+
+pub fn app_config_dir() -> Result<PathBuf, String> {
+    Ok(config_base_dir()?.join("NekoDrop"))
 }
 
 #[cfg(target_os = "macos")]
