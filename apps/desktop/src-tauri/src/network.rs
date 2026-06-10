@@ -5,14 +5,32 @@ pub fn primary_lan_ip() -> Option<IpAddr> {
     primary_lan_ipv4().map(IpAddr::V4)
 }
 
+pub fn local_lan_ips() -> Vec<IpAddr> {
+    local_lan_ipv4s().into_iter().map(IpAddr::V4).collect()
+}
+
 fn primary_lan_ipv4() -> Option<Ipv4Addr> {
-    probed_default_ipv4()
+    local_lan_ipv4s().into_iter().next()
+}
+
+fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
+    let mut ips = Vec::new();
+    if let Some(ip) = probed_default_ipv4().filter(|ip| is_usable_lan_ipv4(*ip)) {
+        push_unique_ipv4(&mut ips, ip);
+    }
+    for ip in candidate_ipv4s_from_os()
+        .into_iter()
         .filter(|ip| is_usable_lan_ipv4(*ip))
-        .or_else(|| {
-            candidate_ipv4s_from_os()
-                .into_iter()
-                .find(|ip| is_usable_lan_ipv4(*ip))
-        })
+    {
+        push_unique_ipv4(&mut ips, ip);
+    }
+    ips
+}
+
+fn push_unique_ipv4(ips: &mut Vec<Ipv4Addr>, ip: Ipv4Addr) {
+    if !ips.contains(&ip) {
+        ips.push(ip);
+    }
 }
 
 fn probed_default_ipv4() -> Option<Ipv4Addr> {
@@ -112,5 +130,18 @@ mod tests {
         assert!(!is_usable_lan_ipv4(Ipv4Addr::new(8, 8, 8, 8)));
         assert!(!is_usable_lan_ipv4(Ipv4Addr::new(100, 64, 0, 1)));
         assert!(!is_usable_lan_ipv4(Ipv4Addr::new(224, 0, 0, 1)));
+    }
+
+    #[test]
+    fn pushes_unique_ipv4s_only_once() {
+        let mut ips = Vec::new();
+        push_unique_ipv4(&mut ips, Ipv4Addr::new(192, 168, 1, 20));
+        push_unique_ipv4(&mut ips, Ipv4Addr::new(192, 168, 1, 20));
+        push_unique_ipv4(&mut ips, Ipv4Addr::new(10, 0, 0, 8));
+
+        assert_eq!(
+            ips,
+            vec![Ipv4Addr::new(192, 168, 1, 20), Ipv4Addr::new(10, 0, 0, 8)]
+        );
     }
 }

@@ -32,7 +32,7 @@ use crate::app_state::{
     ActiveReceiveSession, AppState, PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer,
     ReceiveDecision, TransferStatusState,
 };
-use crate::network::primary_lan_ip;
+use crate::network::{local_lan_ips, primary_lan_ip};
 use crate::transfer_history::{
     clear_transfer_history_records, delete_transfer_history_record, new_transfer_history_record,
     push_transfer_history_record, TransferHistoryRecord,
@@ -2287,7 +2287,7 @@ fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String>
                 endpoint.port
             )));
         }
-        if is_current_lan_ip(ip, primary_lan_ip()) {
+        if is_current_lan_ip(ip, &local_lan_ips()) {
             return Err(
                 "目标地址是本机局域网地址，不能把文件发送给自己。请选择另一台设备或复制对方连接码。"
                     .to_string(),
@@ -2319,8 +2319,8 @@ fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String>
     Ok(())
 }
 
-fn is_current_lan_ip(target: IpAddr, current_lan_ip: Option<IpAddr>) -> bool {
-    current_lan_ip.is_some_and(|current| current == target)
+fn is_current_lan_ip(target: IpAddr, current_lan_ips: &[IpAddr]) -> bool {
+    current_lan_ips.contains(&target)
 }
 
 fn friendly_transfer_error(error: &str) -> String {
@@ -2476,10 +2476,13 @@ mod tests {
 
     #[test]
     fn current_lan_ip_is_treated_as_self_target() {
-        let current = Some(IpAddr::from([192, 168, 1, 20]));
+        let current = vec![IpAddr::from([10, 0, 0, 8]), IpAddr::from([192, 168, 1, 20])];
 
-        assert!(is_current_lan_ip(IpAddr::from([192, 168, 1, 20]), current));
-        assert!(!is_current_lan_ip(IpAddr::from([192, 168, 1, 30]), current));
+        assert!(is_current_lan_ip(IpAddr::from([192, 168, 1, 20]), &current));
+        assert!(!is_current_lan_ip(
+            IpAddr::from([192, 168, 1, 30]),
+            &current
+        ));
     }
 
     #[test]
