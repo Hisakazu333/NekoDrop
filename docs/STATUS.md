@@ -65,7 +65,7 @@
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
 | Device hello | 已接入 | 用于设备发现和能力说明。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
-| File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name 和半截 sender identity。 |
+| File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path 和半截 sender identity。 |
 | TCP transport | 已接入 | 当前真实传输主线。 |
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |

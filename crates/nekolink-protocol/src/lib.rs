@@ -615,12 +615,7 @@ impl TransferOffer {
             ));
         }
         for file in &self.files {
-            if file.manifest_path.trim().is_empty() {
-                return Err(ProtocolError::new(
-                    ErrorCode::InvalidPayload,
-                    "file manifest_path cannot be empty",
-                ));
-            }
+            validate_transfer_manifest_path(&file.manifest_path)?;
             if file.sha256.trim().is_empty() {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidPayload,
@@ -630,6 +625,32 @@ impl TransferOffer {
         }
         Ok(())
     }
+}
+
+fn validate_transfer_manifest_path(path: &str) -> Result<(), ProtocolError> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "file manifest_path cannot be empty",
+        ));
+    }
+    if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "file manifest_path must be a relative slash-separated path",
+        ));
+    }
+    if path
+        .split('/')
+        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
+    {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "file manifest_path contains an unsafe path segment",
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -710,6 +731,31 @@ mod tests {
         let error = offer.validate().unwrap_err();
 
         assert!(error.message.contains("root_name"));
+    }
+
+    #[test]
+    fn transfer_offer_rejects_unsafe_manifest_paths() {
+        for manifest_path in [
+            "/tmp/file.txt",
+            "drop/../secret.txt",
+            "drop//file.txt",
+            r"drop\file.txt",
+        ] {
+            let offer = TransferOffer::new(
+                "transfer-1",
+                "drop",
+                vec![TransferOfferFile {
+                    manifest_path: manifest_path.to_string(),
+                    size: 1,
+                    sha256: "abc".to_string(),
+                }],
+            );
+
+            assert!(
+                offer.validate().is_err(),
+                "expected invalid manifest path: {manifest_path}"
+            );
+        }
     }
 
     #[test]
