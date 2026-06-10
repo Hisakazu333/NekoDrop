@@ -67,7 +67,7 @@ impl OutgoingFileFrame {
 }
 
 pub fn send_single_file_frame(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     manifest_path: impl Into<String>,
     file_path: &Path,
     sha256: impl Into<String>,
@@ -76,7 +76,7 @@ pub fn send_single_file_frame(
 }
 
 pub fn send_single_file_frame_with_progress<F>(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     manifest_path: impl Into<String>,
     file_path: &Path,
     sha256: impl Into<String>,
@@ -95,8 +95,8 @@ where
     )
 }
 
-pub fn send_single_file_frame_with_progress_and_cancel<F, C>(
-    stream: &mut TcpStream,
+pub fn send_single_file_frame_with_progress_and_cancel<W, F, C>(
+    stream: &mut W,
     manifest_path: impl Into<String>,
     file_path: &Path,
     sha256: impl Into<String>,
@@ -104,6 +104,7 @@ pub fn send_single_file_frame_with_progress_and_cancel<F, C>(
     mut should_cancel: C,
 ) -> NekoDropResult<SentFileFrame>
 where
+    W: Write,
     F: FnMut(u64),
     C: FnMut() -> bool,
 {
@@ -170,14 +171,14 @@ where
 }
 
 pub fn send_file_frames(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     files: &[OutgoingFileFrame],
 ) -> NekoDropResult<Vec<SentFileFrame>> {
     send_file_frames_with_progress(stream, files, 0, |_| {})
 }
 
 pub fn send_file_frames_with_progress<F>(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     files: &[OutgoingFileFrame],
     total_bytes: u64,
     mut on_progress: F,
@@ -190,14 +191,15 @@ where
     })
 }
 
-pub fn send_file_frames_with_progress_and_cancel<F, C>(
-    stream: &mut TcpStream,
+pub fn send_file_frames_with_progress_and_cancel<W, F, C>(
+    stream: &mut W,
     files: &[OutgoingFileFrame],
     total_bytes: u64,
     mut on_progress: F,
     mut should_cancel: C,
 ) -> NekoDropResult<Vec<SentFileFrame>>
 where
+    W: Write,
     F: FnMut(TransferProgress),
     C: FnMut() -> bool,
 {
@@ -266,7 +268,7 @@ where
     Ok(sent)
 }
 
-pub fn write_transfer_offer(stream: &mut TcpStream, offer: &TransferOffer) -> NekoDropResult<()> {
+pub fn write_transfer_offer(stream: &mut impl Write, offer: &TransferOffer) -> NekoDropResult<()> {
     offer.validate().map_err(protocol_error_to_network)?;
     let envelope = Envelope::new(
         offer.transfer_id.clone(),
@@ -278,7 +280,7 @@ pub fn write_transfer_offer(stream: &mut TcpStream, offer: &TransferOffer) -> Ne
     write_json_frame(stream, &envelope)
 }
 
-pub fn read_transfer_offer(stream: &mut TcpStream) -> NekoDropResult<TransferOffer> {
+pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
     let envelope: Envelope<TransferOffer> = read_json_frame(stream)?;
     envelope
         .validate_kind(MessageKind::FileOffer)
@@ -289,7 +291,7 @@ pub fn read_transfer_offer(stream: &mut TcpStream) -> NekoDropResult<TransferOff
 }
 
 pub fn write_pairing_request(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     request: &PairingRequestPayload,
 ) -> NekoDropResult<()> {
     request.validate().map_err(protocol_error_to_network)?;
@@ -303,7 +305,7 @@ pub fn write_pairing_request(
     write_json_frame(stream, &envelope)
 }
 
-pub fn read_incoming_control_frame(stream: &mut TcpStream) -> NekoDropResult<IncomingControlFrame> {
+pub fn read_incoming_control_frame(stream: &mut impl Read) -> NekoDropResult<IncomingControlFrame> {
     let envelope: Envelope<serde_json::Value> = read_json_frame(stream)?;
     envelope.validate().map_err(protocol_error_to_network)?;
     match envelope.kind {
@@ -331,7 +333,7 @@ pub fn read_incoming_control_frame(stream: &mut TcpStream) -> NekoDropResult<Inc
 }
 
 pub fn write_pairing_decision(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     request_id: &str,
     decision: &PairingDecisionPayload,
 ) -> NekoDropResult<()> {
@@ -350,7 +352,7 @@ pub fn write_pairing_decision(
     write_json_frame(stream, &envelope)
 }
 
-pub fn read_pairing_decision(stream: &mut TcpStream) -> NekoDropResult<PairingDecisionPayload> {
+pub fn read_pairing_decision(stream: &mut impl Read) -> NekoDropResult<PairingDecisionPayload> {
     let envelope: Envelope<PairingDecisionPayload> = read_json_frame(stream)?;
     envelope.validate().map_err(protocol_error_to_network)?;
     if !matches!(
@@ -382,14 +384,14 @@ pub fn read_pairing_decision(stream: &mut TcpStream) -> NekoDropResult<PairingDe
 }
 
 pub fn write_transfer_decision(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     decision: &TransferDecision,
 ) -> NekoDropResult<()> {
     write_transfer_decision_for_transfer(stream, "transfer-decision", decision)
 }
 
 pub fn write_transfer_decision_for_transfer(
-    stream: &mut TcpStream,
+    stream: &mut impl Write,
     transfer_id: &str,
     decision: &TransferDecision,
 ) -> NekoDropResult<()> {
@@ -408,7 +410,7 @@ pub fn write_transfer_decision_for_transfer(
     write_json_frame(stream, &envelope)
 }
 
-pub fn read_transfer_decision(stream: &mut TcpStream) -> NekoDropResult<TransferDecision> {
+pub fn read_transfer_decision(stream: &mut impl Read) -> NekoDropResult<TransferDecision> {
     let envelope: Envelope<TransferDecision> = read_json_frame(stream)?;
     envelope.validate().map_err(protocol_error_to_network)?;
     if !matches!(
@@ -436,9 +438,10 @@ pub fn read_transfer_decision(stream: &mut TcpStream) -> NekoDropResult<Transfer
     Ok(decision)
 }
 
-pub fn receive_single_file_frame<F, T>(stream: &mut TcpStream, receive_file: F) -> NekoDropResult<T>
+pub fn receive_single_file_frame<R, F, T>(stream: &mut R, receive_file: F) -> NekoDropResult<T>
 where
-    F: FnOnce(&FileFrameHeader, &mut TcpStream) -> NekoDropResult<T>,
+    R: Read,
+    F: FnOnce(&FileFrameHeader, &mut R) -> NekoDropResult<T>,
 {
     let header = read_header(stream)?;
     receive_file(&header, stream)
@@ -457,12 +460,10 @@ where
     receive_file_frames(&mut stream, &mut receive_file)
 }
 
-pub fn receive_file_frames<F, T>(
-    stream: &mut TcpStream,
-    mut receive_file: F,
-) -> NekoDropResult<Vec<T>>
+pub fn receive_file_frames<R, F, T>(stream: &mut R, mut receive_file: F) -> NekoDropResult<Vec<T>>
 where
-    F: FnMut(&FileFrameHeader, &mut TcpStream) -> NekoDropResult<T>,
+    R: Read,
+    F: FnMut(&FileFrameHeader, &mut R) -> NekoDropResult<T>,
 {
     let count = read_file_count(stream)?;
     let mut received = Vec::with_capacity(count as usize);
@@ -486,7 +487,7 @@ where
     receive_file(&header, &mut stream)
 }
 
-fn write_header(stream: &mut TcpStream, header: &FileFrameHeader) -> NekoDropResult<()> {
+fn write_header(stream: &mut impl Write, header: &FileFrameHeader) -> NekoDropResult<()> {
     let payload = serde_json::to_vec(header).map_err(|error| {
         NekoDropError::Network(format!("failed to encode file header: {error}"))
     })?;
@@ -502,7 +503,7 @@ fn write_header(stream: &mut TcpStream, header: &FileFrameHeader) -> NekoDropRes
     Ok(())
 }
 
-fn read_header(stream: &mut TcpStream) -> NekoDropResult<FileFrameHeader> {
+fn read_header(stream: &mut impl Read) -> NekoDropResult<FileFrameHeader> {
     let mut len_bytes = [0_u8; 4];
     stream.read_exact(&mut len_bytes).map_err(|error| {
         NekoDropError::Network(format!("failed to read file header length: {error}"))
@@ -523,7 +524,7 @@ fn read_header(stream: &mut TcpStream) -> NekoDropResult<FileFrameHeader> {
         .map_err(|error| NekoDropError::Network(format!("failed to decode file header: {error}")))
 }
 
-fn read_file_count(stream: &mut TcpStream) -> NekoDropResult<u32> {
+fn read_file_count(stream: &mut impl Read) -> NekoDropResult<u32> {
     let mut count_bytes = [0_u8; 4];
     stream
         .read_exact(&mut count_bytes)
@@ -531,7 +532,7 @@ fn read_file_count(stream: &mut TcpStream) -> NekoDropResult<u32> {
     Ok(u32::from_be_bytes(count_bytes))
 }
 
-fn write_json_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> NekoDropResult<()> {
+fn write_json_frame<T: Serialize>(stream: &mut impl Write, value: &T) -> NekoDropResult<()> {
     let payload = serde_json::to_vec(value)
         .map_err(|error| NekoDropError::Network(format!("failed to encode JSON frame: {error}")))?;
     let len = u32::try_from(payload.len())
@@ -551,7 +552,7 @@ fn write_json_frame<T: Serialize>(stream: &mut TcpStream, value: &T) -> NekoDrop
     Ok(())
 }
 
-fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut TcpStream) -> NekoDropResult<T> {
+fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> NekoDropResult<T> {
     let mut len_bytes = [0_u8; 4];
     stream.read_exact(&mut len_bytes).map_err(|error| {
         NekoDropError::Network(format!("failed to read JSON frame length: {error}"))

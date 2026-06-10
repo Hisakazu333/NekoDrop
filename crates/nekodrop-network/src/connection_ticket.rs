@@ -128,9 +128,13 @@ impl ConnectionTicket {
         let transport = fields
             .get("transport")
             .ok_or_else(|| NekoDropError::Network("connection code missing transport".into()))?;
-        if transport != "tcp" {
+        let transport = TransportKind::parse(transport).ok_or_else(|| {
+            NekoDropError::Network(format!("unsupported connection transport: {transport}"))
+        })?;
+        if transport != TransportKind::Tcp {
             return Err(NekoDropError::Network(format!(
-                "unsupported connection transport: {transport}"
+                "connection ticket only supports TCP, got {}",
+                transport.as_str()
             )));
         }
 

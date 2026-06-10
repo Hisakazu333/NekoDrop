@@ -4,12 +4,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
-    read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
+    connect_endpoint, read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
     read_transfer_offer, receive_file_frames, send_file_frames_with_progress_and_cancel,
     write_pairing_decision, write_pairing_request, write_transfer_decision_for_transfer,
-    write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, NekoLinkTransport,
-    OutgoingFileFrame, PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TcpTransport,
-    TransferDecision, TransferOffer, TransferOfferFile, TransferProgress,
+    write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame,
+    PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer,
+    TransferOfferFile, TransferProgress,
 };
 use nekodrop_storage::{
     create_source_plan_from_paths, write_received_file_with_progress, ReceivedFile,
@@ -108,8 +108,7 @@ where
 {
     let outgoing = outgoing_frames_from_plan(&plan);
     let offer = offer_from_plan(&plan);
-    let transport = TcpTransport;
-    let mut stream = transport.connect(endpoint)?;
+    let mut stream = connect_endpoint(endpoint)?;
     write_transfer_offer(&mut stream, &offer)?;
     let mut on_progress = on_progress;
     on_progress(TransferProgressEvent::AwaitingApproval {
@@ -145,8 +144,7 @@ pub fn send_pairing_request(
     endpoint: &Endpoint,
     request: PairingRequestPayload,
 ) -> NekoDropResult<PairingDecisionPayload> {
-    let transport = TcpTransport;
-    let mut stream = transport.connect(endpoint)?;
+    let mut stream = connect_endpoint(endpoint)?;
     write_pairing_request(&mut stream, &request)?;
     read_pairing_decision(&mut stream)
 }
