@@ -68,7 +68,7 @@ export function App() {
       ? "等待配对"
       : pendingReceiveOffer
       ? "等待确认"
-      : "收件已打开"
+      : "收件开启"
     : receiveStatus?.startsWith("收件已关闭")
       ? "收件关闭"
       : receiveStatus?.startsWith("接收完成")
@@ -80,34 +80,34 @@ export function App() {
     if (mode === "receive") {
       return receiveSession
         ? {
-            eyebrow: "收件连接码",
+            eyebrow: "收件",
             title: pendingPairingRequest
-              ? "收到配对请求，等待确认"
+              ? "配对请求"
               : pendingReceiveOffer
-                ? "收到传输请求，等待确认"
-                : "连接码已生成，等待对方发送"
+                ? "传输请求"
+                : "收件开启"
           }
         : {
-            eyebrow: "收件连接码",
-            title: "打开收件，生成本机连接码"
+            eyebrow: "收件",
+            title: "收件关闭"
           };
     }
 
     if (mode === "queue") {
       return plan
         ? {
-            eyebrow: "发送队列",
+            eyebrow: "队列",
             title: `${plan.file_count} 个文件，${formatBytes(plan.total_bytes)}`
           }
         : {
-            eyebrow: "发送队列",
-            title: transferPaths.length > 0 ? "扫描路径，生成发送清单" : "选择文件，建立发送队列"
+            eyebrow: "队列",
+            title: transferPaths.length > 0 ? "待扫描" : "空队列"
           };
     }
 
     return {
-      eyebrow: "设备投递",
-      title: "拖入文件，点附近设备发送"
+      eyebrow: "投递",
+      title: "选择文件"
     };
   }, [mode, pendingPairingRequest, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
 
@@ -350,7 +350,7 @@ export function App() {
     const payload = transferPaths;
     if (payload.length === 0) {
       setMode("queue");
-      setError("请先选择或拖入文件。");
+      setError("未选择文件");
       return;
     }
 
@@ -375,7 +375,7 @@ export function App() {
     const payload = transferPaths;
     if (payload.length === 0) {
       setMode("queue");
-      setError("请先选择或拖入文件。");
+      setError("未选择文件");
       return;
     }
 
@@ -472,7 +472,7 @@ export function App() {
         </div>
 
         <nav className="nav-list" aria-label="主导航">
-          <span className="nav-label">当前可用</span>
+          <span className="nav-label">功能</span>
           <button className={mode === "send" ? "nav-item is-active" : "nav-item"} onClick={() => setMode("send")} type="button">
             <span>01</span>
             新投递
@@ -495,11 +495,11 @@ export function App() {
             <strong>本机信任</strong>
             <small>已接入</small>
           </span>
-          <span className="nav-label">后续迭代</span>
-          <span className="nav-item is-roadmap">
+          <span className="nav-label">计划</span>
+          <span className="nav-item is-roadmap is-ready">
             <span>06</span>
             <strong>配对握手</strong>
-            <small>待接入</small>
+            <small>已接入</small>
           </span>
           <span className="nav-item is-roadmap">
             <span>07</span>
@@ -531,7 +531,6 @@ export function App() {
             <div className="identity-strip" title={snapshot.device_identity.public_key_fingerprint}>
               <span>{platformLabel(snapshot.device_identity.platform)}</span>
               <code>{shortDeviceId(snapshot.device_identity.device_id)}</code>
-              <span>{shortFingerprint(snapshot.device_identity.public_key_fingerprint)}</span>
             </div>
           ) : null}
 
@@ -551,7 +550,7 @@ export function App() {
               }}
               type="button"
             >
-              {receiveSession ? "查看兜底码" : "打开收件"}
+              {receiveSession ? "连接码" : "打开收件"}
             </button>
             <button className="ghost-pill" onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)} type="button">
               接收目录
@@ -583,18 +582,18 @@ export function App() {
             <div className="composer-header">
               <div>
                 <strong>发送内容</strong>
-                <span>文件会经过真实扫描和 SHA-256 校验</span>
+                <span>{plan ? `${plan.file_count} 个文件` : `${transferPaths.length} 个路径`}</span>
               </div>
               <span>{transferPaths.length} 个路径</span>
             </div>
             <div className="drop-target">
-              <strong>{transferPaths.length > 0 ? `${transferPaths.length} 个路径已加入` : "把文件或文件夹拖到这里"}</strong>
+              <strong>{transferPaths.length > 0 ? `${transferPaths.length} 个路径已加入` : "拖入文件"}</strong>
               <span>
                 {plan
                   ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
                   : transferPaths.length > 0
                     ? transferPaths[0]
-                    : "也可以用下面的按钮选择文件；然后点击附近设备发送。"}
+                    : "拖拽到此处"}
               </span>
             </div>
             <div className="composer-bottom">
@@ -612,7 +611,7 @@ export function App() {
                   队列 {transferPaths.length}
                 </button>
               </div>
-              <span className="composer-hint">{nearbyDevices.length > 0 ? "选择下面的设备发送" : "等待附近设备出现"}</span>
+              <span className="composer-hint">{nearbyDevices.length > 0 ? "设备在线" : "扫描中"}</span>
             </div>
           </section>
 
@@ -627,8 +626,8 @@ export function App() {
 
           <section className="fallback-strip">
             <div className="fallback-copy">
-              <strong>连接码兜底</strong>
-              <span>自动发现失败、跨网段或防火墙异常时使用。</span>
+              <strong>备用码</strong>
+              <span>手动投递</span>
             </div>
             <textarea
               className="fallback-code"
@@ -638,10 +637,10 @@ export function App() {
                 setMode("send");
               }}
               aria-label="对方连接码"
-              placeholder="粘贴对方连接码"
+              placeholder="连接码"
             />
             <button className="send-button" disabled={!canSend} onClick={sendFiles} type="button">
-              用连接码发送
+              发送
             </button>
           </section>
 
@@ -771,15 +770,6 @@ function NearbyDevices({
         <div className={discoveryCopy.isError ? "nearby-empty is-warning" : "nearby-empty"}>
           <strong>{discoveryCopy.emptyTitle}</strong>
           <span>{discoveryCopy.emptyBody}</span>
-          {discoveryStatus ? (
-            <small>
-              {discoveryStatus.advertised && discoveryStatus.lan_ip && discoveryStatus.port
-                ? `本机广播 ${discoveryStatus.lan_ip}:${discoveryStatus.port}`
-                : "本机暂未广播"}
-              {" · "}
-              {discoveryStatus.service_type}
-            </small>
-          ) : null}
         </div>
       )}
     </section>
@@ -825,17 +815,17 @@ function ReceivePanel({
     <section className="function-panel">
       <div className="panel-head">
         <div>
-          <strong>{receiveSession ? "后台收件已打开" : "后台收件未打开"}</strong>
-          <span>{receiveSession?.bind_addr ?? "启动收件服务后生成兜底连接码"}</span>
+          <strong>{receiveSession ? "收件开启" : "收件关闭"}</strong>
+          <span>{receiveSession?.bind_addr ?? "未监听"}</span>
         </div>
         <div className="panel-actions">
           {receiveSession ? (
             <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
-              关闭后台收件
+              关闭
             </button>
           ) : (
             <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-              打开后台收件
+              打开
             </button>
           )}
         </div>
@@ -872,7 +862,7 @@ function ReceivePanel({
       {pendingOffer ? (
         <div className="incoming-offer">
           <div className="offer-main">
-            <strong>收到传输请求</strong>
+            <strong>传输请求</strong>
             <span>
               {pendingOffer.root_name} · {pendingOffer.file_count} 个文件 · {formatBytes(pendingOffer.total_bytes)}
             </span>
@@ -891,7 +881,7 @@ function ReceivePanel({
       {pendingPairingRequest ? (
         <div className="incoming-offer">
           <div className="offer-main">
-            <strong>收到配对请求</strong>
+            <strong>配对请求</strong>
             <span>
               {pendingPairingRequest.device_name} · {devicePlatformLabel(pendingPairingRequest.platform)} · 配对码{" "}
               {pendingPairingRequest.pairing_code}
@@ -902,7 +892,7 @@ function ReceivePanel({
               拒绝
             </button>
             <button className="primary-button" disabled={busy === "pair"} onClick={() => onRespondPairingRequest(true)} type="button">
-              接受配对
+              接受
             </button>
           </div>
         </div>
@@ -911,7 +901,7 @@ function ReceivePanel({
       {receiveReport ? (
         <div className="result-line">
           <strong>接收完成：{receiveReport.files.length} 个文件</strong>
-          <span>{receiveReport.files.every((file) => file.verified) ? "校验通过" : "需要检查"}</span>
+          <span>{receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</span>
         </div>
       ) : null}
     </section>
@@ -942,7 +932,7 @@ function QueuePanel({
       <div className="panel-head">
         <div>
           <strong>{plan ? `${plan.file_count} 个文件` : "发送队列"}</strong>
-          <span>{plan ? formatBytes(plan.total_bytes) : "文件会经过真实扫描和 SHA-256 校验"}</span>
+          <span>{plan ? formatBytes(plan.total_bytes) : "未扫描"}</span>
         </div>
         <div className="panel-actions">
           <button className="tool-button" disabled={busy === "scan"} onClick={onScan} type="button">
@@ -971,7 +961,7 @@ function QueuePanel({
         className="manual-paths"
         value={manualPaths}
         onChange={(event) => setManualPaths(event.target.value)}
-        placeholder="手动补充路径，每行一个..."
+        placeholder="每行一个路径"
       />
     </section>
   );
@@ -1014,7 +1004,7 @@ function StatusLine({
     return (
       <div className="status-line">
         <strong>接收完成</strong>
-        <span>{receiveReport.files.length} 个文件 · {receiveReport.files.every((file) => file.verified) ? "校验通过" : "需要检查"}</span>
+        <span>{receiveReport.files.length} 个文件 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</span>
       </div>
     );
   }
@@ -1116,7 +1106,7 @@ function formatBytes(bytes: number) {
 
 function phaseLabel(phase: string) {
   if (phase === "connecting") return "连接中";
-  if (phase === "listening") return "收件已打开";
+  if (phase === "listening") return "收件开启";
   if (phase === "awaiting_approval") return "等待确认";
   if (phase === "accepted") return "已接受";
   if (phase === "transferring") return "传输中";
@@ -1143,9 +1133,9 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
   if (!status) {
     return {
       label: "启动中",
-      subtitle: "正在读取自动发现状态",
-      emptyTitle: "正在启动自动发现",
-      emptyBody: "稍等几秒；如果长时间没有设备，可使用连接码兜底。",
+      subtitle: "初始化",
+      emptyTitle: "启动中",
+      emptyBody: "无设备",
       isError: false
     };
   }
@@ -1153,9 +1143,9 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
   if (status.phase === "unavailable") {
     return {
       label: "发现不可用",
-      subtitle: status.last_error ?? status.message,
-      emptyTitle: "自动发现暂不可用",
-      emptyBody: "请检查系统网络权限或防火墙；当前仍可复制对方连接码发送。",
+      subtitle: status.last_error ? "异常" : "不可用",
+      emptyTitle: "发现不可用",
+      emptyBody: "备用码",
       isError: true
     };
   }
@@ -1163,9 +1153,9 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
   if (!status.advertised) {
     return {
       label: "未广播",
-      subtitle: status.message,
-      emptyTitle: "本机还没有对外广播",
-      emptyBody: "请确认后台收件已打开，并且当前网络不是代理、虚拟网卡或隔离网络。",
+      subtitle: status.last_error ? "异常" : "未开启",
+      emptyTitle: "未广播",
+      emptyBody: "收件关闭",
       isError: Boolean(status.last_error)
     };
   }
@@ -1173,7 +1163,7 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
   if (deviceCount > 0) {
     return {
       label: `${deviceCount} 台在线`,
-      subtitle: status.last_seen_seconds_ago == null ? "已发现可投递设备" : `最近发现：${status.last_seen_seconds_ago}s 前`,
+      subtitle: status.last_seen_seconds_ago == null ? "在线" : `${status.last_seen_seconds_ago}s 前`,
       emptyTitle: "",
       emptyBody: "",
       isError: false
@@ -1182,9 +1172,9 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
 
   return {
     label: "扫描中",
-    subtitle: status.message,
-    emptyTitle: "正在扫描附近设备",
-    emptyBody: "两台电脑需要在可互通的局域网；Windows 首次运行请允许专用网络防火墙访问。有线和无线如果被路由器隔离，自动发现可能看不到对方。",
+    subtitle: "搜索中",
+    emptyTitle: "无设备",
+    emptyBody: "扫描中",
     isError: false
   };
 }
@@ -1220,12 +1210,6 @@ function shortDeviceId(deviceId: string) {
   return `${deviceId.slice(0, 17)}…${deviceId.slice(-4)}`;
 }
 
-function shortFingerprint(fingerprint: string) {
-  const value = fingerprint.replace(/^sha256:/, "");
-  if (value.length <= 16) return `sha256:${value}`;
-  return `sha256:${value.slice(0, 8)}…${value.slice(-6)}`;
-}
-
 function errorMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
@@ -1238,7 +1222,7 @@ function deviceSendErrorMessage(message: string) {
     message.includes("连接") ||
     message.includes("不在线")
   ) {
-    return `${message} 可先确认对方 NekoDrop 已打开收件、Windows 防火墙允许专用网络访问；如果自动发现不可用，复制对方连接码兜底发送。`;
+    return `${message} 备用码重试`;
   }
   return message;
 }

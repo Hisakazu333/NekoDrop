@@ -699,11 +699,6 @@ button.nav-item:hover {
   font-size: 13px;
 }
 
-.nearby-empty small {
-  color: var(--faint);
-  font-size: 11px;
-}
-
 .nearby-empty.is-warning strong {
   color: var(--red);
 }
