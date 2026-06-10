@@ -46,6 +46,8 @@ export function App() {
   const [pendingReceiveOffer, setPendingReceiveOffer] = useState<PendingReceiveOfferDto | null>(null);
   const [pendingPairingRequest, setPendingPairingRequest] = useState<PendingPairingRequestDto | null>(null);
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState<BusyMode | null>(null);
@@ -62,7 +64,18 @@ export function App() {
     () => buildPathPayload(selectedPaths, manualPaths),
     [manualPaths, selectedPaths]
   );
-  const canSend = connectionCode.trim().length > 0 && transferPaths.length > 0 && !busy;
+  const trustedNearbyDevices = useMemo(
+    () => nearbyDevices.filter((device) => device.trust_state === "Trusted"),
+    [nearbyDevices]
+  );
+  const selectedDevice = useMemo(
+    () =>
+      trustedNearbyDevices.find((device) => device.id === selectedDeviceId) ??
+      null,
+    [selectedDeviceId, trustedNearbyDevices]
+  );
+  const trimmedConnectionCode = connectionCode.trim();
+  const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
   const receiveState = receiveSession
     ? pendingPairingRequest
       ? "等待配对"
@@ -102,6 +115,19 @@ export function App() {
     const timer = window.setTimeout(() => setToast(null), 2200);
     return () => window.clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (!selectedDeviceId) return;
+    if (nearbyDevices.some((device) => device.id === selectedDeviceId)) return;
+    setSelectedDeviceId(null);
+  }, [nearbyDevices, selectedDeviceId]);
+
+  useEffect(() => {
+    if (mode !== "send") return;
+    if (selectedDeviceId || connectionCodeOpen || trimmedConnectionCode.length > 0) return;
+    if (trustedNearbyDevices.length !== 1) return;
+    setSelectedDeviceId(trustedNearbyDevices[0].id);
+  }, [connectionCodeOpen, mode, selectedDeviceId, trimmedConnectionCode.length, trustedNearbyDevices]);
 
   useEffect(() => {
     if (!transferStatus || transferStatus.phase !== "transferring") {
@@ -363,6 +389,27 @@ export function App() {
     }
   }
 
+  async function sendCurrentTransfer() {
+    if (transferPaths.length === 0) {
+      setMode("send");
+      setError("未选择文件");
+      return;
+    }
+
+    if (selectedDevice) {
+      await sendFilesToDevice(selectedDevice);
+      return;
+    }
+
+    if (trimmedConnectionCode.length > 0) {
+      await sendFiles();
+      return;
+    }
+
+    setMode("send");
+    setError("选择目标");
+  }
+
   async function requestPairing(device: DeviceDto) {
     setBusy("pair");
     setError(null);
@@ -370,6 +417,8 @@ export function App() {
       const trusted = await invokeCommand<TrustedDeviceDto>("request_device_pairing", {
         deviceId: device.id
       });
+      setSelectedDeviceId(trusted.device_id);
+      setConnectionCodeOpen(false);
       setToast(`配对完成：${trusted.device_name} · ${trusted.pairing_code}`);
       await refreshReceiveState();
     } catch (nextError) {
@@ -430,8 +479,21 @@ export function App() {
   }
 
   const discoveryCopy = discoveryStateCopy(discoveryStatus, nearbyDevices.length);
+  const targetLabel = selectedDevice
+    ? selectedDevice.name
+    : trimmedConnectionCode.length > 0
+      ? "备用码"
+      : "选择目标";
   const pageTitle =
-    mode === "receive" ? "收件" : mode === "queue" ? "发送队列" : "把文件发到哪台设备？";
+    mode === "receive"
+      ? "收件"
+      : mode === "queue"
+        ? "发送队列"
+        : selectedDevice
+          ? `发给 ${selectedDevice.name}`
+          : trimmedConnectionCode.length > 0
+            ? "使用备用码发送"
+            : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -556,19 +618,52 @@ export function App() {
                     <strong>{composerTitle}</strong>
                     <span>{composerSubtitle}</span>
                   </div>
+                  {connectionCodeOpen ? (
+                    <textarea
+                      className="composer-code"
+                      value={connectionCode}
+                      onChange={(event) => {
+                        setConnectionCode(event.target.value);
+                        setSelectedDeviceId(null);
+                      }}
+                      aria-label="对方连接码"
+                      placeholder="粘贴连接码"
+                    />
+                  ) : null}
                   <div className="composer-actions">
-                    <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
-                      文件
-                    </button>
-                    <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
-                      文件夹
-                    </button>
-                    <button className="tool-button" disabled={transferPaths.length === 0 || busy === "scan"} onClick={() => scanPaths()} type="button">
-                      扫描
-                    </button>
-                    <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} type="button">
-                      清空
-                    </button>
+                    <div className="composer-toolset">
+                      <button className="tool-button" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
+                        文件
+                      </button>
+                      <button className="tool-button" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
+                        文件夹
+                      </button>
+                      <button
+                        className={connectionCodeOpen ? "tool-button is-active" : "tool-button"}
+                        onClick={() => {
+                          setConnectionCodeOpen((open) => !open);
+                          setSelectedDeviceId(null);
+                        }}
+                        type="button"
+                      >
+                        备用码
+                      </button>
+                      <button className="tool-button" disabled={transferPaths.length === 0} onClick={clearQueue} type="button">
+                        清空
+                      </button>
+                    </div>
+                    <div className="composer-submit">
+                      <span>{targetLabel}</span>
+                      <button
+                        className="composer-send"
+                        disabled={!canSend}
+                        onClick={sendCurrentTransfer}
+                        title={`发送到 ${targetLabel}`}
+                        type="button"
+                      >
+                        ↑
+                      </button>
+                    </div>
                   </div>
                 </section>
 
@@ -576,25 +671,15 @@ export function App() {
                   busy={busy}
                   discoveryStatus={discoveryStatus}
                   devices={nearbyDevices}
-                  transferCount={transferPaths.length}
-                  onSendToDevice={sendFilesToDevice}
+                  selectedDeviceId={selectedDeviceId}
+                  onSelectDevice={(device) => {
+                    setSelectedDeviceId(device.id);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setError(null);
+                  }}
                   onTrustDevice={requestPairing}
                 />
-
-                <section className="manual-send">
-                  <textarea
-                    value={connectionCode}
-                    onChange={(event) => {
-                      setConnectionCode(event.target.value);
-                      setMode("send");
-                    }}
-                    aria-label="对方连接码"
-                    placeholder="备用码"
-                  />
-                  <button className="send-button" disabled={!canSend} onClick={sendFiles} type="button">
-                    发送
-                  </button>
-                </section>
               </>
             ) : null}
 
@@ -658,15 +743,15 @@ function NearbyDevices({
   busy,
   discoveryStatus,
   devices,
-  transferCount,
-  onSendToDevice,
+  selectedDeviceId,
+  onSelectDevice,
   onTrustDevice
 }: {
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
-  transferCount: number;
-  onSendToDevice: (device: DeviceDto) => void;
+  selectedDeviceId: string | null;
+  onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
   const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
@@ -687,8 +772,18 @@ function NearbyDevices({
         <div className="nearby-list">
           {devices.map((device) => {
             const trusted = device.trust_state === "Trusted";
+            const selected = device.id === selectedDeviceId;
             return (
-              <div className={trusted ? "nearby-device is-trusted" : "nearby-device"} key={device.id}>
+              <div
+                className={[
+                  "nearby-device",
+                  trusted ? "is-trusted" : "",
+                  selected ? "is-selected" : ""
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={device.id}
+              >
                 <span className="device-dot" />
                 <span className="device-main">
                   <strong>{device.name}</strong>
@@ -699,7 +794,9 @@ function NearbyDevices({
                 </span>
                 <span className="device-actions">
                   {trusted ? (
-                    <span className="trust-badge">已信任</span>
+                    <button className="target-button" onClick={() => onSelectDevice(device)} type="button">
+                      {selected ? "已选" : "选择"}
+                    </button>
                   ) : (
                     <button
                       className="trust-button"
@@ -710,14 +807,6 @@ function NearbyDevices({
                       配对
                     </button>
                   )}
-                  <button
-                    className="inline-send-button"
-                    disabled={busy === "send" || transferCount === 0}
-                    onClick={() => onSendToDevice(device)}
-                    type="button"
-                  >
-                    {transferCount > 0 ? "发送" : "先选文件"}
-                  </button>
                 </span>
               </div>
             );
