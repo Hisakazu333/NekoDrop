@@ -1,7 +1,8 @@
+use std::collections::HashMap;
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use nekodrop_core::{Device, DeviceId, DevicePlatform, DeviceTrustState};
@@ -12,11 +13,13 @@ use crate::network::primary_lan_ip;
 
 const SERVICE_TYPE: &str = "_nekodrop._tcp.local.";
 const REGISTER_INTERVAL: Duration = Duration::from_secs(2);
+const DEVICE_STALE_AFTER: Duration = Duration::from_secs(12);
 
 pub fn start_discovery(state: &AppState) {
     let device_identity = state.device_identity.clone();
     let receive_session = state.receive_session.clone();
     let nearby_devices = state.nearby_devices.clone();
+    let nearby_seen_at = state.nearby_devices_seen_at.clone();
 
     thread::spawn(move || {
         let Ok(daemon) = ServiceDaemon::new() else {
@@ -28,16 +31,25 @@ pub fn start_discovery(state: &AppState) {
 
         spawn_service_advertiser(daemon.clone(), device_identity.clone(), receive_session);
 
-        while let Ok(event) = receiver.recv() {
-            match event {
-                ServiceEvent::ServiceResolved(info) => {
-                    add_or_update_device(&device_identity, &nearby_devices, &info);
+        loop {
+            while let Ok(event) = receiver.try_recv() {
+                match event {
+                    ServiceEvent::ServiceResolved(info) => {
+                        add_or_update_device(
+                            &device_identity,
+                            &nearby_devices,
+                            &nearby_seen_at,
+                            &info,
+                        );
+                    }
+                    ServiceEvent::ServiceRemoved(_, fullname) => {
+                        remove_device_by_fullname(&nearby_devices, &nearby_seen_at, &fullname);
+                    }
+                    _ => {}
                 }
-                ServiceEvent::ServiceRemoved(_, fullname) => {
-                    remove_device_by_fullname(&nearby_devices, &fullname);
-                }
-                _ => {}
             }
+            purge_stale_devices(&nearby_devices, &nearby_seen_at);
+            thread::sleep(Duration::from_millis(800));
         }
     });
 }
@@ -102,6 +114,7 @@ fn spawn_service_advertiser(
 fn add_or_update_device(
     local_identity: &LocalDeviceIdentity,
     nearby_devices: &Arc<Mutex<Vec<Device>>>,
+    nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
     info: &ResolvedService,
 ) {
     let local = local_identity.public_identity();
@@ -144,11 +157,54 @@ fn add_or_update_device(
             devices.push(device);
         }
     }
+    if let Ok(mut seen_at) = nearby_seen_at.lock() {
+        seen_at.insert(device_id, Instant::now());
+    }
 }
 
-fn remove_device_by_fullname(nearby_devices: &Arc<Mutex<Vec<Device>>>, fullname: &str) {
+fn remove_device_by_fullname(
+    nearby_devices: &Arc<Mutex<Vec<Device>>>,
+    nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
+    fullname: &str,
+) {
     if let Ok(mut devices) = nearby_devices.lock() {
         devices.retain(|device| device.id.as_str() != fullname);
+    }
+    if let Ok(mut seen_at) = nearby_seen_at.lock() {
+        seen_at.remove(fullname);
+    }
+}
+
+fn purge_stale_devices(
+    nearby_devices: &Arc<Mutex<Vec<Device>>>,
+    nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
+) {
+    let stale_ids = if let Ok(seen_at) = nearby_seen_at.lock() {
+        seen_at
+            .iter()
+            .filter_map(|(device_id, seen_at)| {
+                if seen_at.elapsed() > DEVICE_STALE_AFTER {
+                    Some(device_id.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+
+    if stale_ids.is_empty() {
+        return;
+    }
+
+    if let Ok(mut devices) = nearby_devices.lock() {
+        devices.retain(|device| !stale_ids.iter().any(|id| id == device.id.as_str()));
+    }
+    if let Ok(mut seen_at) = nearby_seen_at.lock() {
+        for device_id in stale_ids {
+            seen_at.remove(&device_id);
+        }
     }
 }
 

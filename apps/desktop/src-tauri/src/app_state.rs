@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc, Condvar, Mutex};
+use std::time::Instant;
 
 use nekodrop_core::{AppConfig, Device, TransferJob};
 use nekodrop_service::TransferReceiveReport;
@@ -55,6 +57,7 @@ pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub device_identity: LocalDeviceIdentity,
     pub nearby_devices: Arc<Mutex<Vec<Device>>>,
+    pub nearby_devices_seen_at: Arc<Mutex<HashMap<String, Instant>>>,
     pub transfers: Mutex<Vec<TransferJob>>,
     pub receive_status: Arc<Mutex<Option<String>>>,
     pub receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
@@ -73,6 +76,7 @@ impl AppState {
             config: Mutex::new(config),
             device_identity,
             nearby_devices: Arc::new(Mutex::new(Vec::new())),
+            nearby_devices_seen_at: Arc::new(Mutex::new(HashMap::new())),
             transfers: Mutex::new(Vec::new()),
             receive_status: Arc::new(Mutex::new(None)),
             receive_session: Arc::new(Mutex::new(None)),
