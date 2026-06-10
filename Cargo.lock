@@ -1874,6 +1874,7 @@ dependencies = [
  "nekodrop-core",
  "nekodrop-network",
  "nekodrop-storage",
+ "nekolink-protocol",
 ]
 
 [[package]]

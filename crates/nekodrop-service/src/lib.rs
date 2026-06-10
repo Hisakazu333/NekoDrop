@@ -12,7 +12,7 @@ use nekodrop_network::{
     TransferOfferFile, TransferProgress,
 };
 use nekodrop_storage::{
-    create_source_plan_from_paths, write_received_file_with_progress, ReceivedFile,
+    create_source_plan_from_paths, write_received_file_with_progress_and_cancel, ReceivedFile,
 };
 use nekolink_protocol::DeviceIdentity;
 
@@ -218,18 +218,45 @@ where
     H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
     P: FnMut(TransferProgressEvent),
 {
+    accept_incoming_stream_with_cancel(
+        stream,
+        receive_dir,
+        decide,
+        handle_pairing,
+        on_progress,
+        || false,
+    )
+}
+
+pub fn accept_incoming_stream_with_cancel<D, H, P, C>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    decide: D,
+    handle_pairing: H,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<IncomingSessionReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::DeviceHello(_) => Err(NekoDropError::Network(
             "device hello is not a transfer or pairing request".into(),
         )),
-        IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
-            stream,
-            receive_dir,
-            offer,
-            decide,
-            on_progress,
-        )
-        .map(IncomingSessionReport::Transfer),
+        IncomingControlFrame::FileOffer(offer) => {
+            accept_transfer_offer_stream_with_decision_and_cancel(
+                stream,
+                receive_dir,
+                offer,
+                decide,
+                on_progress,
+                || should_cancel(),
+            )
+            .map(IncomingSessionReport::Transfer)
+        }
         IncomingControlFrame::PairingRequest(request) => {
             let decision = handle_pairing(&request);
             write_pairing_decision(stream, &request.request_id, &decision)?;
@@ -249,6 +276,29 @@ where
     D: FnOnce(&TransferOffer) -> bool,
     P: FnMut(TransferProgressEvent),
 {
+    accept_transfer_offer_stream_with_decision_and_cancel(
+        stream,
+        receive_dir,
+        offer,
+        decide,
+        on_progress,
+        || false,
+    )
+}
+
+fn accept_transfer_offer_stream_with_decision_and_cancel<D, P, C>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    offer: TransferOffer,
+    decide: D,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
     if !decide(&offer) {
         write_transfer_decision_for_transfer(
             stream,
@@ -265,6 +315,9 @@ where
     let mut file_index = 0_usize;
     let mut on_progress = on_progress;
     let files = receive_file_frames(stream, |header, stream| {
+        if should_cancel() {
+            return Err(NekoDropError::Network("transfer cancelled".into()));
+        }
         let expected = offer.files.get(file_index).ok_or_else(|| {
             NekoDropError::Network(format!(
                 "received unexpected extra file frame: {}",
@@ -290,7 +343,7 @@ where
             bytes_transferred,
             total_bytes: offer.total_bytes,
         }));
-        let received = write_received_file_with_progress(
+        let received = write_received_file_with_progress_and_cancel(
             receive_dir,
             &header.manifest_path,
             header.size,
@@ -307,6 +360,7 @@ where
                     total_bytes: offer.total_bytes,
                 }));
             },
+            || should_cancel(),
         )?;
         bytes_transferred = bytes_transferred.saturating_add(received.bytes_written);
         on_progress(TransferProgressEvent::Verifying {

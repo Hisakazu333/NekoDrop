@@ -39,11 +39,36 @@ pub fn write_received_file_with_progress<R, F>(
     expected_size: u64,
     expected_sha256: &str,
     reader: &mut R,
-    mut on_progress: F,
+    on_progress: F,
 ) -> NekoDropResult<ReceivedFile>
 where
     R: Read,
     F: FnMut(u64),
+{
+    write_received_file_with_progress_and_cancel(
+        receive_dir,
+        manifest_path,
+        expected_size,
+        expected_sha256,
+        reader,
+        on_progress,
+        || false,
+    )
+}
+
+pub fn write_received_file_with_progress_and_cancel<R, F, C>(
+    receive_dir: &Path,
+    manifest_path: &str,
+    expected_size: u64,
+    expected_sha256: &str,
+    reader: &mut R,
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<ReceivedFile>
+where
+    R: Read,
+    F: FnMut(u64),
+    C: FnMut() -> bool,
 {
     if expected_sha256.trim().is_empty() {
         return Err(NekoDropError::Storage(
@@ -89,6 +114,11 @@ where
     let mut bytes_written = 0_u64;
 
     while remaining > 0 {
+        if should_cancel() {
+            let _ = fs::remove_file(&partial_path);
+            return Err(NekoDropError::Storage("transfer cancelled".into()));
+        }
+
         let max_read = remaining.min(buffer.len() as u64) as usize;
         let read = reader.read(&mut buffer[..max_read]).map_err(|error| {
             NekoDropError::Storage(format!("failed to read incoming file payload: {error}"))
@@ -109,6 +139,11 @@ where
         bytes_written += read as u64;
         remaining -= read as u64;
         on_progress(bytes_written);
+
+        if should_cancel() {
+            let _ = fs::remove_file(&partial_path);
+            return Err(NekoDropError::Storage("transfer cancelled".into()));
+        }
     }
 
     partial_file.flush().map_err(|error| {
@@ -197,6 +232,30 @@ mod tests {
         );
 
         assert!(result.is_err());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn cancelled_receive_removes_partial_file() {
+        let dir = unique_temp_dir("received-cancel");
+        let payload = b"hello over network".to_vec();
+        let checksum = "b0cda4b2fff9211aaa4c49df724a81dfbad65bb2d13015d22eec9fb9ab327786";
+        let mut reader = Cursor::new(payload);
+
+        let result = write_received_file_with_progress_and_cancel(
+            &dir,
+            "folder/sample.txt",
+            18,
+            checksum,
+            &mut reader,
+            |_| {},
+            || true,
+        );
+
+        assert!(result.is_err());
+        assert!(!dir.join("folder/sample.txt").exists());
+        assert!(!dir.join("folder/sample.txt.nekodrop-part").exists());
 
         fs::remove_dir_all(dir).unwrap();
     }

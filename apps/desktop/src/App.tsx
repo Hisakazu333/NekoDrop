@@ -500,8 +500,16 @@ export function App() {
     setBusy("cancel-transfer");
     setError(null);
     try {
-      await invokeCommand<void>("cancel_current_transfer");
-      setToast("正在取消发送");
+      if (transferStatus?.direction === "receive" && isReceiveTransferActivePhase(transferStatus.phase)) {
+        await invokeCommand<void>("stop_receive_once");
+        setReceiveSession(null);
+        setPendingReceiveOffer(null);
+        setReceiveStatus("正在取消接收");
+        setToast("正在取消接收");
+      } else {
+        await invokeCommand<void>("cancel_current_transfer");
+        setToast("正在取消发送");
+      }
       await refreshReceiveState();
     } catch (nextError) {
       setError(errorMessage(nextError));
@@ -2022,9 +2030,10 @@ function TransferStatusView({
   onCancel?: () => void;
 }) {
   const canCancel =
-    status.direction === "send" &&
     onCancel &&
-    !matchesTerminalTransferPhase(status.phase);
+    !matchesTerminalTransferPhase(status.phase) &&
+    (status.direction === "send" ||
+      (status.direction === "receive" && isReceiveTransferActivePhase(status.phase)));
 
   return (
     <div className={status.phase === "failed" ? "transfer-status is-error" : "transfer-status"}>
@@ -2165,7 +2174,11 @@ function phaseLabel(phase: string) {
 }
 
 function matchesTerminalTransferPhase(phase: string) {
-  return ["completed", "failed", "cancelled", "declined", "expired", "closed"].includes(phase);
+  return ["completed", "failed", "cancelled", "declined", "expired", "closed", "blocked"].includes(phase);
+}
+
+function isReceiveTransferActivePhase(phase: string) {
+  return phase === "accepted" || phase === "transferring" || phase === "verifying";
 }
 
 function formatDuration(seconds: number) {

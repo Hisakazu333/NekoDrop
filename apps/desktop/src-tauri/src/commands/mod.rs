@@ -18,7 +18,7 @@ use nekodrop_network::{
     TransferProgress,
 };
 use nekodrop_service::{
-    accept_incoming_stream, create_transfer_plan as create_service_transfer_plan,
+    accept_incoming_stream_with_cancel, create_transfer_plan as create_service_transfer_plan,
     send_pairing_request, send_plan_with_sender_identity_and_cancel, IncomingSessionReport,
     TransferProgressEvent, TransferReceiveReport, TransferSendReport, TransferSourceFile,
     TransferSourcePlan,
@@ -724,6 +724,20 @@ fn clear_active_send_cancel(
     }
 }
 
+fn clear_active_receive_cancel(
+    active_receive_cancel: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    cancel: &Arc<AtomicBool>,
+) {
+    if let Ok(mut active) = active_receive_cancel.lock() {
+        if active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, cancel))
+        {
+            *active = None;
+        }
+    }
+}
+
 fn transfer_history_record_by_id(
     state: &AppState,
     transfer_id: &str,
@@ -801,7 +815,7 @@ fn send_paths_to_endpoint(
             friendly_transfer_error(&error.to_string())
         };
         let status_phase = if cancelled { "cancelled" } else { "failed" };
-        let (file_index, current_file, bytes_transferred) =
+        let (file_index, current_file, bytes_transferred, _) =
             current_transfer_progress(&state.transfer_status);
         clear_active_send_cancel(&state.active_send_cancel, &cancel);
         set_transfer_status(
@@ -1032,6 +1046,7 @@ pub fn start_receive_once(
     let last_receive_report = state.last_receive_report.clone();
     let trusted_devices = state.trusted_devices.clone();
     let transfer_history = state.transfer_history.clone();
+    let active_receive_cancel = state.active_receive_cancel.clone();
     let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
     thread::spawn(move || loop {
@@ -1093,7 +1108,11 @@ pub fn start_receive_once(
                 let trusted_for_pairing = trusted_devices.clone();
                 let local_for_pairing = local_identity.clone();
                 let peer_host_for_pairing = peer_host.clone();
-                let result = accept_incoming_stream(
+                let current_receive_cancel = Arc::new(AtomicBool::new(false));
+                if let Ok(mut active_cancel) = active_receive_cancel.lock() {
+                    *active_cancel = Some(current_receive_cancel.clone());
+                }
+                let result = accept_incoming_stream_with_cancel(
                     &mut stream,
                     &receive_dir_for_thread,
                     move |offer| {
@@ -1119,7 +1138,12 @@ pub fn start_receive_once(
                             set_transfer_status(&status_for_progress, status);
                         }
                     },
+                    || {
+                        cancel.load(Ordering::SeqCst)
+                            || current_receive_cancel.load(Ordering::SeqCst)
+                    },
                 );
+                clear_active_receive_cancel(&active_receive_cancel, &current_receive_cancel);
                 if let Ok(mut status) = receive_status.lock() {
                     *status = Some(match &result {
                         Ok(IncomingSessionReport::Transfer(report)) => {
@@ -1142,6 +1166,11 @@ pub fn start_receive_once(
                         }
                         Err(_) if is_receive_terminal_offer_status(&transfer_status, "blocked") => {
                             "已阻止这次传输".to_string()
+                        }
+                        Err(_)
+                            if is_receive_terminal_offer_status(&transfer_status, "cancelled") =>
+                        {
+                            "接收已取消".to_string()
                         }
                         Err(error) => {
                             format!("接收失败：{}", friendly_transfer_error(&error.to_string()))
@@ -1234,6 +1263,7 @@ pub fn start_receive_once(
                     && !is_receive_terminal_offer_status(&transfer_status, "expired")
                     && !is_receive_terminal_offer_status(&transfer_status, "closed")
                     && !is_receive_terminal_offer_status(&transfer_status, "blocked")
+                    && !is_receive_terminal_offer_status(&transfer_status, "cancelled")
                 {
                     if let Ok(status) = receive_status.lock() {
                         let failure_message = status
@@ -1296,8 +1326,14 @@ pub fn start_receive_once(
 
 #[tauri::command]
 pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
-    if is_receive_transfer_active(&state.transfer_status) {
-        return Err("正在接收文件，当前版本还不能中途取消。".to_string());
+    let receive_was_active = is_receive_transfer_active(&state.transfer_status);
+    if let Some(cancel) = state
+        .active_receive_cancel
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone()
+    {
+        cancel.store(true, Ordering::SeqCst);
     }
 
     let session = state
@@ -1339,20 +1375,36 @@ pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
             .receive_status
             .lock()
             .map_err(|error| error.to_string())?;
-        *receive_status = Some("收件已关闭".to_string());
+        *receive_status = Some(if receive_was_active {
+            "正在取消接收".to_string()
+        } else {
+            "收件已关闭".to_string()
+        });
     }
+    let (file_index, current_file, bytes_transferred, total_bytes) =
+        current_transfer_progress(&state.transfer_status);
     set_transfer_status(
         &state.transfer_status,
         TransferStatusState {
             direction: "receive".to_string(),
-            phase: "closed".to_string(),
+            phase: if receive_was_active {
+                "cancelled"
+            } else {
+                "closed"
+            }
+            .to_string(),
             root_name: None,
             file_count: 0,
-            file_index: 0,
-            current_file: None,
-            bytes_transferred: 0,
-            total_bytes: 0,
-            message: "收件已关闭".to_string(),
+            file_index,
+            current_file,
+            bytes_transferred,
+            total_bytes,
+            message: if receive_was_active {
+                "正在取消接收"
+            } else {
+                "收件已关闭"
+            }
+            .to_string(),
             updated_at_ms: now_ms(),
         },
     );
@@ -2226,7 +2278,7 @@ fn set_transfer_status(
 
 fn current_transfer_progress(
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
-) -> (usize, Option<String>, u64) {
+) -> (usize, Option<String>, u64, u64) {
     transfer_status
         .lock()
         .ok()
@@ -2236,9 +2288,10 @@ fn current_transfer_progress(
                 status.file_index,
                 status.current_file,
                 status.bytes_transferred.min(status.total_bytes),
+                status.total_bytes,
             )
         })
-        .unwrap_or((0, None, 0))
+        .unwrap_or((0, None, 0, 0))
 }
 
 fn endpoint_label(endpoint: &Endpoint) -> String {
@@ -2643,11 +2696,13 @@ mod tests {
             updated_at_ms: 1,
         })));
 
-        let (file_index, current_file, bytes_transferred) = current_transfer_progress(&status);
+        let (file_index, current_file, bytes_transferred, total_bytes) =
+            current_transfer_progress(&status);
 
         assert_eq!(file_index, 1);
         assert_eq!(current_file.as_deref(), Some("drop/a.txt"));
         assert_eq!(bytes_transferred, 42);
+        assert_eq!(total_bytes, 100);
     }
 
     fn nearby_device(device_id: &str, fingerprint: &str) -> Device {

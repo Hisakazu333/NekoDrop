@@ -8,6 +8,7 @@ license.workspace = true
 nekodrop-core = { path = "../nekodrop-core" }
 nekodrop-network = { path = "../nekodrop-network" }
 nekodrop-storage = { path = "../nekodrop-storage" }
+nekolink-protocol = { path = "../nekolink-protocol" }
 
 [lib]
 path = "src/lib.rs"
