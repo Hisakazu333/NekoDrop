@@ -54,7 +54,7 @@ pub struct TransferStatusState {
 pub struct AppState {
     pub config: Mutex<AppConfig>,
     pub device_identity: LocalDeviceIdentity,
-    pub nearby_devices: Mutex<Vec<Device>>,
+    pub nearby_devices: Arc<Mutex<Vec<Device>>>,
     pub transfers: Mutex<Vec<TransferJob>>,
     pub receive_status: Arc<Mutex<Option<String>>>,
     pub receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
@@ -72,7 +72,7 @@ impl AppState {
         Ok(Self {
             config: Mutex::new(config),
             device_identity,
-            nearby_devices: Mutex::new(Vec::new()),
+            nearby_devices: Arc::new(Mutex::new(Vec::new())),
             transfers: Mutex::new(Vec::new()),
             receive_status: Arc::new(Mutex::new(None)),
             receive_session: Arc::new(Mutex::new(None)),

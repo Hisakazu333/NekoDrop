@@ -1,10 +1,12 @@
 mod app_state;
 mod commands;
 mod device_identity;
+mod discovery;
 mod network;
 mod tray;
 
 use app_state::AppState;
+use tauri::Manager;
 
 pub fn run() {
     let app_state = AppState::new().expect("failed to initialize NekoDrop app state");
@@ -17,6 +19,7 @@ pub fn run() {
             commands::create_transfer_plan,
             commands::create_transfer_plan_from_text,
             commands::send_paths_to_code,
+            commands::send_paths_to_device,
             commands::select_send_files,
             commands::select_send_folders,
             commands::select_receive_dir,
@@ -32,6 +35,8 @@ pub fn run() {
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
+            let state = app.state::<AppState>();
+            discovery::start_discovery(&state);
             Ok(())
         })
         .run(tauri::generate_context!())

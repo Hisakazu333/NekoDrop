@@ -4,6 +4,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invokeCommand } from "./tauri";
 import type {
   AppSnapshot,
+  DeviceDto,
   PendingReceiveOfferDto,
   ReceiveReportDto,
   ReceiveSessionDto,
@@ -33,6 +34,7 @@ export function App() {
   const [bindPort, setBindPort] = useState("45821");
   const [plan, setPlan] = useState<TransferPlanDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
+  const [nearbyDevices, setNearbyDevices] = useState<DeviceDto[]>([]);
   const [receiveSession, setReceiveSession] = useState<ReceiveSessionDto | null>(null);
   const [receiveStatus, setReceiveStatus] = useState<string | null>(null);
   const [receiveReport, setReceiveReport] = useState<ReceiveReportDto | null>(null);
@@ -193,18 +195,20 @@ export function App() {
   }
 
   async function refreshReceiveState() {
-    const [status, session, report, pendingOffer, nextTransferStatus] = await Promise.all([
+    const [status, session, report, pendingOffer, nextTransferStatus, devices] = await Promise.all([
       invokeCommand<string | null>("get_receive_status"),
       invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
       invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
       invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
-      invokeCommand<TransferStatusDto | null>("get_transfer_status")
+      invokeCommand<TransferStatusDto | null>("get_transfer_status"),
+      invokeCommand<DeviceDto[]>("list_nearby_devices")
     ]);
     setReceiveStatus(status);
     setReceiveSession(session);
     setReceiveReport(report);
     setPendingReceiveOffer(pendingOffer);
     setTransferStatus(nextTransferStatus);
+    setNearbyDevices(devices);
     if (pendingOffer) setMode("receive");
   }
 
@@ -344,6 +348,31 @@ export function App() {
       });
       setSendReport(report);
       setToast(`发送完成：${report.file_count} 个文件`);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function sendFilesToDevice(device: DeviceDto) {
+    const payload = transferPaths;
+    if (payload.length === 0) {
+      setMode("queue");
+      setError("请先选择或拖入文件。");
+      return;
+    }
+
+    setBusy("send");
+    setError(null);
+    setSendReport(null);
+    try {
+      const report = await invokeCommand<SendReportDto>("send_paths_to_device", {
+        deviceId: device.id,
+        pathsText: payload.join("\n")
+      });
+      setSendReport(report);
+      setToast(`已发送到 ${device.name}`);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -535,6 +564,13 @@ export function App() {
             </div>
           </section>
 
+          <NearbyDevices
+            busy={busy}
+            devices={nearbyDevices}
+            transferCount={transferPaths.length}
+            onSendToDevice={sendFilesToDevice}
+          />
+
           <StatusLine
             plan={plan}
             receiveReport={receiveReport}
@@ -583,6 +619,54 @@ export function App() {
         </section>
       </section>
     </main>
+  );
+}
+
+function NearbyDevices({
+  busy,
+  devices,
+  transferCount,
+  onSendToDevice
+}: {
+  busy: BusyMode | null;
+  devices: DeviceDto[];
+  transferCount: number;
+  onSendToDevice: (device: DeviceDto) => void;
+}) {
+  return (
+    <section className="nearby-strip">
+      <div className="nearby-head">
+        <strong>附近设备</strong>
+        <span>{devices.length > 0 ? `${devices.length} 台在线` : "正在自动扫描"}</span>
+      </div>
+
+      {devices.length > 0 ? (
+        <div className="nearby-list">
+          {devices.map((device) => (
+            <button
+              className="nearby-device"
+              disabled={busy === "send" || transferCount === 0}
+              key={device.id}
+              onClick={() => onSendToDevice(device)}
+              type="button"
+            >
+              <span className="device-dot" />
+              <span className="device-main">
+                <strong>{device.name}</strong>
+                <small>
+                  {devicePlatformLabel(device.platform)} · {device.host}:{device.port}
+                </small>
+              </span>
+              <span>{transferCount > 0 ? "发送" : "先选文件"}</span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <div className="nearby-empty">
+          <span>同一局域网内打开 NekoDrop 后会出现在这里。</span>
+        </div>
+      )}
+    </section>
   );
 }
 
@@ -924,6 +1008,13 @@ function platformLabel(platform: string) {
   if (platform === "openharmony") return "OpenHarmony";
   if (platform === "web") return "Web";
   return "Unknown";
+}
+
+function devicePlatformLabel(platform: string) {
+  if (platform === "MacOS" || platform === "macos") return "macOS";
+  if (platform === "Windows" || platform === "windows") return "Windows";
+  if (platform === "Linux" || platform === "linux") return "Linux";
+  return platform || "Unknown";
 }
 
 function shortDeviceId(deviceId: string) {

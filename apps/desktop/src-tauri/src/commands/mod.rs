@@ -212,6 +212,34 @@ pub fn send_paths_to_code(
 ) -> Result<SendReportDto, String> {
     let endpoint =
         endpoint_from_connection_code(&connection_code).map_err(|error| error.to_string())?;
+    send_paths_to_endpoint(&state, endpoint, paths_text)
+}
+
+#[tauri::command]
+pub fn send_paths_to_device(
+    state: State<'_, AppState>,
+    device_id: String,
+    paths_text: String,
+) -> Result<SendReportDto, String> {
+    let endpoint = {
+        let devices = state
+            .nearby_devices
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let device = devices
+            .iter()
+            .find(|item| item.id.as_str() == device_id)
+            .ok_or_else(|| "设备不在线或尚未被自动扫描到".to_string())?;
+        Endpoint::tcp(device.host.clone(), device.port)
+    };
+    send_paths_to_endpoint(&state, endpoint, paths_text)
+}
+
+fn send_paths_to_endpoint(
+    state: &AppState,
+    endpoint: Endpoint,
+    paths_text: String,
+) -> Result<SendReportDto, String> {
     let paths = parse_paths_text(&paths_text)?;
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
     set_transfer_status(
