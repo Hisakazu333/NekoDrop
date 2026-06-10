@@ -130,6 +130,17 @@ export interface PendingReceiveOfferDto {
   files: PendingReceiveFileDto[];
 }
 
+export interface PendingPairingRequestDto {
+  request_id: string;
+  device_id: string;
+  device_name: string;
+  platform: string;
+  host: string;
+  port: number;
+  public_key_fingerprint: string;
+  pairing_code: string;
+}
+
 export interface TransferStatusDto {
   direction: "send" | "receive" | string;
   phase: string;

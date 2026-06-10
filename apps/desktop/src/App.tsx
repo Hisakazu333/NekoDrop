@@ -6,6 +6,7 @@ import type {
   AppSnapshot,
   DeviceDto,
   DiscoveryStatusDto,
+  PendingPairingRequestDto,
   PendingReceiveOfferDto,
   ReceiveReportDto,
   ReceiveSessionDto,
@@ -23,7 +24,7 @@ type BusyMode =
   | "pick-folders"
   | "pick-receive"
   | "stop-receive"
-  | "trust"
+  | "pair"
   | "open";
 
 type ComposerMode = "send" | "receive" | "queue";
@@ -43,6 +44,7 @@ export function App() {
   const [receiveStatus, setReceiveStatus] = useState<string | null>(null);
   const [receiveReport, setReceiveReport] = useState<ReceiveReportDto | null>(null);
   const [pendingReceiveOffer, setPendingReceiveOffer] = useState<PendingReceiveOfferDto | null>(null);
+  const [pendingPairingRequest, setPendingPairingRequest] = useState<PendingPairingRequestDto | null>(null);
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
@@ -62,7 +64,9 @@ export function App() {
   );
   const canSend = connectionCode.trim().length > 0 && transferPaths.length > 0 && !busy;
   const receiveState = receiveSession
-    ? pendingReceiveOffer
+    ? pendingPairingRequest
+      ? "等待配对"
+      : pendingReceiveOffer
       ? "等待确认"
       : "收件已打开"
     : receiveStatus?.startsWith("收件已关闭")
@@ -77,7 +81,11 @@ export function App() {
       return receiveSession
         ? {
             eyebrow: "收件连接码",
-            title: pendingReceiveOffer ? "收到传输请求，等待确认" : "连接码已生成，等待对方发送"
+            title: pendingPairingRequest
+              ? "收到配对请求，等待确认"
+              : pendingReceiveOffer
+                ? "收到传输请求，等待确认"
+                : "连接码已生成，等待对方发送"
           }
         : {
             eyebrow: "收件连接码",
@@ -101,7 +109,7 @@ export function App() {
       eyebrow: "设备投递",
       title: "拖入文件，点附近设备发送"
     };
-  }, [mode, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
+  }, [mode, pendingPairingRequest, pendingReceiveOffer, plan, receiveSession, transferPaths.length]);
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
@@ -199,11 +207,12 @@ export function App() {
   }
 
   async function refreshReceiveState() {
-    const [status, session, report, pendingOffer, nextTransferStatus, devices, discovery] = await Promise.all([
+    const [status, session, report, pendingOffer, pairingRequest, nextTransferStatus, devices, discovery] = await Promise.all([
       invokeCommand<string | null>("get_receive_status"),
       invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
       invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
       invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
+      invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
       invokeCommand<TransferStatusDto | null>("get_transfer_status"),
       invokeCommand<DeviceDto[]>("list_nearby_devices"),
       invokeCommand<DiscoveryStatusDto>("get_discovery_status")
@@ -212,10 +221,11 @@ export function App() {
     setReceiveSession(session);
     setReceiveReport(report);
     setPendingReceiveOffer(pendingOffer);
+    setPendingPairingRequest(pairingRequest);
     setTransferStatus(nextTransferStatus);
     setNearbyDevices(devices);
     setDiscoveryStatus(discovery);
-    if (pendingOffer) setMode("receive");
+    if (pendingOffer || pairingRequest) setMode("receive");
   }
 
   async function pickFiles() {
@@ -387,14 +397,29 @@ export function App() {
     }
   }
 
-  async function trustNearbyDevice(device: DeviceDto) {
-    setBusy("trust");
+  async function requestPairing(device: DeviceDto) {
+    setBusy("pair");
     setError(null);
     try {
-      const trusted = await invokeCommand<TrustedDeviceDto>("trust_nearby_device", {
+      const trusted = await invokeCommand<TrustedDeviceDto>("request_device_pairing", {
         deviceId: device.id
       });
-      setToast(`已信任 ${trusted.device_name} · ${trusted.pairing_code}`);
+      setToast(`配对完成：${trusted.device_name} · ${trusted.pairing_code}`);
+      await refreshReceiveState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function respondPairingRequest(accept: boolean) {
+    setBusy("pair");
+    setError(null);
+    try {
+      await invokeCommand<void>("respond_pairing_request", { accept });
+      setPendingPairingRequest(null);
+      setToast(accept ? "已接受配对" : "已拒绝配对");
       await refreshReceiveState();
     } catch (nextError) {
       setError(errorMessage(nextError));
@@ -597,7 +622,7 @@ export function App() {
             devices={nearbyDevices}
             transferCount={transferPaths.length}
             onSendToDevice={sendFilesToDevice}
-            onTrustDevice={trustNearbyDevice}
+            onTrustDevice={requestPairing}
           />
 
           <section className="fallback-strip">
@@ -636,6 +661,7 @@ export function App() {
               busy={busy}
               receiveDir={receiveDir}
               pendingOffer={pendingReceiveOffer}
+              pendingPairingRequest={pendingPairingRequest}
               receiveReport={receiveReport}
               receiveSession={receiveSession}
               setBindPort={setBindPort}
@@ -644,6 +670,7 @@ export function App() {
               onCopyConnectionCode={copyConnectionCode}
               onOpenPath={openPath}
               onRespondReceiveOffer={respondReceiveOffer}
+              onRespondPairingRequest={respondPairingRequest}
               onStartReceive={startReceive}
               onStopReceive={stopReceive}
             />
@@ -720,11 +747,11 @@ function NearbyDevices({
                   ) : (
                     <button
                       className="trust-button"
-                      disabled={busy === "trust" || !device.public_key_fingerprint}
+                      disabled={busy === "pair" || !device.public_key_fingerprint}
                       onClick={() => onTrustDevice(device)}
                       type="button"
                     >
-                      信任
+                      配对
                     </button>
                   )}
                   <button
@@ -764,6 +791,7 @@ function ReceivePanel({
   busy,
   receiveDir,
   pendingOffer,
+  pendingPairingRequest,
   receiveReport,
   receiveSession,
   setBindPort,
@@ -772,6 +800,7 @@ function ReceivePanel({
   onCopyConnectionCode,
   onOpenPath,
   onRespondReceiveOffer,
+  onRespondPairingRequest,
   onStartReceive,
   onStopReceive
 }: {
@@ -779,6 +808,7 @@ function ReceivePanel({
   busy: BusyMode | null;
   receiveDir: string;
   pendingOffer: PendingReceiveOfferDto | null;
+  pendingPairingRequest: PendingPairingRequestDto | null;
   receiveReport: ReceiveReportDto | null;
   receiveSession: ReceiveSessionDto | null;
   setBindPort: (value: string) => void;
@@ -787,6 +817,7 @@ function ReceivePanel({
   onCopyConnectionCode: () => void;
   onOpenPath: (path: string) => void;
   onRespondReceiveOffer: (accept: boolean) => void;
+  onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
 }) {
@@ -852,6 +883,26 @@ function ReceivePanel({
             </button>
             <button className="primary-button" disabled={busy === "receive"} onClick={() => onRespondReceiveOffer(true)} type="button">
               接受
+            </button>
+          </div>
+        </div>
+      ) : null}
+
+      {pendingPairingRequest ? (
+        <div className="incoming-offer">
+          <div className="offer-main">
+            <strong>收到配对请求</strong>
+            <span>
+              {pendingPairingRequest.device_name} · {devicePlatformLabel(pendingPairingRequest.platform)} · 配对码{" "}
+              {pendingPairingRequest.pairing_code}
+            </span>
+          </div>
+          <div className="offer-actions">
+            <button className="tool-button" disabled={busy === "pair"} onClick={() => onRespondPairingRequest(false)} type="button">
+              拒绝
+            </button>
+            <button className="primary-button" disabled={busy === "pair"} onClick={() => onRespondPairingRequest(true)} type="button">
+              接受配对
             </button>
           </div>
         </div>

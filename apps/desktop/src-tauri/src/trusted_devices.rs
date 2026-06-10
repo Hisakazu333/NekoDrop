@@ -68,7 +68,7 @@ pub fn trust_device_record(
         platform: platform_to_string(device.platform).to_string(),
         host: device.host.clone(),
         port: device.port,
-        pairing_code: pairing_code_for(
+        pairing_code: pairing_code_for_values(
             &local_identity.device_id,
             &local_identity.public_key_fingerprint,
             device.id.as_str(),
@@ -82,12 +82,41 @@ pub fn trust_device_record(
 
 pub fn pairing_code_for_device(local_identity: &DeviceIdentity, device: &Device) -> Option<String> {
     let fingerprint = device.public_key_fingerprint.as_ref()?;
-    Some(pairing_code_for(
+    Some(pairing_code_for_values(
         &local_identity.device_id,
         &local_identity.public_key_fingerprint,
         device.id.as_str(),
         fingerprint,
     ))
+}
+
+pub fn trusted_device_record_from_remote(
+    local_identity: &DeviceIdentity,
+    device_id: String,
+    device_name: String,
+    platform: String,
+    host: String,
+    port: u16,
+    public_key_fingerprint: String,
+) -> TrustedDeviceRecord {
+    let now = now_ms();
+    TrustedDeviceRecord {
+        schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
+        pairing_code: pairing_code_for_values(
+            &local_identity.device_id,
+            &local_identity.public_key_fingerprint,
+            &device_id,
+            &public_key_fingerprint,
+        ),
+        device_id,
+        device_name,
+        platform,
+        host,
+        port,
+        public_key_fingerprint,
+        paired_at_ms: now,
+        last_seen_at_ms: now,
+    }
 }
 
 pub fn upsert_trusted_device(
@@ -132,7 +161,7 @@ fn trusted_devices_file_path() -> Result<PathBuf, String> {
     Ok(app_config_dir()?.join("trusted_devices.json"))
 }
 
-fn pairing_code_for(
+pub fn pairing_code_for_values(
     local_device_id: &str,
     local_fingerprint: &str,
     remote_device_id: &str,
@@ -174,8 +203,8 @@ mod tests {
 
     #[test]
     fn pairing_code_is_symmetric() {
-        let first = pairing_code_for("a", "sha256:111", "b", "sha256:222");
-        let second = pairing_code_for("b", "sha256:222", "a", "sha256:111");
+        let first = pairing_code_for_values("a", "sha256:111", "b", "sha256:222");
+        let second = pairing_code_for_values("b", "sha256:222", "a", "sha256:111");
 
         assert_eq!(first, second);
         assert_eq!(first.len(), 7);

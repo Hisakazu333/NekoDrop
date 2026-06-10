@@ -14,24 +14,29 @@ use nekodrop_core::{
     Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, NekoDropError,
     TransferJob,
 };
-use nekodrop_network::{ConnectionTicket, Endpoint, TransferOffer, TransferProgress};
+use nekodrop_network::{
+    ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
+    TransferProgress,
+};
 use nekodrop_service::{
-    accept_transfer_stream_with_decision, create_transfer_plan as create_service_transfer_plan,
-    endpoint_from_connection_code, send_plan_with_progress, TransferProgressEvent,
-    TransferReceiveReport, TransferSendReport, TransferSourceFile, TransferSourcePlan,
+    accept_incoming_stream, create_transfer_plan as create_service_transfer_plan,
+    endpoint_from_connection_code, send_pairing_request, send_plan_with_progress,
+    IncomingSessionReport, TransferProgressEvent, TransferReceiveReport, TransferSendReport,
+    TransferSourceFile, TransferSourcePlan,
 };
 use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
 use tauri::State;
 
 use crate::app_state::{
-    ActiveReceiveSession, AppState, PendingReceiveFile, PendingReceiveOffer, ReceiveDecision,
-    TransferStatusState,
+    ActiveReceiveSession, AppState, PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer,
+    ReceiveDecision, TransferStatusState,
 };
 use crate::network::primary_lan_ip;
 use crate::trusted_devices::{
-    pairing_code_for_device, save_trusted_devices, trust_device_record, trusted_record_matches,
-    upsert_trusted_device, TrustedDeviceRecord,
+    pairing_code_for_device, pairing_code_for_values, save_trusted_devices, trust_device_record,
+    trusted_device_record_from_remote, trusted_record_matches, upsert_trusted_device,
+    TrustedDeviceRecord,
 };
 
 #[derive(Debug, Clone, Serialize)]
@@ -165,6 +170,18 @@ pub struct PendingReceiveOfferDto {
     pub file_count: usize,
     pub total_bytes: u64,
     pub files: Vec<PendingReceiveFileDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PendingPairingRequestDto {
+    pub request_id: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub host: String,
+    pub port: u16,
+    pub public_key_fingerprint: String,
+    pub pairing_code: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -303,6 +320,58 @@ pub fn trust_nearby_device(
 }
 
 #[tauri::command]
+pub fn request_device_pairing(
+    state: State<'_, AppState>,
+    device_id: String,
+) -> Result<TrustedDeviceDto, String> {
+    let device = {
+        let devices = state
+            .nearby_devices
+            .lock()
+            .map_err(|error| error.to_string())?;
+        devices
+            .iter()
+            .find(|device| device.id.as_str() == device_id)
+            .cloned()
+            .ok_or_else(|| "设备不在线或尚未被自动扫描到".to_string())?
+    };
+    let listen_port = current_receive_session_port(&state)?
+        .ok_or_else(|| "请先打开后台收件，再发起配对。".to_string())?;
+    let local_identity = state.device_identity.public_identity();
+    let pairing_code = pairing_code_for_device(&local_identity, &device)
+        .ok_or_else(|| "这个设备缺少公开指纹，当前不能发起配对。".to_string())?;
+    let request = PairingRequestPayload {
+        request_id: format!("pairing-{}", now_ms()),
+        device_id: local_identity.device_id.clone(),
+        device_name: local_identity.device_name.clone(),
+        platform: local_identity.platform.as_str().to_string(),
+        public_key_fingerprint: local_identity.public_key_fingerprint.clone(),
+        pairing_code,
+        listen_port,
+    };
+    let decision = send_pairing_request(&Endpoint::tcp(device.host.clone(), device.port), request)
+        .map_err(|error| friendly_transfer_error(&error.to_string()))?;
+    if !decision.accepted {
+        return Err(format!(
+            "对方拒绝配对：{}",
+            decision.reason.unwrap_or_else(|| "未提供原因".to_string())
+        ));
+    }
+
+    let record = trust_device_record(&local_identity, &device)?;
+    persist_trusted_device(&state, record.clone())?;
+    if let Ok(mut devices) = state.nearby_devices.lock() {
+        if let Some(device) = devices
+            .iter_mut()
+            .find(|device| device.id.as_str() == device_id)
+        {
+            device.trust_state = DeviceTrustState::Trusted;
+        }
+    }
+    Ok(trusted_device_to_dto(&record))
+}
+
+#[tauri::command]
 pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> Result<(), String> {
     {
         let mut trusted_devices = state
@@ -321,6 +390,39 @@ pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> R
         {
             device.trust_state = DeviceTrustState::Untrusted;
         }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn get_pending_pairing_request(
+    state: State<'_, AppState>,
+) -> Result<Option<PendingPairingRequestDto>, String> {
+    let request = state
+        .pending_pairing_request
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(request.as_ref().map(pending_pairing_request_to_dto))
+}
+
+#[tauri::command]
+pub fn respond_pairing_request(state: State<'_, AppState>, accept: bool) -> Result<(), String> {
+    let request = state
+        .pending_pairing_request
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone()
+        .ok_or_else(|| "当前没有等待确认的配对请求".to_string())?;
+    let (decision_lock, decision_cvar) = &*request.decision;
+    let mut decision = decision_lock.lock().map_err(|error| error.to_string())?;
+    *decision = Some(if accept {
+        ReceiveDecision::Accept
+    } else {
+        ReceiveDecision::Decline
+    });
+    decision_cvar.notify_all();
+    if let Ok(mut pending) = state.pending_pairing_request.lock() {
+        *pending = None;
     }
     Ok(())
 }
@@ -574,26 +676,33 @@ pub fn start_receive_once(
     let receive_status = state.receive_status.clone();
     let receive_session = state.receive_session.clone();
     let pending_receive_offer = state.pending_receive_offer.clone();
+    let pending_pairing_request = state.pending_pairing_request.clone();
     let transfer_status = state.transfer_status.clone();
     let last_receive_report = state.last_receive_report.clone();
+    let trusted_devices = state.trusted_devices.clone();
+    let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
     thread::spawn(move || {
         let pending_for_decision = pending_receive_offer.clone();
+        let pending_for_pairing = pending_pairing_request.clone();
         let status_for_decision = transfer_status.clone();
         let status_for_progress = transfer_status.clone();
+        let trusted_for_pairing = trusted_devices.clone();
+        let local_for_pairing = local_identity.clone();
         let result = loop {
             if cancel.load(Ordering::SeqCst) {
                 break None;
             }
 
             match listener.accept() {
-                Ok((mut stream, _)) => {
+                Ok((mut stream, peer_addr)) => {
                     if let Err(error) = stream.set_nonblocking(false) {
                         break Some(Err(NekoDropError::Network(format!(
                             "failed to prepare TCP stream: {error}"
                         ))));
                     }
-                    break Some(accept_transfer_stream_with_decision(
+                    let peer_host = peer_addr.ip().to_string();
+                    break Some(accept_incoming_stream(
                         &mut stream,
                         &receive_dir_for_thread,
                         move |offer| {
@@ -601,6 +710,15 @@ pub fn start_receive_once(
                                 offer,
                                 &pending_for_decision,
                                 &status_for_decision,
+                            )
+                        },
+                        move |request| {
+                            wait_for_pairing_decision(
+                                request,
+                                &peer_host,
+                                &pending_for_pairing,
+                                &trusted_for_pairing,
+                                &local_for_pairing,
                             )
                         },
                         move |event| {
@@ -647,7 +765,13 @@ pub fn start_receive_once(
         };
         if let Ok(mut status) = receive_status.lock() {
             *status = Some(match &result {
-                Ok(report) => format!("接收完成：{} 个文件", report.files.len()),
+                Ok(IncomingSessionReport::Transfer(report)) => {
+                    format!("接收完成：{} 个文件", report.files.len())
+                }
+                Ok(IncomingSessionReport::Pairing(decision)) if decision.accepted => {
+                    "配对完成".to_string()
+                }
+                Ok(IncomingSessionReport::Pairing(_)) => "已拒绝配对".to_string(),
                 Err(_) if is_receive_terminal_offer_status(&transfer_status, "declined") => {
                     "已拒绝这次传输".to_string()
                 }
@@ -663,25 +787,59 @@ pub fn start_receive_once(
         if let Ok(mut pending) = pending_receive_offer.lock() {
             *pending = None;
         }
+        if let Ok(mut pending) = pending_pairing_request.lock() {
+            *pending = None;
+        }
         if let Ok(report) = result {
-            let total_bytes = report.files.iter().map(|file| file.bytes_written).sum();
-            set_transfer_status(
-                &transfer_status,
-                TransferStatusState {
-                    direction: "receive".to_string(),
-                    phase: "completed".to_string(),
-                    root_name: None,
-                    file_count: report.files.len(),
-                    file_index: report.files.len(),
-                    current_file: None,
-                    bytes_transferred: total_bytes,
-                    total_bytes,
-                    message: "接收完成，校验通过".to_string(),
-                    updated_at_ms: now_ms(),
-                },
-            );
-            if let Ok(mut last_report) = last_receive_report.lock() {
-                *last_report = Some(report);
+            match report {
+                IncomingSessionReport::Transfer(report) => {
+                    let total_bytes = report.files.iter().map(|file| file.bytes_written).sum();
+                    set_transfer_status(
+                        &transfer_status,
+                        TransferStatusState {
+                            direction: "receive".to_string(),
+                            phase: "completed".to_string(),
+                            root_name: None,
+                            file_count: report.files.len(),
+                            file_index: report.files.len(),
+                            current_file: None,
+                            bytes_transferred: total_bytes,
+                            total_bytes,
+                            message: "接收完成，校验通过".to_string(),
+                            updated_at_ms: now_ms(),
+                        },
+                    );
+                    if let Ok(mut last_report) = last_receive_report.lock() {
+                        *last_report = Some(report);
+                    }
+                }
+                IncomingSessionReport::Pairing(decision) => {
+                    set_transfer_status(
+                        &transfer_status,
+                        TransferStatusState {
+                            direction: "receive".to_string(),
+                            phase: if decision.accepted {
+                                "completed"
+                            } else {
+                                "declined"
+                            }
+                            .to_string(),
+                            root_name: None,
+                            file_count: 0,
+                            file_index: 0,
+                            current_file: None,
+                            bytes_transferred: 0,
+                            total_bytes: 0,
+                            message: if decision.accepted {
+                                "配对完成，设备已加入可信列表"
+                            } else {
+                                "已拒绝配对"
+                            }
+                            .to_string(),
+                            updated_at_ms: now_ms(),
+                        },
+                    );
+                }
             }
         } else if !is_receive_terminal_offer_status(&transfer_status, "declined")
             && !is_receive_terminal_offer_status(&transfer_status, "expired")
@@ -735,6 +893,18 @@ pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
         .take();
     if let Some(offer) = pending {
         let (decision_lock, decision_cvar) = &*offer.decision;
+        if let Ok(mut decision) = decision_lock.lock() {
+            *decision = Some(ReceiveDecision::Decline);
+            decision_cvar.notify_all();
+        }
+    }
+    let pending_pairing = state
+        .pending_pairing_request
+        .lock()
+        .map_err(|error| error.to_string())?
+        .take();
+    if let Some(request) = pending_pairing {
+        let (decision_lock, decision_cvar) = &*request.decision;
         if let Ok(mut decision) = decision_lock.lock() {
             *decision = Some(ReceiveDecision::Decline);
             decision_cvar.notify_all();
@@ -1022,6 +1192,19 @@ fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
     }
 }
 
+fn pending_pairing_request_to_dto(request: &PendingPairingRequest) -> PendingPairingRequestDto {
+    PendingPairingRequestDto {
+        request_id: request.request_id.clone(),
+        device_id: request.device_id.clone(),
+        device_name: request.device_name.clone(),
+        platform: request.platform.clone(),
+        host: request.host.clone(),
+        port: request.port,
+        public_key_fingerprint: request.public_key_fingerprint.clone(),
+        pairing_code: request.pairing_code.clone(),
+    }
+}
+
 fn transfer_status_to_dto(status: &TransferStatusState) -> TransferStatusDto {
     let progress = if status.total_bytes == 0 {
         0.0
@@ -1130,6 +1313,105 @@ fn wait_for_receive_decision(
     }
 
     matches!(*guard, Some(ReceiveDecision::Accept))
+}
+
+fn wait_for_pairing_decision(
+    request: &PairingRequestPayload,
+    peer_host: &str,
+    pending_pairing_request: &Arc<Mutex<Option<PendingPairingRequest>>>,
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    local_identity: &DeviceIdentity,
+) -> PairingDecisionPayload {
+    let expected_code = pairing_code_for_values(
+        &local_identity.device_id,
+        &local_identity.public_key_fingerprint,
+        &request.device_id,
+        &request.public_key_fingerprint,
+    );
+    if expected_code != request.pairing_code {
+        return PairingDecisionPayload::reject("配对码不匹配");
+    }
+
+    let decision = Arc::new((Mutex::new(None), Condvar::new()));
+    let pending = PendingPairingRequest {
+        request_id: request.request_id.clone(),
+        device_id: request.device_id.clone(),
+        device_name: request.device_name.clone(),
+        platform: request.platform.clone(),
+        host: peer_host.to_string(),
+        port: request.listen_port,
+        public_key_fingerprint: request.public_key_fingerprint.clone(),
+        pairing_code: request.pairing_code.clone(),
+        decision: decision.clone(),
+    };
+
+    if let Ok(mut request_slot) = pending_pairing_request.lock() {
+        *request_slot = Some(pending);
+    }
+
+    let (decision_lock, decision_cvar) = &*decision;
+    let mut guard = match decision_lock.lock() {
+        Ok(guard) => guard,
+        Err(_) => return PairingDecisionPayload::reject("配对确认状态异常"),
+    };
+    while guard.is_none() {
+        let next = decision_cvar.wait_timeout(guard, Duration::from_secs(300));
+        let Ok((next_guard, timeout)) = next else {
+            return PairingDecisionPayload::reject("配对确认状态异常");
+        };
+        guard = next_guard;
+        if timeout.timed_out() {
+            if let Ok(mut request_slot) = pending_pairing_request.lock() {
+                *request_slot = None;
+            }
+            return PairingDecisionPayload::reject("等待确认超时");
+        }
+    }
+
+    if !matches!(*guard, Some(ReceiveDecision::Accept)) {
+        return PairingDecisionPayload::reject("用户拒绝配对");
+    }
+
+    let record = trusted_device_record_from_remote(
+        local_identity,
+        request.device_id.clone(),
+        request.device_name.clone(),
+        request.platform.clone(),
+        peer_host.to_string(),
+        request.listen_port,
+        request.public_key_fingerprint.clone(),
+    );
+    match persist_trusted_device_records(trusted_devices, record) {
+        Ok(()) => PairingDecisionPayload::accept(),
+        Err(error) => PairingDecisionPayload::reject(error),
+    }
+}
+
+fn persist_trusted_device(state: &AppState, record: TrustedDeviceRecord) -> Result<(), String> {
+    persist_trusted_device_records(&state.trusted_devices, record)
+}
+
+fn persist_trusted_device_records(
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    record: TrustedDeviceRecord,
+) -> Result<(), String> {
+    let mut trusted_devices = trusted_devices.lock().map_err(|error| error.to_string())?;
+    let mut next_trusted_devices = trusted_devices.clone();
+    upsert_trusted_device(&mut next_trusted_devices, record);
+    save_trusted_devices(&next_trusted_devices)?;
+    *trusted_devices = next_trusted_devices;
+    Ok(())
+}
+
+fn current_receive_session_port(state: &AppState) -> Result<Option<u16>, String> {
+    let session = state
+        .receive_session
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(session
+        .as_ref()
+        .and_then(|session| session.bind_addr.rsplit_once(':'))
+        .and_then(|(_, port)| port.parse::<u16>().ok()))
 }
 
 fn is_receive_terminal_offer_status(

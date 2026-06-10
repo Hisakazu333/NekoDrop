@@ -92,6 +92,12 @@ pub enum MessageKind {
     DeviceHello,
     #[serde(rename = "device.heartbeat")]
     DeviceHeartbeat,
+    #[serde(rename = "pairing.request")]
+    PairingRequest,
+    #[serde(rename = "pairing.accept")]
+    PairingAccept,
+    #[serde(rename = "pairing.reject")]
+    PairingReject,
     #[serde(rename = "file.offer")]
     FileOffer,
     #[serde(rename = "file.accept")]
@@ -121,6 +127,9 @@ impl MessageKind {
         match self {
             Self::DeviceHello => "device.hello",
             Self::DeviceHeartbeat => "device.heartbeat",
+            Self::PairingRequest => "pairing.request",
+            Self::PairingAccept => "pairing.accept",
+            Self::PairingReject => "pairing.reject",
             Self::FileOffer => "file.offer",
             Self::FileAccept => "file.accept",
             Self::FileDecline => "file.decline",
@@ -132,6 +141,81 @@ impl MessageKind {
             Self::AgentResult => "agent.result",
             Self::CompanionState => "companion.state",
             Self::StateSync => "state.sync",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingRequestPayload {
+    pub request_id: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub public_key_fingerprint: String,
+    pub pairing_code: String,
+    pub listen_port: u16,
+}
+
+impl PairingRequestPayload {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        if self.request_id.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "request_id cannot be empty",
+            ));
+        }
+        if self.device_id.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "device_id cannot be empty",
+            ));
+        }
+        if self.device_name.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "device_name cannot be empty",
+            ));
+        }
+        if self.public_key_fingerprint.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "public_key_fingerprint cannot be empty",
+            ));
+        }
+        if self.pairing_code.trim().is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "pairing_code cannot be empty",
+            ));
+        }
+        if self.listen_port == 0 {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "listen_port cannot be 0",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PairingDecisionPayload {
+    pub accepted: bool,
+    pub reason: Option<String>,
+}
+
+impl PairingDecisionPayload {
+    pub fn accept() -> Self {
+        Self {
+            accepted: true,
+            reason: None,
+        }
+    }
+
+    pub fn reject(reason: impl Into<String>) -> Self {
+        Self {
+            accepted: false,
+            reason: Some(reason.into()),
         }
     }
 }

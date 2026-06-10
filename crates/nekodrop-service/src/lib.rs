@@ -4,9 +4,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
-    read_transfer_decision, read_transfer_offer, receive_file_frames,
-    send_file_frames_with_progress, write_transfer_decision_for_transfer, write_transfer_offer,
-    ConnectionTicket, Endpoint, OutgoingFileFrame, SentFileFrame, TransferDecision, TransferOffer,
+    read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
+    read_transfer_offer, receive_file_frames, send_file_frames_with_progress,
+    write_pairing_decision, write_pairing_request, write_transfer_decision_for_transfer,
+    write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame,
+    PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer,
     TransferOfferFile, TransferProgress, TransportKind,
 };
 use nekodrop_storage::{
@@ -40,6 +42,12 @@ pub enum TransferProgressEvent {
         bytes_transferred: u64,
         total_bytes: u64,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IncomingSessionReport {
+    Transfer(TransferReceiveReport),
+    Pairing(PairingDecisionPayload),
 }
 
 pub fn create_transfer_plan(paths: &[PathBuf]) -> NekoDropResult<TransferSourcePlan> {
@@ -126,6 +134,28 @@ where
     Ok(TransferSendReport { plan, sent_files })
 }
 
+pub fn send_pairing_request(
+    endpoint: &Endpoint,
+    request: PairingRequestPayload,
+) -> NekoDropResult<PairingDecisionPayload> {
+    if endpoint.transport != TransportKind::Tcp {
+        return Err(NekoDropError::Network(format!(
+            "unsupported transport for pairing: {:?}",
+            endpoint.transport
+        )));
+    }
+
+    let mut stream =
+        TcpStream::connect((endpoint.host.as_str(), endpoint.port)).map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to connect to {}:{}: {error}",
+                endpoint.host, endpoint.port
+            ))
+        })?;
+    write_pairing_request(&mut stream, &request)?;
+    read_pairing_decision(&mut stream)
+}
+
 pub fn accept_transfer(
     listener: &TcpListener,
     receive_dir: &Path,
@@ -160,6 +190,49 @@ where
     P: FnMut(TransferProgressEvent),
 {
     let offer = read_transfer_offer(stream)?;
+    accept_transfer_offer_stream_with_decision(stream, receive_dir, offer, decide, on_progress)
+}
+
+pub fn accept_incoming_stream<D, H, P>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    decide: D,
+    handle_pairing: H,
+    on_progress: P,
+) -> NekoDropResult<IncomingSessionReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
+    P: FnMut(TransferProgressEvent),
+{
+    match read_incoming_control_frame(stream)? {
+        IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
+            stream,
+            receive_dir,
+            offer,
+            decide,
+            on_progress,
+        )
+        .map(IncomingSessionReport::Transfer),
+        IncomingControlFrame::PairingRequest(request) => {
+            let decision = handle_pairing(&request);
+            write_pairing_decision(stream, &request.request_id, &decision)?;
+            Ok(IncomingSessionReport::Pairing(decision))
+        }
+    }
+}
+
+fn accept_transfer_offer_stream_with_decision<D, P>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    offer: TransferOffer,
+    decide: D,
+    on_progress: P,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+{
     if !decide(&offer) {
         write_transfer_decision_for_transfer(
             stream,

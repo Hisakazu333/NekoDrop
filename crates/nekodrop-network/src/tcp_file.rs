@@ -3,7 +3,10 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
-pub use nekolink_protocol::{TransferDecision, TransferOffer, TransferOfferFile};
+pub use nekolink_protocol::{
+    PairingDecisionPayload, PairingRequestPayload, TransferDecision, TransferOffer,
+    TransferOfferFile,
+};
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekolink_protocol::{Capability, Envelope, ErrorCode, MessageKind, ProtocolError};
@@ -41,6 +44,12 @@ pub struct OutgoingFileFrame {
     pub manifest_path: String,
     pub file_path: std::path::PathBuf,
     pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum IncomingControlFrame {
+    FileOffer(TransferOffer),
+    PairingRequest(PairingRequestPayload),
 }
 
 impl OutgoingFileFrame {
@@ -230,6 +239,99 @@ pub fn read_transfer_offer(stream: &mut TcpStream) -> NekoDropResult<TransferOff
     let offer = envelope.payload;
     offer.validate().map_err(protocol_error_to_network)?;
     Ok(offer)
+}
+
+pub fn write_pairing_request(
+    stream: &mut TcpStream,
+    request: &PairingRequestPayload,
+) -> NekoDropResult<()> {
+    request.validate().map_err(protocol_error_to_network)?;
+    let envelope = Envelope::new(
+        request.request_id.clone(),
+        format!("{}:pairing-request", request.request_id),
+        MessageKind::PairingRequest,
+        request.clone(),
+    )
+    .with_capabilities([Capability::DevicePairing]);
+    write_json_frame(stream, &envelope)
+}
+
+pub fn read_incoming_control_frame(stream: &mut TcpStream) -> NekoDropResult<IncomingControlFrame> {
+    let envelope: Envelope<serde_json::Value> = read_json_frame(stream)?;
+    envelope.validate().map_err(protocol_error_to_network)?;
+    match envelope.kind {
+        MessageKind::FileOffer => {
+            let offer =
+                serde_json::from_value::<TransferOffer>(envelope.payload).map_err(|error| {
+                    NekoDropError::Network(format!("failed to decode transfer offer: {error}"))
+                })?;
+            offer.validate().map_err(protocol_error_to_network)?;
+            Ok(IncomingControlFrame::FileOffer(offer))
+        }
+        MessageKind::PairingRequest => {
+            let request = serde_json::from_value::<PairingRequestPayload>(envelope.payload)
+                .map_err(|error| {
+                    NekoDropError::Network(format!("failed to decode pairing request: {error}"))
+                })?;
+            request.validate().map_err(protocol_error_to_network)?;
+            Ok(IncomingControlFrame::PairingRequest(request))
+        }
+        _ => Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!("unexpected first frame kind: {}", envelope.kind.as_str()),
+        ))),
+    }
+}
+
+pub fn write_pairing_decision(
+    stream: &mut TcpStream,
+    request_id: &str,
+    decision: &PairingDecisionPayload,
+) -> NekoDropResult<()> {
+    let kind = if decision.accepted {
+        MessageKind::PairingAccept
+    } else {
+        MessageKind::PairingReject
+    };
+    let envelope = Envelope::new(
+        request_id,
+        format!("{request_id}:pairing-decision"),
+        kind,
+        decision.clone(),
+    )
+    .with_capabilities([Capability::DevicePairing]);
+    write_json_frame(stream, &envelope)
+}
+
+pub fn read_pairing_decision(stream: &mut TcpStream) -> NekoDropResult<PairingDecisionPayload> {
+    let envelope: Envelope<PairingDecisionPayload> = read_json_frame(stream)?;
+    envelope.validate().map_err(protocol_error_to_network)?;
+    if !matches!(
+        envelope.kind,
+        MessageKind::PairingAccept | MessageKind::PairingReject
+    ) {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!(
+                "unexpected pairing decision kind: {}",
+                envelope.kind.as_str()
+            ),
+        )));
+    }
+    let decision = envelope.payload;
+    if decision.accepted && envelope.kind != MessageKind::PairingAccept {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "accepted pairing decision must use pairing.accept",
+        )));
+    }
+    if !decision.accepted && envelope.kind != MessageKind::PairingReject {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "rejected pairing decision must use pairing.reject",
+        )));
+    }
+    Ok(decision)
 }
 
 pub fn write_transfer_decision(
@@ -582,6 +684,37 @@ mod tests {
         let received = receiver.join().unwrap();
 
         assert_eq!(received, TransferDecision::decline("no"));
+    }
+
+    #[test]
+    fn pairing_request_round_trips_through_nekolink_envelope() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let request = PairingRequestPayload {
+            request_id: "pairing-1".to_string(),
+            device_id: "neko-device-local".to_string(),
+            device_name: "Local Mac".to_string(),
+            platform: "macos".to_string(),
+            public_key_fingerprint: "sha256:local".to_string(),
+            pairing_code: "ABC-123".to_string(),
+            listen_port: 45821,
+        };
+
+        let receiver = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let received = read_incoming_control_frame(&mut stream).unwrap();
+            write_pairing_decision(&mut stream, "pairing-1", &PairingDecisionPayload::accept())
+                .unwrap();
+            received
+        });
+
+        let mut stream = TcpStream::connect(address).unwrap();
+        write_pairing_request(&mut stream, &request).unwrap();
+        let decision = read_pairing_decision(&mut stream).unwrap();
+        let received = receiver.join().unwrap();
+
+        assert_eq!(decision, PairingDecisionPayload::accept());
+        assert_eq!(received, IncomingControlFrame::PairingRequest(request));
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

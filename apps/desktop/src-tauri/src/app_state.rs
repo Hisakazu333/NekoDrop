@@ -67,6 +67,19 @@ pub struct PendingReceiveOffer {
 }
 
 #[derive(Debug, Clone)]
+pub struct PendingPairingRequest {
+    pub request_id: String,
+    pub device_id: String,
+    pub device_name: String,
+    pub platform: String,
+    pub host: String,
+    pub port: u16,
+    pub public_key_fingerprint: String,
+    pub pairing_code: String,
+    pub decision: Arc<(Mutex<Option<ReceiveDecision>>, Condvar)>,
+}
+
+#[derive(Debug, Clone)]
 pub struct TransferStatusState {
     pub direction: String,
     pub phase: String,
@@ -92,6 +105,7 @@ pub struct AppState {
     pub receive_status: Arc<Mutex<Option<String>>>,
     pub receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
     pub pending_receive_offer: Arc<Mutex<Option<PendingReceiveOffer>>>,
+    pub pending_pairing_request: Arc<Mutex<Option<PendingPairingRequest>>>,
     pub transfer_status: Arc<Mutex<Option<TransferStatusState>>>,
     pub last_receive_report: Arc<Mutex<Option<TransferReceiveReport>>>,
 }
@@ -114,6 +128,7 @@ impl AppState {
             receive_status: Arc::new(Mutex::new(None)),
             receive_session: Arc::new(Mutex::new(None)),
             pending_receive_offer: Arc::new(Mutex::new(None)),
+            pending_pairing_request: Arc::new(Mutex::new(None)),
             transfer_status: Arc::new(Mutex::new(None)),
             last_receive_report: Arc::new(Mutex::new(None)),
         })

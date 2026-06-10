@@ -19,6 +19,7 @@ pub fn run() {
             commands::list_nearby_devices,
             commands::list_trusted_devices,
             commands::trust_nearby_device,
+            commands::request_device_pairing,
             commands::forget_trusted_device,
             commands::list_transfers,
             commands::create_transfer_plan,
@@ -35,7 +36,9 @@ pub fn run() {
             commands::get_receive_session,
             commands::get_last_receive_report,
             commands::get_pending_receive_offer,
+            commands::get_pending_pairing_request,
             commands::respond_receive_offer,
+            commands::respond_pairing_request,
             commands::get_transfer_status
         ])
         .setup(|app| {

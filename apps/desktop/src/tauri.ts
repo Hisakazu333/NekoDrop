@@ -6,6 +6,7 @@ type CommandName =
   | "list_nearby_devices"
   | "list_trusted_devices"
   | "trust_nearby_device"
+  | "request_device_pairing"
   | "forget_trusted_device"
   | "list_transfers"
   | "create_transfer_plan"
@@ -22,7 +23,9 @@ type CommandName =
   | "get_receive_session"
   | "get_last_receive_report"
   | "get_pending_receive_offer"
+  | "get_pending_pairing_request"
   | "respond_receive_offer"
+  | "respond_pairing_request"
   | "get_transfer_status";
 
 export async function invokeCommand<T>(

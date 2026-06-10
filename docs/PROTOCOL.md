@@ -166,44 +166,48 @@ Reserved NekoLink identity handshake payload:
 
 ## Pairing Messages
 
-### PAIR_REQ
+Current desktop pairing runs through the same TCP JSON-frame channel as file offers. The first frame can be either `file.offer` or `pairing.request`.
+
+### pairing.request
 
 Sent by the device requesting trust.
 
 ```json
 {
-  "type": "PAIR_REQ",
+  "kind": "pairing.request",
+  "request_id": "pairing-1780000000000",
   "device_id": "sender-device-id",
   "device_name": "Hisakazu MacBook",
   "platform": "macos",
-  "public_key": "base64url",
-  "short_code": "483921"
+  "public_key_fingerprint": "sha256:hex",
+  "pairing_code": "A1B-2C3",
+  "listen_port": 45821
 }
 ```
 
-### PAIR_ACK
+### pairing.accept
 
 Sent after user confirmation.
 
 ```json
 {
-  "type": "PAIR_ACK",
+  "kind": "pairing.accept",
   "accepted": true,
-  "device_id": "receiver-device-id",
-  "device_name": "Windows PC",
-  "public_key": "base64url",
-  "short_code": "483921"
+  "reason": null
 }
 ```
 
-### PAIR_REJECT
+### pairing.reject
 
 ```json
 {
-  "type": "PAIR_REJECT",
+  "kind": "pairing.reject",
+  "accepted": false,
   "reason": "user_declined"
 }
 ```
+
+When accepted, both sides persist `trusted_devices.json`. The current pairing establishes device trust state, but it is not yet an encrypted session.
 
 ## Transfer Messages
 
