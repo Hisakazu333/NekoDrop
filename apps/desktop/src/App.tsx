@@ -26,6 +26,7 @@ type BusyMode =
   | "pick-receive"
   | "stop-receive"
   | "pair"
+  | "resend"
   | "open";
 
 type ComposerMode = "send" | "receive" | "queue";
@@ -48,6 +49,7 @@ export function App() {
   const [pendingPairingRequest, setPendingPairingRequest] = useState<PendingPairingRequestDto | null>(null);
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
   const [transfers, setTransfers] = useState<TransferDto[]>([]);
+  const [selectedTransferId, setSelectedTransferId] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
@@ -427,6 +429,40 @@ export function App() {
     setError("选择目标");
   }
 
+  async function resendTransfer(transfer: TransferDto) {
+    setBusy("resend");
+    setError(null);
+    setSendReport(null);
+    try {
+      const report = await invokeCommand<SendReportDto>("resend_transfer", {
+        transferId: transfer.id
+      });
+      setSendReport(report);
+      setMode("send");
+      setToast(`重发完成：${report.file_count} 个文件`);
+      await refreshTransfers();
+    } catch (nextError) {
+      setError(deviceSendErrorMessage(errorMessage(nextError)));
+      await refreshTransfers().catch(() => undefined);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function openTransferLocation(transfer: TransferDto) {
+    setBusy("open");
+    setError(null);
+    try {
+      await invokeCommand<void>("open_transfer_location", {
+        transferId: transfer.id
+      });
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function requestPairing(device: DeviceDto) {
     setBusy("pair");
     setError(null);
@@ -726,7 +762,16 @@ export function App() {
                 />
               ) : null}
 
-              <RecentActivity transfers={transfers} />
+              <RecentActivity
+                busy={busy}
+                selectedTransferId={selectedTransferId}
+                transfers={transfers}
+                onOpenTransfer={openTransferLocation}
+                onResendTransfer={resendTransfer}
+                onSelectTransfer={(transfer) =>
+                  setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
+                }
+              />
             </div>
           ) : (
             <div className="single-workbench">
@@ -795,6 +840,7 @@ export function App() {
                 plan={plan}
                 selectedPaths={selectedPaths}
                 transfers={transfers}
+                selectedTransferId={selectedTransferId}
                 setManualPaths={(value) => {
                   setManualPaths(value);
                   setPlan(null);
@@ -803,6 +849,11 @@ export function App() {
                 onClearQueue={clearQueue}
                 onRemovePath={removePath}
                 onScan={() => scanPaths()}
+                onOpenTransfer={openTransferLocation}
+                onResendTransfer={resendTransfer}
+                onSelectTransfer={(transfer) =>
+                  setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
+                }
               />
               ) : null}
             </div>
@@ -1256,22 +1307,30 @@ function QueuePanel({
   busy,
   manualPaths,
   plan,
+  selectedTransferId,
   selectedPaths,
   transfers,
   setManualPaths,
   onClearQueue,
   onRemovePath,
-  onScan
+  onScan,
+  onOpenTransfer,
+  onResendTransfer,
+  onSelectTransfer
 }: {
   busy: BusyMode | null;
   manualPaths: string;
   plan: TransferPlanDto | null;
+  selectedTransferId: string | null;
   selectedPaths: string[];
   transfers: TransferDto[];
   setManualPaths: (value: string) => void;
   onClearQueue: () => void;
   onRemovePath: (path: string) => void;
   onScan: () => void;
+  onOpenTransfer: (transfer: TransferDto) => void;
+  onResendTransfer: (transfer: TransferDto) => void;
+  onSelectTransfer: (transfer: TransferDto) => void;
 }) {
   return (
     <section className="function-panel">
@@ -1310,7 +1369,15 @@ function QueuePanel({
         placeholder="每行一个路径"
       />
 
-      <RecentActivity transfers={transfers} compact />
+      <RecentActivity
+        busy={busy}
+        compact
+        selectedTransferId={selectedTransferId}
+        transfers={transfers}
+        onOpenTransfer={onOpenTransfer}
+        onResendTransfer={onResendTransfer}
+        onSelectTransfer={onSelectTransfer}
+      />
     </section>
   );
 }
@@ -1378,7 +1445,23 @@ function StatusLine({
   return null;
 }
 
-function RecentActivity({ compact = false, transfers }: { compact?: boolean; transfers: TransferDto[] }) {
+function RecentActivity({
+  busy,
+  compact = false,
+  selectedTransferId,
+  transfers,
+  onOpenTransfer,
+  onResendTransfer,
+  onSelectTransfer
+}: {
+  busy: BusyMode | null;
+  compact?: boolean;
+  selectedTransferId: string | null;
+  transfers: TransferDto[];
+  onOpenTransfer: (transfer: TransferDto) => void;
+  onResendTransfer: (transfer: TransferDto) => void;
+  onSelectTransfer: (transfer: TransferDto) => void;
+}) {
   const recentTransfers = transfers.slice(0, compact ? 5 : 3);
   if (recentTransfers.length === 0) return null;
 
@@ -1388,15 +1471,48 @@ function RecentActivity({ compact = false, transfers }: { compact?: boolean; tra
         <strong>最近</strong>
       </div>
       <div className="recent-list">
-        {recentTransfers.map((transfer) => (
-          <div className={transfer.status === "failed" ? "recent-row is-failed" : "recent-row"} key={transfer.id}>
-            <span>{transferDirectionLabel(transfer)}</span>
-            <strong title={transfer.root_name}>{transfer.root_name}</strong>
-            <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
-              {transferMetaLabel(transfer)}
-            </small>
-          </div>
-        ))}
+        {recentTransfers.map((transfer) => {
+          const selected = transfer.id === selectedTransferId;
+          const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+          return (
+            <div
+              className={[
+                "recent-item",
+                selected ? "is-selected" : "",
+                transfer.status === "failed" ? "is-failed" : ""
+              ]
+                .filter(Boolean)
+                .join(" ")}
+              key={transfer.id}
+            >
+              <button className="recent-row" onClick={() => onSelectTransfer(transfer)} type="button">
+                <span>{transferDirectionLabel(transfer)}</span>
+                <strong title={transfer.root_name}>{transfer.root_name}</strong>
+                <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
+                  {transferMetaLabel(transfer)}
+                </small>
+              </button>
+              {selected ? (
+                <div className="recent-detail">
+                  {paths.slice(0, 3).map((path) => (
+                    <span key={path} title={path}>{path}</span>
+                  ))}
+                  {paths.length > 3 ? <span>还有 {paths.length - 3} 个</span> : null}
+                  <div className="recent-actions">
+                    <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
+                      打开
+                    </button>
+                    {transfer.direction === "send" ? (
+                      <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
+                        重发
+                      </button>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          );
+        })}
       </div>
     </section>
   );

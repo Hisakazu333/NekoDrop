@@ -19,6 +19,10 @@ pub struct TransferHistoryRecord {
     pub peer_device_id: Option<String>,
     pub peer_name: Option<String>,
     pub target_host: Option<String>,
+    #[serde(default)]
+    pub source_paths: Vec<String>,
+    #[serde(default)]
+    pub received_paths: Vec<String>,
     pub file_count: usize,
     pub total_bytes: u64,
     pub transferred_bytes: u64,
@@ -112,6 +116,8 @@ pub fn new_transfer_history_record(
         peer_device_id: None,
         peer_name: None,
         target_host: None,
+        source_paths: Vec::new(),
+        received_paths: Vec::new(),
         file_count,
         total_bytes,
         transferred_bytes,

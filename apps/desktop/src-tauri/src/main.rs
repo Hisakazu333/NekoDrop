@@ -27,6 +27,8 @@ pub fn run() {
             commands::create_transfer_plan_from_text,
             commands::send_paths_to_code,
             commands::send_paths_to_device,
+            commands::resend_transfer,
+            commands::open_transfer_location,
             commands::select_send_files,
             commands::select_send_folders,
             commands::select_receive_dir,

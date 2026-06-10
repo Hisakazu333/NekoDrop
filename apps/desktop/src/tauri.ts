@@ -13,6 +13,8 @@ type CommandName =
   | "create_transfer_plan_from_text"
   | "send_paths_to_code"
   | "send_paths_to_device"
+  | "resend_transfer"
+  | "open_transfer_location"
   | "select_send_files"
   | "select_send_folders"
   | "select_receive_dir"

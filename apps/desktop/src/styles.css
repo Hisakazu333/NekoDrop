@@ -660,7 +660,6 @@ p {
 }
 
 .nearby-device,
-.recent-row,
 .path-row {
   display: grid;
   align-items: center;
@@ -677,7 +676,6 @@ p {
 }
 
 .nearby-device + .nearby-device,
-.recent-row + .recent-row,
 .path-row + .path-row {
   margin-top: 2px;
 }
@@ -1081,11 +1079,24 @@ input {
   margin-top: 4px;
 }
 
+.recent-item {
+  display: grid;
+  gap: 4px;
+}
+
 .recent-row {
+  display: grid;
   grid-template-columns: 72px minmax(0, 1fr) auto;
   gap: 12px;
+  align-items: center;
+  min-height: 38px;
+  width: 100%;
+  padding: 0;
+  border: 0;
   color: var(--muted);
+  background: transparent;
   font-size: 13px;
+  text-align: left;
 }
 
 .recent-row strong,
@@ -1105,7 +1116,32 @@ input {
   color: var(--muted);
 }
 
-.recent-row.is-failed span,
-.recent-row.is-failed strong {
+.recent-item.is-failed .recent-row span,
+.recent-item.is-failed .recent-row strong {
   color: var(--red);
+}
+
+.recent-item.is-selected .recent-row strong {
+  color: #c24b32;
+}
+
+.recent-detail {
+  display: grid;
+  gap: 5px;
+  padding-left: 84px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.recent-detail span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }

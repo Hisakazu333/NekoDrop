@@ -58,6 +58,8 @@ export interface TransferDto {
   peer_device_id: string | null;
   peer_name: string | null;
   target_host: string | null;
+  source_paths: string[];
+  received_paths: string[];
   direction: string;
   status: string;
   file_count: number;

@@ -89,6 +89,8 @@ pub struct TransferDto {
     pub peer_device_id: Option<String>,
     pub peer_name: Option<String>,
     pub target_host: Option<String>,
+    pub source_paths: Vec<String>,
+    pub received_paths: Vec<String>,
     pub direction: String,
     pub status: String,
     pub file_count: usize,
@@ -482,6 +484,48 @@ pub fn send_paths_to_device(
     send_paths_to_endpoint(&state, endpoint, paths_text, peer)
 }
 
+#[tauri::command]
+pub fn resend_transfer(
+    state: State<'_, AppState>,
+    transfer_id: String,
+) -> Result<SendReportDto, String> {
+    let record = transfer_history_record_by_id(&state, &transfer_id)?;
+    if record.direction != "send" {
+        return Err("接收记录不能重发".to_string());
+    }
+    if record.source_paths.is_empty() {
+        return Err("这条历史没有可重发的源路径".to_string());
+    }
+
+    let (endpoint, peer) = endpoint_and_peer_for_history_record(&state, &record)?;
+    send_paths_to_endpoint(&state, endpoint, record.source_paths.join("\n"), peer)
+}
+
+#[tauri::command]
+pub fn open_transfer_location(
+    state: State<'_, AppState>,
+    transfer_id: String,
+) -> Result<(), String> {
+    let record = transfer_history_record_by_id(&state, &transfer_id)?;
+    let path = record
+        .received_paths
+        .first()
+        .or_else(|| record.source_paths.first())
+        .or(record.receive_dir.as_ref())
+        .map(|value| expand_home_dir(value))
+        .ok_or_else(|| "这条历史没有可打开的位置".to_string())?;
+    let target = if path.exists() {
+        path
+    } else {
+        path.parent()
+            .filter(|parent| parent.exists())
+            .map(PathBuf::from)
+            .ok_or_else(|| format!("路径不存在：{}", path.display()))?
+    };
+
+    open_path_with_system(target)
+}
+
 #[derive(Debug, Clone)]
 struct TransferPeer {
     device_id: Option<String>,
@@ -546,6 +590,44 @@ fn endpoint_and_peer_from_trusted_device(
         }))
 }
 
+fn endpoint_and_peer_for_history_record(
+    state: &AppState,
+    record: &TransferHistoryRecord,
+) -> Result<(Endpoint, TransferPeer), String> {
+    if let Some(device_id) = record.peer_device_id.as_deref() {
+        if let Ok(result) = endpoint_and_peer_for_device_id(state, device_id) {
+            return Ok(result);
+        }
+    }
+
+    let target_host = record
+        .target_host
+        .as_deref()
+        .ok_or_else(|| "这条历史没有可重连的目标地址".to_string())?;
+    let endpoint = endpoint_from_label(target_host)?;
+    let peer = TransferPeer {
+        device_id: record.peer_device_id.clone(),
+        name: record.peer_name.clone(),
+        target_host: Some(endpoint_label(&endpoint)),
+    };
+    Ok((endpoint, peer))
+}
+
+fn transfer_history_record_by_id(
+    state: &AppState,
+    transfer_id: &str,
+) -> Result<TransferHistoryRecord, String> {
+    let transfers = state
+        .transfer_history
+        .lock()
+        .map_err(|error| error.to_string())?;
+    transfers
+        .iter()
+        .find(|record| record.id == transfer_id)
+        .cloned()
+        .ok_or_else(|| "找不到这条传输历史".to_string())
+}
+
 fn send_paths_to_endpoint(
     state: &AppState,
     endpoint: Endpoint,
@@ -553,6 +635,7 @@ fn send_paths_to_endpoint(
     peer: TransferPeer,
 ) -> Result<SendReportDto, String> {
     let paths = parse_paths_text(&paths_text)?;
+    let source_paths = path_bufs_to_strings(&paths);
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
     let started_at_ms = now_ms();
     let transfer_id = format!("send-{started_at_ms}");
@@ -607,6 +690,7 @@ fn send_paths_to_endpoint(
         record.peer_device_id = peer.device_id.clone();
         record.peer_name = peer.name.clone();
         record.target_host = peer.target_host.clone();
+        record.source_paths = source_paths.clone();
         record.error_message = Some(message);
         record.updated_at_ms = now_ms();
         let _ = push_transfer_history_record(&state.transfer_history, record);
@@ -641,6 +725,7 @@ fn send_paths_to_endpoint(
     record.peer_device_id = peer.device_id;
     record.peer_name = peer.name;
     record.target_host = peer.target_host;
+    record.source_paths = source_paths;
     record.updated_at_ms = now_ms();
     let _ = push_transfer_history_record(&state.transfer_history, record);
     Ok(send_report_to_dto(&report))
@@ -928,6 +1013,11 @@ pub fn start_receive_once(
                             );
                             record.target_host = Some(peer_host.clone());
                             record.receive_dir = Some(receive_dir_for_thread.display().to_string());
+                            record.received_paths = report
+                                .files
+                                .iter()
+                                .map(|file| file.path.display().to_string())
+                                .collect();
                             let _ = push_transfer_history_record(&transfer_history, record);
                             if let Ok(mut last_report) = last_receive_report.lock() {
                                 *last_report = Some(report);
@@ -1443,6 +1533,8 @@ fn transfer_to_dto(record: &TransferHistoryRecord) -> TransferDto {
         peer_device_id: record.peer_device_id.clone(),
         peer_name: record.peer_name.clone(),
         target_host: record.target_host.clone(),
+        source_paths: record.source_paths.clone(),
+        received_paths: record.received_paths.clone(),
         direction: record.direction.clone(),
         status: record.status.clone(),
         file_count: record.file_count,
@@ -1746,6 +1838,19 @@ fn endpoint_label(endpoint: &Endpoint) -> String {
     format!("{}:{}", endpoint.host, endpoint.port)
 }
 
+fn endpoint_from_label(value: &str) -> Result<Endpoint, String> {
+    let (host, port) = value
+        .rsplit_once(':')
+        .ok_or_else(|| format!("目标地址格式无效：{value}"))?;
+    let port = port
+        .parse::<u16>()
+        .map_err(|error| format!("目标端口无效：{error}"))?;
+    if host.trim().is_empty() {
+        return Err("目标地址缺少主机".to_string());
+    }
+    Ok(Endpoint::tcp(host.to_string(), port))
+}
+
 fn friendly_transfer_error(error: &str) -> String {
     if error.contains("receiver declined") {
         return "对方拒绝了这次传输".to_string();
@@ -1775,6 +1880,13 @@ fn string_paths_to_path_bufs(paths: Vec<String>) -> Result<Vec<PathBuf>, String>
     paths
         .into_iter()
         .map(|path| normalize_user_path(&path))
+        .collect()
+}
+
+fn path_bufs_to_strings(paths: &[PathBuf]) -> Vec<String> {
+    paths
+        .iter()
+        .map(|path| path.display().to_string())
         .collect()
 }
 
