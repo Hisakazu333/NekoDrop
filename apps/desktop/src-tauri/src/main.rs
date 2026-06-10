@@ -35,6 +35,7 @@ pub fn run() {
             commands::open_path,
             commands::start_receive_once,
             commands::stop_receive_once,
+            commands::cancel_current_transfer,
             commands::get_receive_status,
             commands::get_receive_session,
             commands::get_last_receive_report,

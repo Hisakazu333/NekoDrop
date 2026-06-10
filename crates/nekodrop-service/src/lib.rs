@@ -5,7 +5,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
-    read_transfer_offer, receive_file_frames, send_file_frames_with_progress,
+    read_transfer_offer, receive_file_frames, send_file_frames_with_progress_and_cancel,
     write_pairing_decision, write_pairing_request, write_transfer_decision_for_transfer,
     write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame,
     PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer,
@@ -93,6 +93,19 @@ pub fn send_plan_with_progress<F>(
 where
     F: FnMut(TransferProgressEvent),
 {
+    send_plan_with_progress_and_cancel(endpoint, plan, on_progress, || false)
+}
+
+pub fn send_plan_with_progress_and_cancel<F, C>(
+    endpoint: &Endpoint,
+    plan: TransferSourcePlan,
+    on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<TransferSendReport>
+where
+    F: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
     if endpoint.transport != TransportKind::Tcp {
         return Err(NekoDropError::Network(format!(
             "unsupported transport for file send: {:?}",
@@ -117,6 +130,9 @@ where
         total_bytes: plan.total_bytes(),
     });
     let decision = read_transfer_decision(&mut stream)?;
+    if should_cancel() {
+        return Err(NekoDropError::Network("transfer cancelled".into()));
+    }
     if !decision.accepted {
         return Err(NekoDropError::Network(format!(
             "receiver declined transfer: {}",
@@ -126,10 +142,13 @@ where
         )));
     }
 
-    let sent_files =
-        send_file_frames_with_progress(&mut stream, &outgoing, plan.total_bytes(), |progress| {
-            on_progress(TransferProgressEvent::Sending(progress))
-        })?;
+    let sent_files = send_file_frames_with_progress_and_cancel(
+        &mut stream,
+        &outgoing,
+        plan.total_bytes(),
+        |progress| on_progress(TransferProgressEvent::Sending(progress)),
+        || should_cancel(),
+    )?;
 
     Ok(TransferSendReport { plan, sent_files })
 }

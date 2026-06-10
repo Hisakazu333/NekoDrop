@@ -21,6 +21,7 @@ type CommandName =
   | "open_path"
   | "start_receive_once"
   | "stop_receive_once"
+  | "cancel_current_transfer"
   | "get_receive_status"
   | "get_receive_session"
   | "get_last_receive_report"

@@ -107,6 +107,7 @@ pub struct AppState {
     pub receive_session: Arc<Mutex<Option<ActiveReceiveSession>>>,
     pub pending_receive_offer: Arc<Mutex<Option<PendingReceiveOffer>>>,
     pub pending_pairing_request: Arc<Mutex<Option<PendingPairingRequest>>>,
+    pub active_send_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     pub transfer_status: Arc<Mutex<Option<TransferStatusState>>>,
     pub last_receive_report: Arc<Mutex<Option<TransferReceiveReport>>>,
 }
@@ -131,6 +132,7 @@ impl AppState {
             receive_session: Arc::new(Mutex::new(None)),
             pending_receive_offer: Arc::new(Mutex::new(None)),
             pending_pairing_request: Arc::new(Mutex::new(None)),
+            active_send_cancel: Arc::new(Mutex::new(None)),
             transfer_status: Arc::new(Mutex::new(None)),
             last_receive_report: Arc::new(Mutex::new(None)),
         })

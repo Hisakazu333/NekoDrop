@@ -85,6 +85,28 @@ pub fn send_single_file_frame_with_progress<F>(
 where
     F: FnMut(u64),
 {
+    send_single_file_frame_with_progress_and_cancel(
+        stream,
+        manifest_path,
+        file_path,
+        sha256,
+        &mut on_progress,
+        || false,
+    )
+}
+
+pub fn send_single_file_frame_with_progress_and_cancel<F, C>(
+    stream: &mut TcpStream,
+    manifest_path: impl Into<String>,
+    file_path: &Path,
+    sha256: impl Into<String>,
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<SentFileFrame>
+where
+    F: FnMut(u64),
+    C: FnMut() -> bool,
+{
     let manifest_path = manifest_path.into();
     let metadata = file_path.metadata().map_err(|error| {
         NekoDropError::Network(format!(
@@ -112,6 +134,10 @@ where
     let mut buffer = [0_u8; COPY_BUFFER_SIZE];
     let mut bytes_sent = 0_u64;
     loop {
+        if should_cancel() {
+            return Err(NekoDropError::Network("transfer cancelled".into()));
+        }
+
         let read = file.read(&mut buffer).map_err(|error| {
             NekoDropError::Network(format!(
                 "failed to read {} while sending: {error}",
@@ -159,6 +185,22 @@ pub fn send_file_frames_with_progress<F>(
 where
     F: FnMut(TransferProgress),
 {
+    send_file_frames_with_progress_and_cancel(stream, files, total_bytes, &mut on_progress, || {
+        false
+    })
+}
+
+pub fn send_file_frames_with_progress_and_cancel<F, C>(
+    stream: &mut TcpStream,
+    files: &[OutgoingFileFrame],
+    total_bytes: u64,
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<Vec<SentFileFrame>>
+where
+    F: FnMut(TransferProgress),
+    C: FnMut() -> bool,
+{
     let count = u32::try_from(files.len())
         .map_err(|_| NekoDropError::Network("too many files in one transfer".into()))?;
     stream
@@ -182,6 +224,10 @@ where
     let mut bytes_transferred = 0_u64;
 
     for (index, file) in files.iter().enumerate() {
+        if should_cancel() {
+            return Err(NekoDropError::Network("transfer cancelled".into()));
+        }
+
         let file_size = file
             .file_path
             .metadata()
@@ -193,7 +239,7 @@ where
             })?
             .len();
         let mut last_file_bytes = 0_u64;
-        let sent_frame = send_single_file_frame_with_progress(
+        let sent_frame = send_single_file_frame_with_progress_and_cancel(
             stream,
             file.manifest_path.clone(),
             &file.file_path,
@@ -212,6 +258,7 @@ where
                     total_bytes: resolved_total_bytes,
                 });
             },
+            || should_cancel(),
         )?;
         sent.push(sent_frame);
     }

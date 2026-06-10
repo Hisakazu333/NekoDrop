@@ -17,8 +17,9 @@ use nekodrop_network::{
 };
 use nekodrop_service::{
     accept_incoming_stream, create_transfer_plan as create_service_transfer_plan,
-    send_pairing_request, send_plan_with_progress, IncomingSessionReport, TransferProgressEvent,
-    TransferReceiveReport, TransferSendReport, TransferSourceFile, TransferSourcePlan,
+    send_pairing_request, send_plan_with_progress_and_cancel, IncomingSessionReport,
+    TransferProgressEvent, TransferReceiveReport, TransferSendReport, TransferSourceFile,
+    TransferSourcePlan,
 };
 use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
@@ -624,6 +625,20 @@ fn endpoint_and_peer_for_history_record(
     Ok((endpoint, peer))
 }
 
+fn clear_active_send_cancel(
+    active_send_cancel: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
+    cancel: &Arc<AtomicBool>,
+) {
+    if let Ok(mut active) = active_send_cancel.lock() {
+        if active
+            .as_ref()
+            .is_some_and(|current| Arc::ptr_eq(current, cancel))
+        {
+            *active = None;
+        }
+    }
+}
+
 fn transfer_history_record_by_id(
     state: &AppState,
     transfer_id: &str,
@@ -650,6 +665,17 @@ fn send_paths_to_endpoint(
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
     let started_at_ms = now_ms();
     let transfer_id = format!("send-{started_at_ms}");
+    let cancel = Arc::new(AtomicBool::new(false));
+    {
+        let mut active_cancel = state
+            .active_send_cancel
+            .lock()
+            .map_err(|error| error.to_string())?;
+        if active_cancel.is_some() {
+            return Err("已有发送任务进行中".to_string());
+        }
+        *active_cancel = Some(cancel.clone());
+    }
     set_transfer_status(
         &state.transfer_status,
         TransferStatusState {
@@ -666,18 +692,32 @@ fn send_paths_to_endpoint(
         },
     );
     let transfer_status = state.transfer_status.clone();
-    let report = send_plan_with_progress(&endpoint, plan.clone(), move |event| {
-        if let Some(status) = status_from_progress_event("send", None, event) {
-            set_transfer_status(&transfer_status, status);
-        }
-    })
+    let cancel_for_send = cancel.clone();
+    let report = send_plan_with_progress_and_cancel(
+        &endpoint,
+        plan.clone(),
+        move |event| {
+            if let Some(status) = status_from_progress_event("send", None, event) {
+                set_transfer_status(&transfer_status, status);
+            }
+        },
+        || cancel_for_send.load(Ordering::SeqCst),
+    )
     .map_err(|error| {
-        let message = friendly_transfer_error(&error.to_string());
+        let cancelled =
+            cancel.load(Ordering::SeqCst) || error.to_string().contains("transfer cancelled");
+        let message = if cancelled {
+            "传输已取消".to_string()
+        } else {
+            friendly_transfer_error(&error.to_string())
+        };
+        let status = if cancelled { "cancelled" } else { "failed" };
+        clear_active_send_cancel(&state.active_send_cancel, &cancel);
         set_transfer_status(
             &state.transfer_status,
             TransferStatusState {
                 direction: "send".to_string(),
-                phase: "failed".to_string(),
+                phase: status.to_string(),
                 root_name: Some(plan.manifest.root_name.clone()),
                 file_count: plan.file_count(),
                 file_index: 0,
@@ -691,7 +731,7 @@ fn send_paths_to_endpoint(
         let mut record = new_transfer_history_record(
             transfer_id.clone(),
             "send",
-            "failed",
+            status,
             plan.manifest.root_name.clone(),
             plan.file_count(),
             plan.total_bytes(),
@@ -702,11 +742,14 @@ fn send_paths_to_endpoint(
         record.peer_name = peer.name.clone();
         record.target_host = peer.target_host.clone();
         record.source_paths = source_paths.clone();
-        record.error_message = Some(message);
+        if !cancelled {
+            record.error_message = Some(message.clone());
+        }
         record.updated_at_ms = now_ms();
         let _ = push_transfer_history_record(&state.transfer_history, record);
-        error.to_string()
+        message
     })?;
+    clear_active_send_cancel(&state.active_send_cancel, &cancel);
     let transferred_bytes = report.plan.total_bytes();
     set_transfer_status(
         &state.transfer_status,
@@ -1187,6 +1230,33 @@ pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
             updated_at_ms: now_ms(),
         },
     );
+    Ok(())
+}
+
+#[tauri::command]
+pub fn cancel_current_transfer(state: State<'_, AppState>) -> Result<(), String> {
+    let cancel = state
+        .active_send_cancel
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone()
+        .ok_or_else(|| "当前没有可取消的发送任务".to_string())?;
+    cancel.store(true, Ordering::SeqCst);
+
+    let mut transfer_status = state
+        .transfer_status
+        .lock()
+        .map_err(|error| error.to_string())?;
+    if let Some(status) = transfer_status.as_mut() {
+        if status.direction == "send"
+            && !matches!(status.phase.as_str(), "completed" | "failed" | "cancelled")
+        {
+            status.phase = "cancelled".to_string();
+            status.message = "正在取消发送".to_string();
+            status.updated_at_ms = now_ms();
+        }
+    }
+
     Ok(())
 }
 

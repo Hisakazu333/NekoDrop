@@ -25,6 +25,7 @@ type BusyMode =
   | "pick-folders"
   | "pick-receive"
   | "stop-receive"
+  | "cancel-transfer"
   | "pair"
   | "forget"
   | "history"
@@ -389,7 +390,12 @@ export function App() {
       setToast(`发送完成：${report.file_count} 个文件`);
       await refreshTransfers();
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      const message = errorMessage(nextError);
+      if (isCancelMessage(message)) {
+        setToast("传输已取消");
+      } else {
+        setError(message);
+      }
       await refreshTransfers().catch(() => undefined);
     } finally {
       setBusy(null);
@@ -417,7 +423,12 @@ export function App() {
       await refreshTransfers();
     } catch (nextError) {
       setMode("send");
-      setError(deviceSendErrorMessage(errorMessage(nextError)));
+      const message = deviceSendErrorMessage(errorMessage(nextError));
+      if (isCancelMessage(message)) {
+        setToast("传输已取消");
+      } else {
+        setError(message);
+      }
       await refreshTransfers().catch(() => undefined);
     } finally {
       setBusy(null);
@@ -445,6 +456,20 @@ export function App() {
     setError("选择目标");
   }
 
+  async function cancelCurrentTransfer() {
+    setBusy("cancel-transfer");
+    setError(null);
+    try {
+      await invokeCommand<void>("cancel_current_transfer");
+      setToast("正在取消发送");
+      await refreshReceiveState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function resendTransfer(transfer: TransferDto) {
     setBusy("resend");
     setError(null);
@@ -458,7 +483,12 @@ export function App() {
       setToast(`重发完成：${report.file_count} 个文件`);
       await refreshTransfers();
     } catch (nextError) {
-      setError(deviceSendErrorMessage(errorMessage(nextError)));
+      const message = deviceSendErrorMessage(errorMessage(nextError));
+      if (isCancelMessage(message)) {
+        setToast("传输已取消");
+      } else {
+        setError(message);
+      }
       await refreshTransfers().catch(() => undefined);
     } finally {
       setBusy(null);
@@ -858,6 +888,8 @@ export function App() {
                       transferMetrics={transferMetrics}
                       transferStatus={transferStatus}
                       transferCount={transferPaths.length}
+                      busy={busy}
+                      onCancelTransfer={cancelCurrentTransfer}
                     />
                   ) : (
                     <HomeStateLine discoveryStatus={discoveryStatus} receiveState={receiveState} transfers={transfers} />
@@ -992,6 +1024,7 @@ export function App() {
                   transferMetrics={transferMetrics}
                   transferStatus={transferStatus}
                   transfers={transfers}
+                  onCancelTransfer={cancelCurrentTransfer}
                   onClearTransfers={clearTransferHistory}
                   onDeleteTransfer={deleteTransfer}
                   onOpenTransfer={openTransferLocation}
@@ -1626,6 +1659,7 @@ function HistoryPanel({
   transferMetrics,
   transferStatus,
   transfers,
+  onCancelTransfer,
   onClearTransfers,
   onDeleteTransfer,
   onOpenTransfer,
@@ -1640,6 +1674,7 @@ function HistoryPanel({
   };
   transferStatus: TransferStatusDto | null;
   transfers: TransferDto[];
+  onCancelTransfer: () => void;
   onClearTransfers: () => void;
   onDeleteTransfer: (transfer: TransferDto) => void;
   onOpenTransfer: (transfer: TransferDto) => void;
@@ -1659,7 +1694,12 @@ function HistoryPanel({
       </div>
 
       {transferStatus && transferStatus.phase !== "completed" ? (
-        <TransferStatusView metrics={transferMetrics} status={transferStatus} />
+        <TransferStatusView
+          busy={busy}
+          metrics={transferMetrics}
+          status={transferStatus}
+          onCancel={onCancelTransfer}
+        />
       ) : null}
 
       {transfers.length > 0 ? (
@@ -1726,14 +1766,17 @@ function HistoryPanel({
 }
 
 function StatusLine({
+  busy,
   plan,
   receiveReport,
   receiveSession,
   sendReport,
   transferMetrics,
   transferStatus,
-  transferCount
+  transferCount,
+  onCancelTransfer
 }: {
+  busy: BusyMode | null;
   plan: TransferPlanDto | null;
   receiveReport: ReceiveReportDto | null;
   receiveSession: ReceiveSessionDto | null;
@@ -1744,9 +1787,17 @@ function StatusLine({
   };
   transferStatus: TransferStatusDto | null;
   transferCount: number;
+  onCancelTransfer: () => void;
 }) {
   if (transferStatus && transferStatus.phase !== "completed") {
-    return <TransferStatusView metrics={transferMetrics} status={transferStatus} />;
+    return (
+      <TransferStatusView
+        busy={busy}
+        metrics={transferMetrics}
+        status={transferStatus}
+        onCancel={onCancelTransfer}
+      />
+    );
   }
 
   if (sendReport) {
@@ -1872,15 +1923,24 @@ function RecentActivity({
 }
 
 function TransferStatusView({
+  busy,
   metrics,
-  status
+  status,
+  onCancel
 }: {
+  busy?: BusyMode | null;
   metrics?: {
     speedBytesPerSecond: number | null;
     etaSeconds: number | null;
   };
   status: TransferStatusDto;
+  onCancel?: () => void;
 }) {
+  const canCancel =
+    status.direction === "send" &&
+    onCancel &&
+    !matchesTerminalTransferPhase(status.phase);
+
   return (
     <div className={status.phase === "failed" ? "transfer-status is-error" : "transfer-status"}>
       <div className="transfer-status-head">
@@ -1889,6 +1949,11 @@ function TransferStatusView({
           <span>
             {formatBytes(status.bytes_transferred)} / {formatBytes(status.total_bytes)}
           </span>
+        ) : null}
+        {canCancel ? (
+          <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
+            取消
+          </button>
         ) : null}
       </div>
       {status.total_bytes > 0 ? (
@@ -1950,6 +2015,7 @@ function formatBytes(bytes: number) {
 }
 
 function transferDirectionLabel(transfer: TransferDto) {
+  if (transfer.status === "cancelled") return "取消";
   if (transfer.status === "failed") return "失败";
   if (transfer.direction === "receive") return "接收";
   return "发送";
@@ -1967,6 +2033,7 @@ function transferMetaLabel(transfer: TransferDto) {
 }
 
 function phaseLabel(phase: string) {
+  if (phase === "cancelled") return "已取消";
   if (phase === "connecting") return "连接中";
   if (phase === "listening") return "收件开启";
   if (phase === "awaiting_approval") return "等待确认";
@@ -1979,6 +2046,10 @@ function phaseLabel(phase: string) {
   if (phase === "closed") return "收件关闭";
   if (phase === "completed") return "传输完成";
   return phase;
+}
+
+function matchesTerminalTransferPhase(phase: string) {
+  return ["completed", "failed", "cancelled", "declined", "expired", "closed"].includes(phase);
 }
 
 function formatDuration(seconds: number) {
@@ -2114,4 +2185,8 @@ function deviceSendErrorMessage(message: string) {
     return `${message} 备用码重试`;
   }
   return message;
+}
+
+function isCancelMessage(message: string) {
+  return message.includes("取消") || message.includes("cancelled") || message.includes("canceled");
 }
