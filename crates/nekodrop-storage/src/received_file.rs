@@ -176,7 +176,7 @@ where
     })
 }
 
-fn partial_path_for(destination: &Path) -> NekoDropResult<PathBuf> {
+pub(crate) fn partial_path_for(destination: &Path) -> NekoDropResult<PathBuf> {
     let file_name = destination
         .file_name()
         .and_then(|value| value.to_str())
