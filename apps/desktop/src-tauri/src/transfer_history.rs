@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -46,7 +47,7 @@ pub fn load_transfer_history() -> Result<Vec<TransferHistoryRecord>, String> {
         .into_iter()
         .filter(|record| validate_transfer_history_record(record).is_ok())
         .collect::<Vec<_>>();
-    sort_transfer_history_records(&mut records);
+    normalize_transfer_history_records(&mut records);
     records.truncate(TRANSFER_HISTORY_LIMIT);
     Ok(records)
 }
@@ -60,9 +61,15 @@ pub fn push_transfer_history_record(
     let mut records = records.lock().map_err(|error| error.to_string())?;
     records.retain(|item| item.id != record.id);
     records.insert(0, record);
-    sort_transfer_history_records(&mut records);
+    normalize_transfer_history_records(&mut records);
     records.truncate(TRANSFER_HISTORY_LIMIT);
     save_transfer_history(&records)
+}
+
+fn normalize_transfer_history_records(records: &mut Vec<TransferHistoryRecord>) {
+    sort_transfer_history_records(records);
+    let mut seen_ids = HashSet::new();
+    records.retain(|record| seen_ids.insert(record.id.clone()));
 }
 
 fn sort_transfer_history_records(records: &mut [TransferHistoryRecord]) {
@@ -200,5 +207,51 @@ mod tests {
         assert_eq!(records[0].id, "new");
         assert_eq!(records[1].id, "middle");
         assert_eq!(records[2].id, "old");
+    }
+
+    #[test]
+    fn normalizes_duplicate_transfer_ids_to_latest_record() {
+        let mut records = vec![
+            new_transfer_history_record(
+                "transfer-a".to_string(),
+                "send",
+                "failed",
+                "old",
+                1,
+                10,
+                3,
+                10,
+            ),
+            new_transfer_history_record(
+                "transfer-a".to_string(),
+                "send",
+                "completed",
+                "new",
+                1,
+                10,
+                10,
+                20,
+            ),
+            new_transfer_history_record(
+                "transfer-b".to_string(),
+                "receive",
+                "completed",
+                "other",
+                1,
+                10,
+                10,
+                15,
+            ),
+        ];
+        records[0].updated_at_ms = 30;
+        records[1].updated_at_ms = 50;
+        records[2].updated_at_ms = 40;
+
+        normalize_transfer_history_records(&mut records);
+
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].id, "transfer-a");
+        assert_eq!(records[0].status, "completed");
+        assert_eq!(records[1].id, "transfer-b");
     }
 }
