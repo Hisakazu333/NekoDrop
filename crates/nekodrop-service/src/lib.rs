@@ -7,9 +7,9 @@ use nekodrop_network::{
     read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
     read_transfer_offer, receive_file_frames, send_file_frames_with_progress_and_cancel,
     write_pairing_decision, write_pairing_request, write_transfer_decision_for_transfer,
-    write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame,
-    PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer,
-    TransferOfferFile, TransferProgress, TransportKind,
+    write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, NekoLinkTransport,
+    OutgoingFileFrame, PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TcpTransport,
+    TransferDecision, TransferOffer, TransferOfferFile, TransferProgress,
 };
 use nekodrop_storage::{
     create_source_plan_from_paths, write_received_file_with_progress, ReceivedFile,
@@ -106,22 +106,10 @@ where
     F: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
-    if endpoint.transport != TransportKind::Tcp {
-        return Err(NekoDropError::Network(format!(
-            "unsupported transport for file send: {:?}",
-            endpoint.transport
-        )));
-    }
-
     let outgoing = outgoing_frames_from_plan(&plan);
     let offer = offer_from_plan(&plan);
-    let mut stream =
-        TcpStream::connect((endpoint.host.as_str(), endpoint.port)).map_err(|error| {
-            NekoDropError::Network(format!(
-                "failed to connect to {}:{}: {error}",
-                endpoint.host, endpoint.port
-            ))
-        })?;
+    let transport = TcpTransport;
+    let mut stream = transport.connect(endpoint)?;
     write_transfer_offer(&mut stream, &offer)?;
     let mut on_progress = on_progress;
     on_progress(TransferProgressEvent::AwaitingApproval {
@@ -157,20 +145,8 @@ pub fn send_pairing_request(
     endpoint: &Endpoint,
     request: PairingRequestPayload,
 ) -> NekoDropResult<PairingDecisionPayload> {
-    if endpoint.transport != TransportKind::Tcp {
-        return Err(NekoDropError::Network(format!(
-            "unsupported transport for pairing: {:?}",
-            endpoint.transport
-        )));
-    }
-
-    let mut stream =
-        TcpStream::connect((endpoint.host.as_str(), endpoint.port)).map_err(|error| {
-            NekoDropError::Network(format!(
-                "failed to connect to {}:{}: {error}",
-                endpoint.host, endpoint.port
-            ))
-        })?;
+    let transport = TcpTransport;
+    let mut stream = transport.connect(endpoint)?;
     write_pairing_request(&mut stream, &request)?;
     read_pairing_decision(&mut stream)
 }

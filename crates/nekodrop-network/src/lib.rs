@@ -20,4 +20,4 @@ pub use tcp_file::{
     PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer, TransferOfferFile,
     TransferProgress,
 };
-pub use transport::{Endpoint, TransportKind};
+pub use transport::{Endpoint, NekoLinkTransport, TcpTransport, TransportKind, TransportStream};
