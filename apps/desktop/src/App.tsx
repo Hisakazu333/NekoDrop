@@ -30,7 +30,7 @@ type BusyMode =
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "receive" | "queue";
+type ComposerMode = "send" | "receive" | "queue" | "history";
 
 export function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -579,11 +579,13 @@ export function App() {
       ? "收件"
       : mode === "queue"
         ? "发送队列"
-        : selectedDevice
-          ? `发给 ${selectedDevice.name}`
-          : trimmedConnectionCode.length > 0
-            ? "使用备用码发送"
-            : "把文件发到哪台设备？";
+        : mode === "history"
+          ? "传输历史"
+          : selectedDevice
+            ? `发给 ${selectedDevice.name}`
+            : trimmedConnectionCode.length > 0
+              ? "使用备用码发送"
+              : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -594,6 +596,12 @@ export function App() {
     : transferPaths.length > 0
       ? transferPaths[0]
       : "文件 / 文件夹";
+  const pageSubtitle =
+    mode === "receive"
+      ? receiveState
+      : mode === "history"
+        ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
+        : composerSubtitle;
 
   return (
     <main className="app-shell">
@@ -626,6 +634,14 @@ export function App() {
             type="button"
           >
             <Icon name="list" />
+          </button>
+          <button
+            className={mode === "history" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("history")}
+            title="传输"
+            type="button"
+          >
+            <Icon name="clock" />
           </button>
         </nav>
 
@@ -817,11 +833,11 @@ export function App() {
               </div>
             </div>
           ) : (
-            <div className="single-workbench">
+            <div className={mode === "history" ? "single-workbench is-wide" : "single-workbench"}>
               <div className="pane-head">
                 <div>
                   <strong>{pageTitle}</strong>
-                  <span>{mode === "receive" ? receiveState : composerSubtitle}</span>
+                  <span>{pageSubtitle}</span>
                 </div>
               </div>
 
@@ -831,30 +847,30 @@ export function App() {
                     busy={busy}
                     connectionCode={connectionCode}
                     connectionCodeOpen={connectionCodeOpen}
-                  discoveryStatus={discoveryStatus}
-                  devices={nearbyDevices}
-                  receiveSession={receiveSession}
-                  receiveState={receiveState}
-                  selectedDeviceId={selectedDeviceId}
-                  setConnectionCode={(value) => {
-                    setConnectionCode(value);
-                    setSelectedDeviceId(null);
-                    setSelectedDeviceSnapshot(null);
-                  }}
-                  setConnectionCodeOpen={setConnectionCodeOpen}
-                  onCopyConnectionCode={copyConnectionCode}
-                  onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
-                  onSelectDevice={(device) => {
-                    setSelectedDeviceId(device.id);
-                    setSelectedDeviceSnapshot(device);
-                    setConnectionCodeOpen(false);
-                    setConnectionCode("");
-                    setError(null);
-                  }}
-                  onStartReceive={startReceive}
-                  onStopReceive={stopReceive}
-                  onTrustDevice={requestPairing}
-                />
+                    discoveryStatus={discoveryStatus}
+                    devices={nearbyDevices}
+                    receiveSession={receiveSession}
+                    receiveState={receiveState}
+                    selectedDeviceId={selectedDeviceId}
+                    setConnectionCode={(value) => {
+                      setConnectionCode(value);
+                      setSelectedDeviceId(null);
+                      setSelectedDeviceSnapshot(null);
+                    }}
+                    setConnectionCodeOpen={setConnectionCodeOpen}
+                    onCopyConnectionCode={copyConnectionCode}
+                    onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                    onSelectDevice={(device) => {
+                      setSelectedDeviceId(device.id);
+                      setSelectedDeviceSnapshot(device);
+                      setConnectionCodeOpen(false);
+                      setConnectionCode("");
+                      setError(null);
+                    }}
+                    onStartReceive={startReceive}
+                    onStopReceive={stopReceive}
+                    onTrustDevice={requestPairing}
+                  />
                   <ReceivePanel
                     bindPort={bindPort}
                     busy={busy}
@@ -877,29 +893,37 @@ export function App() {
               ) : null}
 
               {mode === "queue" ? (
-              <QueuePanel
-                busy={busy}
-                manualPaths={manualPaths}
-                plan={plan}
-                selectedPaths={selectedPaths}
-                transfers={transfers}
-                selectedTransferId={selectedTransferId}
-                setManualPaths={(value) => {
-                  setManualPaths(value);
-                  setPlan(null);
-                  setSendReport(null);
-                }}
-                onClearQueue={clearQueue}
-                onClearTransfers={clearTransferHistory}
-                onDeleteTransfer={deleteTransfer}
-                onRemovePath={removePath}
-                onScan={() => scanPaths()}
-                onOpenTransfer={openTransferLocation}
-                onResendTransfer={resendTransfer}
-                onSelectTransfer={(transfer) =>
-                  setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
-                }
-              />
+                <QueuePanel
+                  busy={busy}
+                  manualPaths={manualPaths}
+                  plan={plan}
+                  selectedPaths={selectedPaths}
+                  setManualPaths={(value) => {
+                    setManualPaths(value);
+                    setPlan(null);
+                    setSendReport(null);
+                  }}
+                  onClearQueue={clearQueue}
+                  onRemovePath={removePath}
+                  onScan={() => scanPaths()}
+                />
+              ) : null}
+
+              {mode === "history" ? (
+                <HistoryPanel
+                  busy={busy}
+                  selectedTransferId={selectedTransferId}
+                  transferMetrics={transferMetrics}
+                  transferStatus={transferStatus}
+                  transfers={transfers}
+                  onClearTransfers={clearTransferHistory}
+                  onDeleteTransfer={deleteTransfer}
+                  onOpenTransfer={openTransferLocation}
+                  onResendTransfer={resendTransfer}
+                  onSelectTransfer={(transfer) =>
+                    setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
+                  }
+                />
               ) : null}
             </div>
           )}
@@ -911,6 +935,7 @@ export function App() {
 
 type IconName =
   | "arrow-up"
+  | "clock"
   | "file"
   | "folder"
   | "inbox"
@@ -923,6 +948,7 @@ function Icon({ name }: { name: IconName }) {
   return (
     <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24">
       {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
+      {name === "clock" ? <path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /> : null}
       {name === "file" ? <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8l-5-5Zm0 0v5h5" /> : null}
       {name === "folder" ? <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" /> : null}
       {name === "inbox" ? <path d="M4 4h16v11l-3 5H7l-3-5V4Zm0 11h5l2 2h2l2-2h5" /> : null}
@@ -1372,34 +1398,20 @@ function QueuePanel({
   busy,
   manualPaths,
   plan,
-  selectedTransferId,
   selectedPaths,
-  transfers,
   setManualPaths,
   onClearQueue,
-  onClearTransfers,
-  onDeleteTransfer,
   onRemovePath,
-  onScan,
-  onOpenTransfer,
-  onResendTransfer,
-  onSelectTransfer
+  onScan
 }: {
   busy: BusyMode | null;
   manualPaths: string;
   plan: TransferPlanDto | null;
-  selectedTransferId: string | null;
   selectedPaths: string[];
-  transfers: TransferDto[];
   setManualPaths: (value: string) => void;
   onClearQueue: () => void;
-  onClearTransfers: () => void;
-  onDeleteTransfer: (transfer: TransferDto) => void;
   onRemovePath: (path: string) => void;
   onScan: () => void;
-  onOpenTransfer: (transfer: TransferDto) => void;
-  onResendTransfer: (transfer: TransferDto) => void;
-  onSelectTransfer: (transfer: TransferDto) => void;
 }) {
   return (
     <section className="function-panel">
@@ -1437,18 +1449,111 @@ function QueuePanel({
         onChange={(event) => setManualPaths(event.target.value)}
         placeholder="每行一个路径"
       />
+    </section>
+  );
+}
 
-      <RecentActivity
-        busy={busy}
-        compact
-        selectedTransferId={selectedTransferId}
-        transfers={transfers}
-        onClearTransfers={onClearTransfers}
-        onDeleteTransfer={onDeleteTransfer}
-        onOpenTransfer={onOpenTransfer}
-        onResendTransfer={onResendTransfer}
-        onSelectTransfer={onSelectTransfer}
-      />
+function HistoryPanel({
+  busy,
+  selectedTransferId,
+  transferMetrics,
+  transferStatus,
+  transfers,
+  onClearTransfers,
+  onDeleteTransfer,
+  onOpenTransfer,
+  onResendTransfer,
+  onSelectTransfer
+}: {
+  busy: BusyMode | null;
+  selectedTransferId: string | null;
+  transferMetrics: {
+    speedBytesPerSecond: number | null;
+    etaSeconds: number | null;
+  };
+  transferStatus: TransferStatusDto | null;
+  transfers: TransferDto[];
+  onClearTransfers: () => void;
+  onDeleteTransfer: (transfer: TransferDto) => void;
+  onOpenTransfer: (transfer: TransferDto) => void;
+  onResendTransfer: (transfer: TransferDto) => void;
+  onSelectTransfer: (transfer: TransferDto) => void;
+}) {
+  return (
+    <section className="history-panel">
+      <div className="history-toolbar">
+        <div>
+          <strong>{transfers.length}</strong>
+          <span>条记录</span>
+        </div>
+        <button className="text-button" disabled={busy === "history" || transfers.length === 0} onClick={onClearTransfers} type="button">
+          清空
+        </button>
+      </div>
+
+      {transferStatus && transferStatus.phase !== "completed" ? (
+        <TransferStatusView metrics={transferMetrics} status={transferStatus} />
+      ) : null}
+
+      {transfers.length > 0 ? (
+        <div className="history-list">
+          {transfers.map((transfer) => {
+            const selected = transfer.id === selectedTransferId;
+            const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+            return (
+              <div
+                className={[
+                  "history-item",
+                  selected ? "is-selected" : "",
+                  transfer.status === "failed" ? "is-failed" : ""
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                key={transfer.id}
+              >
+                <button className="history-row" onClick={() => onSelectTransfer(transfer)} type="button">
+                  <span className="history-kind">{transferDirectionLabel(transfer)}</span>
+                  <span className="history-main">
+                    <strong title={transfer.root_name}>{transfer.root_name}</strong>
+                    <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
+                      {transferMetaLabel(transfer)}
+                    </small>
+                  </span>
+                  <span className="history-size">
+                    {transfer.file_count} 个 · {formatBytes(transfer.total_bytes)}
+                  </span>
+                  <time>{formatTransferTime(transfer.updated_at_ms)}</time>
+                </button>
+                {selected ? (
+                  <div className="history-detail">
+                    <div className="history-paths">
+                      {paths.slice(0, 6).map((path) => (
+                        <span key={path} title={path}>{path}</span>
+                      ))}
+                      {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+                    </div>
+                    <div className="history-actions">
+                      <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
+                        打开
+                      </button>
+                      {transfer.direction === "send" ? (
+                        <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
+                          重发
+                        </button>
+                      ) : null}
+                      <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
+                        删除
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="history-empty">暂无记录</div>
+      )}
     </section>
   );
 }
@@ -1704,6 +1809,18 @@ function formatDuration(seconds: number) {
   const hours = Math.floor(minutes / 60);
   const minuteRest = minutes % 60;
   return minuteRest > 0 ? `${hours}h ${minuteRest}m` : `${hours}h`;
+}
+
+function formatTransferTime(timestampMs: number) {
+  const date = new Date(timestampMs);
+  if (Number.isNaN(date.getTime())) return "";
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false
+  }).format(date);
 }
 
 function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: number) {
