@@ -9,8 +9,9 @@ pub mod space;
 pub use checksum::{sha256_file, verify_sha256_file, Checksum, ChecksumAlgorithm};
 pub use chunk::{ChunkPlan, ChunkRange};
 pub use manifest_builder::{
-    create_manifest_from_paths, create_source_plan_from_paths, TransferSourceFile,
-    TransferSourcePlan,
+    create_manifest_from_paths, create_source_plan_from_paths,
+    create_source_plan_from_paths_with_progress, TransferPlanScanPhase, TransferPlanScanProgress,
+    TransferSourceFile, TransferSourcePlan,
 };
 pub use receive_dir::safe_join_receive_path;
 pub use received_file::{
