@@ -22,6 +22,7 @@ Current implemented path:
 - TCP for transfer sessions
 - connection code contains host, port, and the receiver's public device identity
 - receiver opens an explicit one-shot receive listener
+- desktop discovery uses mDNS plus UDP broadcast fallback on local networks
 - sender sends a `nekolink` Envelope with `file_offer` before any file bytes
 - receiver responds with `file_accept` or `file_decline` before file bytes are sent
 - receiver validates every incoming file header against the accepted offer
@@ -29,8 +30,6 @@ Current implemented path:
 
 Planned LAN product path:
 
-- mDNS for discovery
-- UDP broadcast fallback for discovery if mDNS is unreliable
 - trusted pairing before device-to-device offers
 
 Future:

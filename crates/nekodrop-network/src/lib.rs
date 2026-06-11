@@ -7,7 +7,10 @@ pub mod tcp_file;
 pub mod transport;
 
 pub use connection_ticket::ConnectionTicket;
-pub use discovery::{DiscoveryAdvertisement, DiscoveryState};
+pub use discovery::{
+    decode_discovery_beacon, encode_discovery_beacon, DiscoveryAdvertisement, DiscoveryBeaconError,
+    DiscoveryState, DISCOVERY_PROTOCOL, MAX_DISCOVERY_BEACON_BYTES, UDP_DISCOVERY_PORT,
+};
 pub use protocol::{ProtocolMessage, ProtocolVersion};
 pub use tcp_file::{
     accept_file_frames, accept_one_file_frame, read_device_hello, read_incoming_control_frame,
