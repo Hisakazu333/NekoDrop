@@ -7,6 +7,7 @@ import type {
   AppSnapshot,
   DeviceDto,
   DiscoveryStatusDto,
+  NetworkDiagnosticsDto,
   PendingPairingRequestDto,
   PendingReceiveOfferDto,
   ReceiveReportDto,
@@ -35,7 +36,7 @@ type BusyMode =
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
+type ComposerMode = "send" | "devices" | "receive" | "queue" | "history" | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
@@ -56,6 +57,7 @@ export function App() {
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
   const [nearbyDevices, setNearbyDevices] = useState<DeviceDto[]>([]);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatusDto | null>(null);
+  const [networkDiagnostics, setNetworkDiagnostics] = useState<NetworkDiagnosticsDto | null>(null);
   const [receiveSession, setReceiveSession] = useState<ReceiveSessionDto | null>(null);
   const [receiveStatus, setReceiveStatus] = useState<string | null>(null);
   const [receiveReport, setReceiveReport] = useState<ReceiveReportDto | null>(null);
@@ -246,6 +248,7 @@ export function App() {
       devices,
       trusted,
       discovery,
+      diagnostics,
       nextTransfers
     ] = await Promise.all([
       invokeCommand<string | null>("get_receive_status"),
@@ -257,6 +260,7 @@ export function App() {
       invokeCommand<DeviceDto[]>("list_nearby_devices"),
       invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
       invokeCommand<DiscoveryStatusDto>("get_discovery_status"),
+      invokeCommand<NetworkDiagnosticsDto>("get_network_diagnostics"),
       invokeCommand<TransferDto[]>("list_transfers")
     ]);
     setReceiveStatus(status);
@@ -268,8 +272,19 @@ export function App() {
     setNearbyDevices(devices);
     setTrustedDevices(trusted);
     setDiscoveryStatus(discovery);
+    setNetworkDiagnostics(diagnostics);
     setTransfers(nextTransfers);
     if (pendingOffer || pairingRequest) setMode("receive");
+  }
+
+  async function refreshDiagnosticsPanel() {
+    setError(null);
+    try {
+      await refreshReceiveState();
+      setToast("诊断已刷新");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    }
   }
 
   async function refreshTransfers() {
@@ -679,15 +694,19 @@ export function App() {
     }
   }
 
-  async function copyConnectionCode() {
-    if (!receiveSession?.connection_code) return;
+  async function copyConnectionCodeValue(value: string | null | undefined) {
+    if (!value) return;
     setError(null);
     try {
-      await copyTextToClipboard(receiveSession.connection_code);
+      await copyTextToClipboard(value);
       setToast("连接码已复制");
     } catch (nextError) {
       setError(errorMessage(nextError));
     }
+  }
+
+  async function copyConnectionCode() {
+    await copyConnectionCodeValue(receiveSession?.connection_code);
   }
 
   function clearQueue() {
@@ -721,11 +740,13 @@ export function App() {
           ? "发送队列"
           : mode === "history"
             ? "传输历史"
-            : selectedDevice
-              ? `发给 ${selectedDevice.name}`
-              : trimmedConnectionCode.length > 0
-                ? "使用备用码发送"
-                : "把文件发到哪台设备？";
+            : mode === "settings"
+              ? "网络诊断"
+              : selectedDevice
+                ? `发给 ${selectedDevice.name}`
+                : trimmedConnectionCode.length > 0
+                  ? "使用备用码发送"
+                  : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -743,6 +764,8 @@ export function App() {
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
           ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
+          : mode === "settings"
+            ? networkDiagnostics?.suggested_action ?? "读取中"
           : composerSubtitle;
 
   return (
@@ -795,15 +818,25 @@ export function App() {
           </button>
         </nav>
 
-        <button
-          className="rail-item rail-bottom"
-          disabled={busy === "open"}
-          onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
-          title="接收目录"
-          type="button"
-        >
-          <Icon name="folder" />
-        </button>
+        <div className="rail-bottom-stack">
+          <button
+            className={mode === "settings" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("settings")}
+            title="网络诊断"
+            type="button"
+          >
+            <Icon name="settings" />
+          </button>
+          <button
+            className="rail-item"
+            disabled={busy === "open"}
+            onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+            title="接收目录"
+            type="button"
+          >
+            <Icon name="folder" />
+          </button>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -986,7 +1019,7 @@ export function App() {
               </div>
             </div>
           ) : (
-            <div className={mode === "history" ? "single-workbench is-wide" : "single-workbench"}>
+            <div className={mode === "history" || mode === "settings" ? "single-workbench is-wide" : "single-workbench"}>
               <div className="pane-head">
                 <div>
                   <strong>{pageTitle}</strong>
@@ -1112,6 +1145,18 @@ export function App() {
                   }
                 />
               ) : null}
+
+              {mode === "settings" ? (
+                <NetworkDiagnosticsPanel
+                  busy={busy}
+                  diagnostics={networkDiagnostics}
+                  onCopyConnectionCode={() =>
+                    copyConnectionCodeValue(networkDiagnostics?.connection_code ?? receiveSession?.connection_code)
+                  }
+                  onOpenReceiveDir={(path) => openPath(path)}
+                  onRefresh={refreshDiagnosticsPanel}
+                />
+              ) : null}
             </div>
           )}
         </section>
@@ -1130,6 +1175,7 @@ type IconName =
   | "link"
   | "list"
   | "send"
+  | "settings"
   | "trash";
 
 function Icon({ name }: { name: IconName }) {
@@ -1144,6 +1190,12 @@ function Icon({ name }: { name: IconName }) {
       {name === "link" ? <path d="M10 13a5 5 0 0 0 7.07 0l2-2A5 5 0 0 0 12 4l-1.2 1.2M14 11a5 5 0 0 0-7.07 0l-2 2A5 5 0 0 0 12 20l1.2-1.2" /> : null}
       {name === "list" ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
+      {name === "settings" ? (
+        <>
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+          <path d="M19.4 15a7.8 7.8 0 0 0 .1-1l2-1.5-2-3.5-2.4 1a7.6 7.6 0 0 0-1.7-1L15 6H9l-.4 3a7.6 7.6 0 0 0-1.7 1l-2.4-1-2 3.5 2 1.5a7.8 7.8 0 0 0 .1 1l-2 1.5 2 3.5 2.4-1a7.6 7.6 0 0 0 1.7 1L9 22h6l.4-3a7.6 7.6 0 0 0 1.7-1l2.4 1 2-3.5-2-1.5Z" />
+        </>
+      ) : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
     </svg>
   );
@@ -1741,6 +1793,114 @@ function ReceivePanel({
   );
 }
 
+function NetworkDiagnosticsPanel({
+  busy,
+  diagnostics,
+  onCopyConnectionCode,
+  onOpenReceiveDir,
+  onRefresh
+}: {
+  busy: BusyMode | null;
+  diagnostics: NetworkDiagnosticsDto | null;
+  onCopyConnectionCode: () => void;
+  onOpenReceiveDir: (path: string) => void;
+  onRefresh: () => void;
+}) {
+  const receiveDir = diagnostics?.receive_dir ?? null;
+
+  return (
+    <section className="function-panel network-diagnostics">
+      <div className="panel-head">
+        <div>
+          <strong>{diagnostics ? diagnosticsStatusTitle(diagnostics) : "读取中"}</strong>
+          <span>{diagnostics?.suggested_action ?? "正在读取网络状态"}</span>
+        </div>
+        <div className="panel-actions">
+          <button className="tool-button" onClick={onRefresh} type="button">
+            刷新
+          </button>
+          {receiveDir ? (
+            <button className="tool-button" disabled={busy === "open"} onClick={() => onOpenReceiveDir(receiveDir)} type="button">
+              目录
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {diagnostics ? (
+        <div className="diagnostic-grid">
+          <DiagnosticRow
+            label="收件"
+            value={diagnostics.receive_listening ? "已监听" : "未监听"}
+            detail={optionalLabel(diagnostics.bind_addr)}
+          />
+          <DiagnosticRow
+            label="广播"
+            value={diagnostics.advertised ? "已广播" : "未广播"}
+            detail={`${diagnostics.discovery_phase} · ${diagnostics.service_type}`}
+          />
+          <DiagnosticRow
+            label="局域网"
+            value={optionalLabel(diagnostics.lan_ip)}
+            detail={lanIpsLabel(diagnostics.detected_lan_ips)}
+          />
+          <DiagnosticRow
+            label="设备"
+            value={`${diagnostics.nearby_device_count} 台附近 · ${diagnostics.trusted_device_count} 台可信`}
+            detail={diagnostics.last_seen_seconds_ago == null ? "未收到广播" : `${diagnostics.last_seen_seconds_ago}s 前`}
+          />
+          <DiagnosticRow
+            label="目录"
+            value={optionalLabel(receiveDir)}
+            detail={diagnostics.advertised_port == null ? "端口：无" : `端口：${diagnostics.advertised_port}`}
+          />
+          {diagnostics.connection_code ? (
+            <div className="diagnostic-row">
+              <span>连接码</span>
+              <div className="diagnostic-value has-action">
+                <code title={diagnostics.connection_code}>{diagnostics.connection_code}</code>
+                <button className="text-button" onClick={onCopyConnectionCode} type="button">
+                  复制
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <DiagnosticRow
+            label="错误"
+            value={diagnostics.last_error ?? "无"}
+            detail={diagnostics.discovery_message}
+            tone={diagnostics.last_error ? "error" : "normal"}
+          />
+        </div>
+      ) : (
+        <div className="diagnostic-empty">读取中</div>
+      )}
+    </section>
+  );
+}
+
+function DiagnosticRow({
+  detail,
+  label,
+  tone = "normal",
+  value
+}: {
+  detail?: string | null;
+  label: string;
+  tone?: "normal" | "error";
+  value: string;
+}) {
+  return (
+    <div className={tone === "error" ? "diagnostic-row is-error" : "diagnostic-row"}>
+      <span>{label}</span>
+      <div className="diagnostic-value">
+        <strong title={value}>{value}</strong>
+        {detail ? <small title={detail}>{detail}</small> : null}
+      </div>
+    </div>
+  );
+}
+
 function QueuePanel({
   busy,
   manualPaths,
@@ -2164,6 +2324,22 @@ function formatBytes(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+}
+
+function optionalLabel(value: string | number | null | undefined) {
+  if (value === null || value === undefined || value === "") return "无";
+  return String(value);
+}
+
+function lanIpsLabel(ips: string[]) {
+  return ips.length > 0 ? ips.join(" · ") : "未检测到";
+}
+
+function diagnosticsStatusTitle(diagnostics: NetworkDiagnosticsDto) {
+  if (!diagnostics.receive_listening) return "收件未监听";
+  if (diagnostics.last_error) return "网络异常";
+  if (!diagnostics.advertised) return "收件未广播";
+  return "网络可用";
 }
 
 function normalizeReceivePolicy(value: string): ReceivePolicyMode {

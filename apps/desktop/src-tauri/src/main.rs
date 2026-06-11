@@ -18,6 +18,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_app_snapshot,
             commands::get_discovery_status,
+            commands::get_network_diagnostics,
             commands::list_nearby_devices,
             commands::list_trusted_devices,
             commands::trust_nearby_device,

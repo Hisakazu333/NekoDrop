@@ -53,6 +53,25 @@ export interface DiscoveryStatusDto {
   last_error: string | null;
 }
 
+export interface NetworkDiagnosticsDto {
+  receive_listening: boolean;
+  bind_addr: string | null;
+  receive_dir: string | null;
+  connection_code: string | null;
+  discovery_phase: string;
+  discovery_message: string;
+  service_type: string;
+  advertised: boolean;
+  lan_ip: string | null;
+  advertised_port: number | null;
+  detected_lan_ips: string[];
+  nearby_device_count: number;
+  trusted_device_count: number;
+  last_seen_seconds_ago: number | null;
+  last_error: string | null;
+  suggested_action: string;
+}
+
 export interface TransferDto {
   id: string;
   root_name: string;

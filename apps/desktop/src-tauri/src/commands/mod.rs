@@ -31,8 +31,9 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
-    ActiveReceiveSession, AppState, PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer,
-    PendingReceiveResumeSummary, ReceiveDecision, TransferStatusState,
+    ActiveReceiveSession, AppState, DiscoveryStatusState, PendingPairingRequest,
+    PendingReceiveFile, PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision,
+    TransferStatusState,
 };
 use crate::network::{local_lan_ips, primary_lan_ip};
 use crate::transfer_history::{
@@ -256,6 +257,26 @@ pub struct DiscoveryStatusDto {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct NetworkDiagnosticsDto {
+    pub receive_listening: bool,
+    pub bind_addr: Option<String>,
+    pub receive_dir: Option<String>,
+    pub connection_code: Option<String>,
+    pub discovery_phase: String,
+    pub discovery_message: String,
+    pub service_type: String,
+    pub advertised: bool,
+    pub lan_ip: Option<String>,
+    pub advertised_port: Option<u16>,
+    pub detected_lan_ips: Vec<String>,
+    pub nearby_device_count: usize,
+    pub trusted_device_count: usize,
+    pub last_seen_seconds_ago: Option<u64>,
+    pub last_error: Option<String>,
+    pub suggested_action: String,
+}
+
 #[tauri::command]
 pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let config = state.config.lock().map_err(|error| error.to_string())?;
@@ -312,6 +333,95 @@ pub fn get_discovery_status(state: State<'_, AppState>) -> Result<DiscoveryStatu
             .map(|seen_at| seen_at.elapsed().as_secs()),
         last_error: status.last_error.clone(),
     })
+}
+
+#[tauri::command]
+pub fn get_network_diagnostics(state: State<'_, AppState>) -> Result<NetworkDiagnosticsDto, String> {
+    network_diagnostics_snapshot(
+        &state.receive_session,
+        &state.discovery_status,
+        &state.nearby_devices,
+        &state.trusted_devices,
+        local_lan_ips(),
+    )
+}
+
+fn network_diagnostics_snapshot(
+    receive_session: &Arc<Mutex<Option<ActiveReceiveSession>>>,
+    discovery_status: &Arc<Mutex<DiscoveryStatusState>>,
+    nearby_devices: &Arc<Mutex<Vec<Device>>>,
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    detected_lan_ips: Vec<IpAddr>,
+) -> Result<NetworkDiagnosticsDto, String> {
+    let session = receive_session
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let status = discovery_status
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let nearby_device_count = nearby_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .len();
+    let trusted_device_count = trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .len();
+
+    let receive_listening = session.is_some();
+    let suggested_action =
+        network_diagnostics_suggested_action(receive_listening, &status, nearby_device_count);
+
+    Ok(NetworkDiagnosticsDto {
+        receive_listening,
+        bind_addr: session.as_ref().map(|session| session.bind_addr.clone()),
+        receive_dir: session.as_ref().map(|session| session.receive_dir.clone()),
+        connection_code: session
+            .as_ref()
+            .map(|session| session.connection_code.clone()),
+        discovery_phase: status.phase,
+        discovery_message: status.message,
+        service_type: status.service_type,
+        advertised: status.advertised,
+        lan_ip: status.lan_ip,
+        advertised_port: status.port,
+        detected_lan_ips: detected_lan_ips
+            .into_iter()
+            .map(|ip| ip.to_string())
+            .collect(),
+        nearby_device_count,
+        trusted_device_count,
+        last_seen_seconds_ago: status
+            .last_seen_at
+            .map(|seen_at| seen_at.elapsed().as_secs()),
+        last_error: status.last_error,
+        suggested_action,
+    })
+}
+
+fn network_diagnostics_suggested_action(
+    receive_listening: bool,
+    status: &DiscoveryStatusState,
+    nearby_device_count: usize,
+) -> String {
+    if !receive_listening {
+        return "先打开收件，再让对方扫描附近设备或使用连接码。".to_string();
+    }
+    if status.phase == "unavailable" {
+        return "自动发现不可用，先使用连接码；如果仍失败，重启应用或检查 mDNS 权限。".to_string();
+    }
+    if status.last_error.is_some() {
+        return "检查 Wi-Fi/有线网络、VPN/代理、虚拟网卡和系统防火墙。".to_string();
+    }
+    if !status.advertised {
+        return "收件已开但尚未广播，等待几秒；如果持续如此，重新打开收件。".to_string();
+    }
+    if nearby_device_count == 0 {
+        return "等待附近设备出现，或复制连接码给对方。".to_string();
+    }
+    "选择可信设备发送；未配对设备先完成配对。".to_string()
 }
 
 #[tauri::command]
@@ -3076,6 +3186,56 @@ mod tests {
         assert_eq!(current_file.as_deref(), Some("drop/a.txt"));
         assert_eq!(bytes_transferred, 42);
         assert_eq!(total_bytes, 100);
+    }
+
+    #[test]
+    fn network_diagnostics_snapshot_reports_receive_and_discovery_state() {
+        let receive_session = Arc::new(Mutex::new(Some(ActiveReceiveSession {
+            bind_addr: "0.0.0.0:45821".to_string(),
+            receive_dir: "/tmp/NekoDrop".to_string(),
+            connection_code: "nekodrop-v1;transport=tcp;host=192.168.1.20;port=45821".to_string(),
+            cancel: Arc::new(AtomicBool::new(false)),
+        })));
+        let discovery_status = Arc::new(Mutex::new(DiscoveryStatusState {
+            phase: "active".to_string(),
+            message: "本机已广播，正在扫描附近设备".to_string(),
+            service_type: "_nekodrop._tcp.local.".to_string(),
+            advertised: true,
+            lan_ip: Some("192.168.1.20".to_string()),
+            port: Some(45821),
+            last_seen_at: None,
+            last_error: None,
+        }));
+        let nearby_devices = Arc::new(Mutex::new(vec![nearby_device(
+            "device-a",
+            "sha256:device-a",
+        )]));
+        let trusted_devices = Arc::new(Mutex::new(vec![trusted_record(
+            "device-a",
+            "MacBook",
+            "sha256:device-a",
+        )]));
+
+        let dto = network_diagnostics_snapshot(
+            &receive_session,
+            &discovery_status,
+            &nearby_devices,
+            &trusted_devices,
+            vec![IpAddr::from([192, 168, 1, 20]), IpAddr::from([10, 0, 0, 8])],
+        )
+        .unwrap();
+
+        assert!(dto.receive_listening);
+        assert_eq!(dto.bind_addr.as_deref(), Some("0.0.0.0:45821"));
+        assert_eq!(dto.connection_code.as_deref(), Some("nekodrop-v1;transport=tcp;host=192.168.1.20;port=45821"));
+        assert!(dto.advertised);
+        assert_eq!(dto.discovery_phase, "active");
+        assert_eq!(dto.lan_ip.as_deref(), Some("192.168.1.20"));
+        assert_eq!(dto.advertised_port, Some(45821));
+        assert_eq!(dto.detected_lan_ips, vec!["192.168.1.20", "10.0.0.8"]);
+        assert_eq!(dto.nearby_device_count, 1);
+        assert_eq!(dto.trusted_device_count, 1);
+        assert_eq!(dto.suggested_action, "选择可信设备发送；未配对设备先完成配对。");
     }
 
     fn nearby_device(device_id: &str, fingerprint: &str) -> Device {

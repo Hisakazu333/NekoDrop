@@ -118,6 +118,12 @@ p {
   background: #fff3ee;
 }
 
+.rail-bottom-stack {
+  display: grid;
+  align-self: end;
+  gap: 10px;
+}
+
 .rail-bottom {
   align-self: end;
 }
@@ -1117,6 +1123,10 @@ p {
   gap: 16px;
 }
 
+.network-diagnostics {
+  gap: 18px;
+}
+
 .panel-head {
   min-height: 44px;
 }
@@ -1248,6 +1258,85 @@ input {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.diagnostic-grid {
+  display: grid;
+  gap: 0;
+  min-width: 0;
+}
+
+.diagnostic-row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+  min-height: 40px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.diagnostic-row:first-child {
+  border-top: 0;
+}
+
+.diagnostic-row > span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.diagnostic-value {
+  display: grid;
+  gap: 4px;
+  align-items: baseline;
+  min-width: 0;
+}
+
+.diagnostic-value.has-action {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+
+.diagnostic-value strong,
+.diagnostic-value small,
+.diagnostic-value code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.diagnostic-value strong {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 760;
+}
+
+.diagnostic-value small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 680;
+}
+
+.diagnostic-value code {
+  padding: 0;
+  color: #4b535d;
+  background: transparent;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.diagnostic-row.is-error .diagnostic-value strong {
+  color: var(--red);
+}
+
+.diagnostic-empty {
+  display: grid;
+  min-height: 120px;
+  place-items: center;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .incoming-offer {

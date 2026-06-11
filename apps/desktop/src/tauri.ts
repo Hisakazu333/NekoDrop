@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 type CommandName =
   | "get_app_snapshot"
   | "get_discovery_status"
+  | "get_network_diagnostics"
   | "list_nearby_devices"
   | "list_trusted_devices"
   | "trust_nearby_device"
