@@ -53,6 +53,14 @@ pub struct PendingReceiveFile {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PendingReceiveResumeSummary {
+    pub resumable_file_count: usize,
+    pub completed_file_count: usize,
+    pub partial_file_count: usize,
+    pub received_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiveDecision {
     Accept,
     Decline,
@@ -68,6 +76,7 @@ pub struct PendingReceiveOffer {
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<PendingReceiveFile>,
+    pub resume_summary: Option<PendingReceiveResumeSummary>,
     pub decision: Arc<(Mutex<Option<ReceiveDecision>>, Condvar)>,
 }
 

@@ -23,6 +23,7 @@ use nekodrop_service::{
     TransferProgressEvent, TransferReceiveReport, TransferSendReport, TransferSourceFile,
     TransferSourcePlan,
 };
+use nekodrop_storage::{build_resume_plan_for_files, ResumeExpectedFile, ResumePlan};
 use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
 use tauri::State;
@@ -30,7 +31,7 @@ use tauri::State;
 use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
     ActiveReceiveSession, AppState, PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer,
-    ReceiveDecision, TransferStatusState,
+    PendingReceiveResumeSummary, ReceiveDecision, TransferStatusState,
 };
 use crate::network::{local_lan_ips, primary_lan_ip};
 use crate::transfer_history::{
@@ -184,6 +185,14 @@ pub struct PendingReceiveFileDto {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReceiveResumeSummaryDto {
+    pub resumable_file_count: usize,
+    pub completed_file_count: usize,
+    pub partial_file_count: usize,
+    pub received_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct PendingReceiveOfferDto {
     pub transfer_id: String,
     pub root_name: String,
@@ -193,6 +202,7 @@ pub struct PendingReceiveOfferDto {
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<PendingReceiveFileDto>,
+    pub resume_summary: Option<ReceiveResumeSummaryDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -1129,6 +1139,7 @@ pub fn start_receive_once(
                 let pending_for_pairing = pending_pairing_request.clone();
                 let status_for_decision = transfer_status.clone();
                 let status_for_progress = transfer_status.clone();
+                let receive_dir_for_decision = receive_dir_for_thread.clone();
                 let trusted_for_pairing = trusted_devices.clone();
                 let local_for_pairing = local_identity.clone();
                 let peer_host_for_pairing = peer_host.clone();
@@ -1140,12 +1151,15 @@ pub fn start_receive_once(
                     &mut stream,
                     &receive_dir_for_thread,
                     move |offer| {
+                        let resume_summary =
+                            pending_resume_summary_from_offer(&receive_dir_for_decision, offer);
                         wait_for_receive_decision(
                             offer,
                             &pending_for_decision,
                             &status_for_decision,
                             receive_policy,
                             &trusted_for_decision,
+                            resume_summary,
                         )
                     },
                     move |request| {
@@ -1779,7 +1793,47 @@ fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
                 sha256: file.sha256.clone(),
             })
             .collect(),
+        resume_summary: offer.resume_summary.map(|summary| ReceiveResumeSummaryDto {
+            resumable_file_count: summary.resumable_file_count,
+            completed_file_count: summary.completed_file_count,
+            partial_file_count: summary.partial_file_count,
+            received_bytes: summary.received_bytes,
+        }),
     }
+}
+
+fn pending_resume_summary_from_offer(
+    receive_dir: &std::path::Path,
+    offer: &TransferOffer,
+) -> Option<PendingReceiveResumeSummary> {
+    let mut expected_files = Vec::with_capacity(offer.files.len());
+    for file in &offer.files {
+        expected_files.push(
+            ResumeExpectedFile::new(
+                file.manifest_path.clone(),
+                file.size,
+                Some(file.sha256.clone()),
+            )
+            .ok()?,
+        );
+    }
+
+    let plan =
+        build_resume_plan_for_files(receive_dir, &offer.transfer_id, &expected_files).ok()?;
+    pending_resume_summary_from_plan(&plan)
+}
+
+fn pending_resume_summary_from_plan(plan: &ResumePlan) -> Option<PendingReceiveResumeSummary> {
+    if plan.is_empty() {
+        return None;
+    }
+
+    Some(PendingReceiveResumeSummary {
+        resumable_file_count: plan.files.len(),
+        completed_file_count: plan.completed_file_count(),
+        partial_file_count: plan.partial_file_count(),
+        received_bytes: plan.total_received_bytes(),
+    })
 }
 
 fn pending_pairing_request_to_dto(request: &PendingPairingRequest) -> PendingPairingRequestDto {
@@ -1849,6 +1903,7 @@ fn wait_for_receive_decision(
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
     receive_policy: ReceivePolicy,
     trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    resume_summary: Option<PendingReceiveResumeSummary>,
 ) -> bool {
     if receive_policy == ReceivePolicy::BlockAll {
         set_transfer_status(
@@ -1906,6 +1961,7 @@ fn wait_for_receive_decision(
                 sha256: file.sha256.clone(),
             })
             .collect(),
+        resume_summary,
         decision: decision.clone(),
     };
 
@@ -2647,14 +2703,51 @@ mod tests {
     }
 
     #[test]
+    fn pending_receive_offer_dto_includes_resume_summary() {
+        let offer = PendingReceiveOffer {
+            transfer_id: "transfer-a".to_string(),
+            root_name: "drop".to_string(),
+            file_count: 2,
+            total_bytes: 4096,
+            sender_device_id: None,
+            sender_device_name: None,
+            sender_public_key_fingerprint: None,
+            files: Vec::new(),
+            resume_summary: Some(PendingReceiveResumeSummary {
+                resumable_file_count: 2,
+                completed_file_count: 1,
+                partial_file_count: 1,
+                received_bytes: 1536,
+            }),
+            decision: Arc::new((Mutex::new(None), Condvar::new())),
+        };
+
+        let dto = pending_offer_to_dto(&offer);
+
+        let summary = dto
+            .resume_summary
+            .expect("resume summary should be present");
+        assert_eq!(summary.resumable_file_count, 2);
+        assert_eq!(summary.completed_file_count, 1);
+        assert_eq!(summary.partial_file_count, 1);
+        assert_eq!(summary.received_bytes, 1536);
+    }
+
+    #[test]
     fn receive_policy_block_all_rejects_offer_without_pending_prompt() {
         let pending = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(None));
         let trusted = Arc::new(Mutex::new(Vec::new()));
         let offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
 
-        let accepted =
-            wait_for_receive_decision(&offer, &pending, &status, ReceivePolicy::BlockAll, &trusted);
+        let accepted = wait_for_receive_decision(
+            &offer,
+            &pending,
+            &status,
+            ReceivePolicy::BlockAll,
+            &trusted,
+            None,
+        );
 
         assert!(!accepted);
         assert!(pending.lock().unwrap().is_none());
@@ -2689,6 +2782,7 @@ mod tests {
             &status,
             ReceivePolicy::AutoAcceptTrusted,
             &trusted,
+            None,
         );
 
         assert!(accepted);

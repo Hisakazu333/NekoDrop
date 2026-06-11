@@ -1564,6 +1564,9 @@ function ReceivePanel({
     pendingOffer?.sender_device_id ||
     null;
   const pendingOfferPreview = pendingOffer ? pendingOfferFilePreview(pendingOffer.files) : null;
+  const pendingOfferResumeSummary = pendingOffer
+    ? pendingOfferResumeSummaryLabel(pendingOffer.resume_summary)
+    : null;
   const receiveReportSender =
     receiveReport?.sender_device_name?.trim() ||
     receiveReport?.sender_device_id ||
@@ -1641,6 +1644,7 @@ function ReceivePanel({
             <span>
               {pendingOffer.root_name} · {pendingOffer.file_count} 个文件 · {formatBytes(pendingOffer.total_bytes)}
             </span>
+            {pendingOfferResumeSummary ? <small>{pendingOfferResumeSummary}</small> : null}
             {pendingOfferPreview ? <small>{pendingOfferPreview}</small> : null}
           </div>
           <div className="offer-actions">
@@ -2132,6 +2136,23 @@ function pendingOfferFilePreview(files: PendingReceiveOfferDto["files"]) {
   const preview = files.slice(0, 3).map((file) => file.manifest_path).join(" · ");
   const rest = files.length > 3 ? ` +${files.length - 3}` : "";
   return `${preview}${rest}`;
+}
+
+function pendingOfferResumeSummaryLabel(summary: PendingReceiveOfferDto["resume_summary"]) {
+  if (!summary || summary.resumable_file_count <= 0) return null;
+
+  const parts: string[] = [];
+  if (summary.partial_file_count > 0) {
+    parts.push(`可继续 ${summary.partial_file_count} 个文件`);
+  }
+  if (summary.completed_file_count > 0) {
+    parts.push(`可跳过 ${summary.completed_file_count} 个已完成文件`);
+  }
+  if (parts.length === 0) {
+    parts.push(`可继续 ${summary.resumable_file_count} 个文件`);
+  }
+
+  return `${parts.join(" · ")} · 已接收 ${formatBytes(summary.received_bytes)}`;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {

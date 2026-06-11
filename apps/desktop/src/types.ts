@@ -137,6 +137,13 @@ export interface PendingReceiveFileDto {
   sha256: string;
 }
 
+export interface ReceiveResumeSummaryDto {
+  resumable_file_count: number;
+  completed_file_count: number;
+  partial_file_count: number;
+  received_bytes: number;
+}
+
 export interface PendingReceiveOfferDto {
   transfer_id: string;
   root_name: string;
@@ -146,6 +153,7 @@ export interface PendingReceiveOfferDto {
   sender_device_name: string | null;
   sender_public_key_fingerprint: string | null;
   files: PendingReceiveFileDto[];
+  resume_summary: ReceiveResumeSummaryDto | null;
 }
 
 export interface PendingPairingRequestDto {
