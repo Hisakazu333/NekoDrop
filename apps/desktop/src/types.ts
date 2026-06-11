@@ -110,6 +110,17 @@ export interface ReceiveSessionDto {
   connection_code: string;
 }
 
+export interface ReceivePortDiagnosticsDto {
+  phase: "closed" | "listening" | "no_lan_ip" | "invalid_bind_addr";
+  listening: boolean;
+  bind_addr: string | null;
+  advertised_host: string | null;
+  port: number | null;
+  lan_ips: string[];
+  message: string;
+  checks: string[];
+}
+
 export interface SentFileDto {
   manifest_path: string;
   bytes_sent: number;
