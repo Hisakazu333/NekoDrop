@@ -520,7 +520,13 @@ pub fn resend_transfer(
     }
 
     let (endpoint, peer) = endpoint_and_peer_for_history_record(&state, &record)?;
-    send_paths_to_endpoint(&state, endpoint, record.source_paths.join("\n"), peer)
+    send_paths_to_endpoint_with_history_id(
+        &state,
+        endpoint,
+        record.source_paths.join("\n"),
+        peer,
+        Some(record.id.clone()),
+    )
 }
 
 #[tauri::command]
@@ -759,6 +765,16 @@ fn send_paths_to_endpoint(
     paths_text: String,
     peer: TransferPeer,
 ) -> Result<SendReportDto, String> {
+    send_paths_to_endpoint_with_history_id(state, endpoint, paths_text, peer, None)
+}
+
+fn send_paths_to_endpoint_with_history_id(
+    state: &AppState,
+    endpoint: Endpoint,
+    paths_text: String,
+    peer: TransferPeer,
+    history_id_override: Option<String>,
+) -> Result<SendReportDto, String> {
     validate_endpoint_for_desktop_send(&endpoint)?;
     let paths = parse_paths_text(&paths_text)?;
     let source_paths = path_bufs_to_strings(&paths);
@@ -766,7 +782,7 @@ fn send_paths_to_endpoint(
     let sender_identity = state.device_identity.public_identity();
     reject_self_peer(&sender_identity, &peer)?;
     let started_at_ms = now_ms();
-    let transfer_id = format!("send-{started_at_ms}");
+    let transfer_id = history_transfer_id(started_at_ms, history_id_override.as_deref());
     let cancel = Arc::new(AtomicBool::new(false));
     {
         let mut active_cancel = state
@@ -889,6 +905,14 @@ fn send_paths_to_endpoint(
     refresh_trusted_device_contact_from_peer(&state.trusted_devices, &peer);
     let _ = push_transfer_history_record(&state.transfer_history, record);
     Ok(send_report_to_dto(&report))
+}
+
+fn history_transfer_id(started_at_ms: u128, existing_transfer_id: Option<&str>) -> String {
+    existing_transfer_id
+        .map(str::trim)
+        .filter(|id| !id.is_empty())
+        .map(str::to_string)
+        .unwrap_or_else(|| format!("send-{started_at_ms}"))
 }
 
 #[tauri::command]
@@ -2611,6 +2635,15 @@ mod tests {
         };
 
         assert!(reject_self_peer(&identity, &peer).is_ok());
+    }
+
+    #[test]
+    fn history_retry_reuses_existing_transfer_id() {
+        assert_eq!(
+            history_transfer_id(42, Some("send-original")),
+            "send-original"
+        );
+        assert_eq!(history_transfer_id(42, None), "send-42");
     }
 
     #[test]

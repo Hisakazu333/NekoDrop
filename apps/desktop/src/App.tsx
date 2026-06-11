@@ -523,12 +523,13 @@ export function App() {
     setError(null);
     setSendReport(null);
     try {
+      const actionLabel = transferRetryActionLabel(transfer);
       const report = await invokeCommand<SendReportDto>("resend_transfer", {
         transferId: transfer.id
       });
       setSendReport(report);
       setMode("send");
-      setToast(`重发完成：${report.file_count} 个文件`);
+      setToast(`${actionLabel}完成：${report.file_count} 个文件`);
       await refreshTransfers();
     } catch (nextError) {
       const message = deviceSendErrorMessage(errorMessage(nextError));
@@ -1838,7 +1839,7 @@ function HistoryPanel({
                       </button>
                       {transfer.direction === "send" ? (
                         <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                          重发
+                          {transferRetryActionLabel(transfer)}
                         </button>
                       ) : null}
                       <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -1998,7 +1999,7 @@ function RecentActivity({
                     </button>
                     {transfer.direction === "send" ? (
                       <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                        重发
+                        {transferRetryActionLabel(transfer)}
                       </button>
                     ) : null}
                     <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -2147,14 +2148,41 @@ function transferDirectionLabel(transfer: TransferDto) {
 }
 
 function transferMetaLabel(transfer: TransferDto) {
+  const recovery = transferRecoveryLabel(transfer);
   if (transfer.status === "failed") {
-    return transfer.error_message ?? "失败";
+    const message = transfer.error_message ?? "失败";
+    return recovery ? `${message} · ${recovery}` : message;
+  }
+
+  if (transfer.status === "cancelled" && recovery) {
+    return `已取消 · ${recovery}`;
   }
 
   const size = formatBytes(transfer.total_bytes);
   const count = `${transfer.file_count} 个`;
   const peer = transfer.peer_name ?? transfer.target_host;
   return peer ? `${count} · ${size} · ${peer}` : `${count} · ${size}`;
+}
+
+function transferRetryActionLabel(transfer: TransferDto) {
+  if (isRecoverableSendTransfer(transfer)) return "继续发送";
+  if (transfer.status === "failed" || transfer.status === "cancelled") return "重试";
+  return "重发";
+}
+
+function isRecoverableSendTransfer(transfer: TransferDto) {
+  return (
+    transfer.direction === "send" &&
+    (transfer.status === "failed" || transfer.status === "cancelled") &&
+    transfer.total_bytes > 0 &&
+    transfer.transferred_bytes > 0 &&
+    transfer.transferred_bytes < transfer.total_bytes
+  );
+}
+
+function transferRecoveryLabel(transfer: TransferDto) {
+  if (!isRecoverableSendTransfer(transfer)) return null;
+  return `已传 ${formatBytes(transfer.transferred_bytes)} / ${formatBytes(transfer.total_bytes)}`;
 }
 
 function phaseLabel(phase: string) {
