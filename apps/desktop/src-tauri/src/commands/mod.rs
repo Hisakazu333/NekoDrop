@@ -2861,6 +2861,24 @@ mod tests {
     }
 
     #[test]
+    fn parse_dialog_output_strips_utf8_bom_from_windows_stdout() {
+        let output = b"\xEF\xBB\xBFI:\\\xe6\x96\x87\xe4\xbb\xb6\\asmr\\z\\16\xe5\x88\x86\xe9\x92\x9f.m4a\r\n";
+
+        let paths = parse_dialog_output(output);
+
+        assert_eq!(paths, vec!["I:\\文件\\asmr\\z\\16分钟.m4a"]);
+    }
+
+    #[test]
+    fn windows_dialog_script_forces_utf8_stdout_for_chinese_paths() {
+        let script = windows_dialog_script(PathDialogKind::Files);
+
+        assert!(script.contains("[Console]::OutputEncoding"));
+        assert!(script.contains("UTF8Encoding"));
+        assert!(script.contains("$OutputEncoding"));
+    }
+
+    #[test]
     fn pending_receive_offer_dto_includes_resume_summary() {
         let offer = PendingReceiveOffer {
             transfer_id: "transfer-a".to_string(),
@@ -3132,10 +3150,55 @@ enum PathDialogKind {
 fn parse_dialog_output(output: &[u8]) -> Vec<String> {
     String::from_utf8_lossy(output)
         .lines()
-        .map(str::trim)
+        .map(|line| line.trim_start_matches('\u{feff}').trim())
         .filter(|line| !line.is_empty())
         .map(ToOwned::to_owned)
         .collect()
+}
+
+fn windows_dialog_script(kind: PathDialogKind) -> String {
+    let picker_script = match kind {
+        PathDialogKind::Files => {
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.OpenFileDialog
+$dialog.Multiselect = $true
+$dialog.Title = '选择要发送的文件'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $dialog.FileNames -join "`n"
+}
+"#
+        }
+        PathDialogKind::Folders => {
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择要发送的文件夹'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $dialog.SelectedPath
+}
+"#
+        }
+        PathDialogKind::SingleFolder => {
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择接收目录'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $dialog.SelectedPath
+}
+"#
+        }
+    };
+
+    format!(
+        r#"
+$utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
+[Console]::OutputEncoding = $utf8NoBom
+$OutputEncoding = $utf8NoBom
+{picker_script}
+"#
+    )
 }
 
 #[cfg(target_os = "macos")]
@@ -3188,42 +3251,10 @@ return POSIX path of pickedItem
 
 #[cfg(target_os = "windows")]
 fn choose_paths(kind: PathDialogKind) -> Result<Vec<String>, String> {
-    let script = match kind {
-        PathDialogKind::Files => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Multiselect = $true
-$dialog.Title = '选择要发送的文件'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.FileNames -join "`n"
-}
-"#
-        }
-        PathDialogKind::Folders => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择要发送的文件夹'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.SelectedPath
-}
-"#
-        }
-        PathDialogKind::SingleFolder => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择接收目录'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.SelectedPath
-}
-"#
-        }
-    };
+    let script = windows_dialog_script(kind);
 
     let output = Command::new("powershell")
-        .args(["-NoProfile", "-STA", "-Command", script])
+        .args(["-NoProfile", "-STA", "-Command", &script])
         .output()
         .map_err(|error| format!("无法打开系统选择窗口：{error}"))?;
 
