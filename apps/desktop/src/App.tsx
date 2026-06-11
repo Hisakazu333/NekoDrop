@@ -4,6 +4,11 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { invokeCommand } from "./tauri";
 import { hasReceiveDiagnosticsWarning } from "./receiveDiagnostics";
+import {
+  broadcastTroubleshootingHint,
+  discoveryTroubleshootingHint,
+  unavailableDiscoveryHint
+} from "./networkPermissionHints";
 import type {
   AppSnapshot,
   DeviceDto,
@@ -2362,7 +2367,7 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
       label: "发现异常",
       subtitle: status.last_error ? "mDNS 异常" : "不可用",
       emptyTitle: "发现异常",
-      emptyBody: "使用备用码，或重启应用后再试",
+      emptyBody: unavailableDiscoveryHint(),
       targetLabel: "发现异常 · 备用码",
       isError: true
     };
@@ -2374,8 +2379,8 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
       label: hasNetworkError ? "广播异常" : "未广播",
       subtitle: hasNetworkError ? "检查网络" : "收件关闭",
       emptyTitle: hasNetworkError ? "广播异常" : "未广播",
-      emptyBody: hasNetworkError ? "检查网络、VPN、代理或虚拟网卡" : "打开收件后会广播本机",
-      targetLabel: hasNetworkError ? "广播异常 · 检查网络" : "未广播 · 打开收件",
+      emptyBody: hasNetworkError ? broadcastTroubleshootingHint() : "打开收件后会广播本机",
+      targetLabel: hasNetworkError ? "广播异常 · 权限/网络" : "未广播 · 打开收件",
       isError: hasNetworkError
     };
   }
@@ -2395,8 +2400,8 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
     label: "扫描中",
     subtitle: "搜索中",
     emptyTitle: "无设备",
-    emptyBody: "确认同一网络、防火墙允许、VPN/代理关闭",
-    targetLabel: "扫描中 · 同网段",
+    emptyBody: discoveryTroubleshootingHint(),
+    targetLabel: "扫描中 · 权限/同网段",
     isError: false
   };
 }
