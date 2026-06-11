@@ -256,6 +256,18 @@ pub struct DiscoveryStatusDto {
     pub last_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct ConnectionTargetDiagnosticsDto {
+    pub can_attempt: bool,
+    pub input_kind: String,
+    pub target_host: Option<String>,
+    pub peer_name: Option<String>,
+    pub device_id: Option<String>,
+    pub fingerprint: Option<String>,
+    pub message: String,
+    pub suggested_action: String,
+}
+
 #[tauri::command]
 pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let config = state.config.lock().map_err(|error| error.to_string())?;
@@ -527,6 +539,14 @@ pub fn send_paths_to_code(
 }
 
 #[tauri::command]
+pub fn diagnose_connection_target(
+    connection_code: String,
+) -> Result<ConnectionTargetDiagnosticsDto, String> {
+    let lan_ips = local_lan_ips();
+    connection_target_diagnostics_from_input(&connection_code, &lan_ips)
+}
+
+#[tauri::command]
 pub fn send_paths_to_device(
     state: State<'_, AppState>,
     device_id: String,
@@ -739,6 +759,109 @@ fn endpoint_and_peer_from_connection_input(
             Err(friendly_transfer_error(&error.to_string()))
         }
     }
+}
+
+fn connection_target_diagnostics_from_input(
+    value: &str,
+    current_lan_ips: &[IpAddr],
+) -> Result<ConnectionTargetDiagnosticsDto, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(ConnectionTargetDiagnosticsDto {
+            can_attempt: false,
+            input_kind: "empty".to_string(),
+            target_host: None,
+            peer_name: None,
+            device_id: None,
+            fingerprint: None,
+            message: "未输入连接码或 IP:端口。".to_string(),
+            suggested_action: "复制对方收件页生成的连接码，或输入 192.168.x.x:端口。".to_string(),
+        });
+    }
+
+    let parsed = match ConnectionTicket::parse(value) {
+        Ok(ticket) => {
+            let endpoint = ticket.endpoint.clone();
+            let target_host = endpoint_label(&endpoint);
+            let display_name = ticket
+                .device_name
+                .clone()
+                .unwrap_or_else(|| target_host.clone());
+            ConnectionTargetDiagnosticsDto {
+                can_attempt: true,
+                input_kind: "connection_code".to_string(),
+                target_host: Some(target_host),
+                peer_name: ticket.device_name.clone(),
+                device_id: ticket.device_id.clone(),
+                fingerprint: ticket.fingerprint.clone(),
+                message: format!("连接码目标：{display_name}"),
+                suggested_action:
+                    "可尝试发送；如果连接失败，检查接收端收件状态、Windows 防火墙和同网段。"
+                        .to_string(),
+            }
+        }
+        Err(_) if looks_like_endpoint_label(value) => {
+            let endpoint = match endpoint_from_label(value) {
+                Ok(endpoint) => endpoint,
+                Err(message) => {
+                    return Ok(ConnectionTargetDiagnosticsDto {
+                        can_attempt: false,
+                        input_kind: "manual_endpoint".to_string(),
+                        target_host: None,
+                        peer_name: None,
+                        device_id: None,
+                        fingerprint: None,
+                        message,
+                        suggested_action: "重新输入 IP:端口，或复制对方收件页生成的完整连接码。"
+                            .to_string(),
+                    });
+                }
+            };
+            ConnectionTargetDiagnosticsDto {
+                can_attempt: true,
+                input_kind: "manual_endpoint".to_string(),
+                target_host: Some(endpoint_label(&endpoint)),
+                peer_name: None,
+                device_id: None,
+                fingerprint: None,
+                message: format!("备用地址：{}", endpoint_label(&endpoint)),
+                suggested_action:
+                    "备用地址没有设备身份，只建议调试时使用；正式发送优先选择附近设备或连接码。"
+                        .to_string(),
+            }
+        }
+        Err(error) => {
+            return Ok(ConnectionTargetDiagnosticsDto {
+                can_attempt: false,
+                input_kind: "invalid".to_string(),
+                target_host: None,
+                peer_name: None,
+                device_id: None,
+                fingerprint: None,
+                message: friendly_transfer_error(&error.to_string()),
+                suggested_action: "重新复制对方收件页生成的连接码，或改用附近设备。".to_string(),
+            });
+        }
+    };
+
+    let endpoint = parsed
+        .target_host
+        .as_deref()
+        .and_then(|target| endpoint_from_label(target).ok());
+    if let Some(endpoint) = endpoint {
+        if let Err(message) =
+            validate_endpoint_for_desktop_send_with_lan_ips(&endpoint, current_lan_ips)
+        {
+            return Ok(ConnectionTargetDiagnosticsDto {
+                can_attempt: false,
+                message,
+                suggested_action: "按提示修正目标后再发送。".to_string(),
+                ..parsed
+            });
+        }
+    }
+
+    Ok(parsed)
 }
 
 fn looks_like_endpoint_label(value: &str) -> bool {
@@ -2510,6 +2633,14 @@ fn endpoint_from_label(value: &str) -> Result<Endpoint, String> {
 }
 
 fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String> {
+    let lan_ips = local_lan_ips();
+    validate_endpoint_for_desktop_send_with_lan_ips(endpoint, &lan_ips)
+}
+
+fn validate_endpoint_for_desktop_send_with_lan_ips(
+    endpoint: &Endpoint,
+    current_lan_ips: &[IpAddr],
+) -> Result<(), String> {
     if endpoint.transport.as_str() != "tcp" {
         return Err(friendly_transfer_error(&format!(
             "unsupported transport: requested {}",
@@ -2537,7 +2668,7 @@ fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String>
                 endpoint.port
             )));
         }
-        if is_current_lan_ip(ip, &local_lan_ips()) {
+        if is_current_lan_ip(ip, current_lan_ips) {
             return Err(
                 "目标地址是本机局域网地址，不能把文件发送给自己。请选择另一台设备或复制对方连接码。"
                     .to_string(),
@@ -2775,6 +2906,62 @@ mod tests {
         assert_eq!(peer.device_id.as_deref(), Some("device-a"));
         assert_eq!(peer.name.as_deref(), Some("MacBook"));
         assert_eq!(peer.fingerprint.as_deref(), Some("sha256:abc"));
+    }
+
+    #[test]
+    fn connection_target_diagnostics_reports_connection_code_identity() {
+        let code = ConnectionTicket::new(Endpoint::tcp("192.168.1.20", 45821))
+            .unwrap()
+            .with_device_id("device-a")
+            .with_device_name("MacBook")
+            .with_fingerprint("sha256:abc")
+            .to_code()
+            .unwrap();
+
+        let diagnostics = connection_target_diagnostics_from_input(&code, &[]).unwrap();
+
+        assert!(diagnostics.can_attempt);
+        assert_eq!(diagnostics.input_kind, "connection_code");
+        assert_eq!(
+            diagnostics.target_host.as_deref(),
+            Some("192.168.1.20:45821")
+        );
+        assert_eq!(diagnostics.device_id.as_deref(), Some("device-a"));
+        assert_eq!(diagnostics.peer_name.as_deref(), Some("MacBook"));
+        assert_eq!(diagnostics.fingerprint.as_deref(), Some("sha256:abc"));
+        assert!(diagnostics.message.contains("连接码"));
+    }
+
+    #[test]
+    fn connection_target_diagnostics_reports_manual_endpoint_without_identity() {
+        let diagnostics =
+            connection_target_diagnostics_from_input("192.168.1.20:45821", &[]).unwrap();
+
+        assert!(diagnostics.can_attempt);
+        assert_eq!(diagnostics.input_kind, "manual_endpoint");
+        assert_eq!(
+            diagnostics.target_host.as_deref(),
+            Some("192.168.1.20:45821")
+        );
+        assert!(diagnostics.device_id.is_none());
+        assert!(diagnostics.message.contains("备用地址"));
+        assert!(diagnostics.suggested_action.contains("调试"));
+    }
+
+    #[test]
+    fn connection_target_diagnostics_explains_unusable_targets() {
+        let loopback = connection_target_diagnostics_from_input("127.0.0.1:45821", &[]).unwrap();
+        assert!(!loopback.can_attempt);
+        assert_eq!(loopback.input_kind, "manual_endpoint");
+        assert!(loopback.message.contains("指向了本机"));
+
+        let self_target = connection_target_diagnostics_from_input(
+            "192.168.1.20:45821",
+            &[IpAddr::from([192, 168, 1, 20])],
+        )
+        .unwrap();
+        assert!(!self_target.can_attempt);
+        assert!(self_target.message.contains("本机局域网地址"));
     }
 
     #[test]

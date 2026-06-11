@@ -5,6 +5,7 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { invokeCommand } from "./tauri";
 import type {
   AppSnapshot,
+  ConnectionTargetDiagnosticsDto,
   DeviceDto,
   DiscoveryStatusDto,
   PendingPairingRequestDto,
@@ -68,6 +69,7 @@ export function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
+  const [connectionDiagnostics, setConnectionDiagnostics] = useState<ConnectionTargetDiagnosticsDto | null>(null);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
   const [busy, setBusy] = useState<BusyMode | null>(null);
@@ -96,7 +98,12 @@ export function App() {
     [selectedDeviceId, selectedDeviceSnapshot, trustedNearbyDevices]
   );
   const trimmedConnectionCode = connectionCode.trim();
-  const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
+  const connectionTargetBlocked =
+    trimmedConnectionCode.length > 0 && connectionDiagnostics?.can_attempt === false;
+  const canSend =
+    transferPaths.length > 0 &&
+    !busy &&
+    (Boolean(selectedDevice) || (trimmedConnectionCode.length > 0 && !connectionTargetBlocked));
   const receiveState = receiveSession
     ? pendingPairingRequest
       ? "等待配对"
@@ -164,6 +171,31 @@ export function App() {
     setSelectedDeviceId(trustedNearbyDevices[0].id);
     setSelectedDeviceSnapshot(trustedNearbyDevices[0]);
   }, [connectionCodeOpen, mode, selectedDeviceId, trimmedConnectionCode.length, trustedNearbyDevices]);
+
+  useEffect(() => {
+    if (trimmedConnectionCode.length === 0) {
+      setConnectionDiagnostics(null);
+      return;
+    }
+
+    let active = true;
+    const timer = window.setTimeout(() => {
+      invokeCommand<ConnectionTargetDiagnosticsDto>("diagnose_connection_target", {
+        connectionCode: trimmedConnectionCode
+      })
+        .then((diagnostics) => {
+          if (active) setConnectionDiagnostics(diagnostics);
+        })
+        .catch(() => {
+          if (active) setConnectionDiagnostics(null);
+        });
+    }, 220);
+
+    return () => {
+      active = false;
+      window.clearTimeout(timer);
+    };
+  }, [trimmedConnectionCode]);
 
   useEffect(() => {
     if (!transferStatus || transferStatus.phase !== "transferring") {
@@ -875,17 +907,20 @@ export function App() {
                       <span>{composerSubtitle}</span>
                     </div>
                     {connectionCodeOpen ? (
-                      <textarea
-                        className="composer-code"
-                        value={connectionCode}
-                        onChange={(event) => {
-                          setConnectionCode(event.target.value);
-                          setSelectedDeviceId(null);
-                          setSelectedDeviceSnapshot(null);
-                        }}
-                        aria-label="对方连接码或地址"
-                        placeholder="连接码或 IP:端口"
-                      />
+                      <>
+                        <textarea
+                          className="composer-code"
+                          value={connectionCode}
+                          onChange={(event) => {
+                            setConnectionCode(event.target.value);
+                            setSelectedDeviceId(null);
+                            setSelectedDeviceSnapshot(null);
+                          }}
+                          aria-label="对方连接码或地址"
+                          placeholder="连接码或 IP:端口"
+                        />
+                        <ConnectionDiagnosticLine diagnostics={connectionDiagnostics} />
+                      </>
                     ) : null}
                     <div className="composer-actions">
                       <div className="composer-toolset">
@@ -1000,6 +1035,7 @@ export function App() {
                     busy={busy}
                     connectionCode={connectionCode}
                     connectionCodeOpen={connectionCodeOpen}
+                    connectionDiagnostics={connectionDiagnostics}
                     discoveryStatus={discoveryStatus}
                     devices={nearbyDevices}
                     receiveSession={receiveSession}
@@ -1149,6 +1185,24 @@ function Icon({ name }: { name: IconName }) {
   );
 }
 
+function ConnectionDiagnosticLine({
+  diagnostics
+}: {
+  diagnostics: ConnectionTargetDiagnosticsDto | null;
+}) {
+  if (!diagnostics) return null;
+
+  return (
+    <div
+      className={diagnostics.can_attempt ? "connection-diagnostic" : "connection-diagnostic is-error"}
+      title={diagnostics.suggested_action}
+    >
+      <strong>{connectionDiagnosticKindLabel(diagnostics.input_kind)}</strong>
+      <span>{diagnostics.message}</span>
+    </div>
+  );
+}
+
 function TargetStrip({
   busy,
   discoveryStatus,
@@ -1211,6 +1265,7 @@ function TargetPanel({
   busy,
   connectionCode,
   connectionCodeOpen,
+  connectionDiagnostics,
   discoveryStatus,
   devices,
   receiveSession,
@@ -1228,6 +1283,7 @@ function TargetPanel({
   busy: BusyMode | null;
   connectionCode: string;
   connectionCodeOpen: boolean;
+  connectionDiagnostics: ConnectionTargetDiagnosticsDto | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
   receiveSession: ReceiveSessionDto | null;
@@ -1265,13 +1321,16 @@ function TargetPanel({
           </button>
         </div>
         {connectionCodeOpen ? (
-          <textarea
-            className="target-code"
-            value={connectionCode}
-            onChange={(event) => setConnectionCode(event.target.value)}
-            aria-label="对方连接码或地址"
-            placeholder="连接码或 IP:端口"
-          />
+          <>
+            <textarea
+              className="target-code"
+              value={connectionCode}
+              onChange={(event) => setConnectionCode(event.target.value)}
+              aria-label="对方连接码或地址"
+              placeholder="连接码或 IP:端口"
+            />
+            <ConnectionDiagnosticLine diagnostics={connectionDiagnostics} />
+          </>
         ) : null}
       </section>
 
@@ -2373,6 +2432,13 @@ function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: numb
     targetLabel: "扫描中 · 同网段",
     isError: false
   };
+}
+
+function connectionDiagnosticKindLabel(inputKind: string) {
+  if (inputKind === "connection_code") return "连接码";
+  if (inputKind === "manual_endpoint") return "备用地址";
+  if (inputKind === "empty") return "目标";
+  return "无效";
 }
 
 function platformLabel(platform: string) {

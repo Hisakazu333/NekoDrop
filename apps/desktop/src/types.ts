@@ -53,6 +53,17 @@ export interface DiscoveryStatusDto {
   last_error: string | null;
 }
 
+export interface ConnectionTargetDiagnosticsDto {
+  can_attempt: boolean;
+  input_kind: string;
+  target_host: string | null;
+  peer_name: string | null;
+  device_id: string | null;
+  fingerprint: string | null;
+  message: string;
+  suggested_action: string;
+}
+
 export interface TransferDto {
   id: string;
   root_name: string;

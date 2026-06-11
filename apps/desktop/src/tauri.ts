@@ -11,6 +11,7 @@ type CommandName =
   | "list_transfers"
   | "create_transfer_plan"
   | "create_transfer_plan_from_text"
+  | "diagnose_connection_target"
   | "send_paths_to_code"
   | "send_paths_to_device"
   | "resend_transfer"

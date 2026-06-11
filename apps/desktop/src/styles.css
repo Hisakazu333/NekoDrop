@@ -551,6 +551,43 @@ p {
   color: #aeb4bd;
 }
 
+.connection-diagnostic {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+  min-height: 24px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 720;
+}
+
+.composer .connection-diagnostic {
+  margin: -7px 22px 12px;
+}
+
+.target-block .connection-diagnostic {
+  margin-top: -4px;
+}
+
+.connection-diagnostic strong,
+.connection-diagnostic span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.connection-diagnostic strong {
+  color: var(--text);
+  font-weight: 820;
+}
+
+.connection-diagnostic.is-error strong,
+.connection-diagnostic.is-error span {
+  color: var(--red);
+}
+
 .composer-toolset,
 .composer-submit {
   display: flex;
