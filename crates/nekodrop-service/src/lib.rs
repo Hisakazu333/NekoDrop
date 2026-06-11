@@ -14,11 +14,14 @@ use nekodrop_network::{
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, create_source_plan_from_paths,
-    write_received_file_with_resume_and_cancel, ReceivedFile, ResumeExpectedFile, ResumePlan,
+    create_source_plan_from_paths_with_progress, write_received_file_with_resume_and_cancel,
+    ReceivedFile, ResumeExpectedFile, ResumePlan,
 };
 use nekolink_protocol::DeviceIdentity;
 
-pub use nekodrop_storage::{TransferSourceFile, TransferSourcePlan};
+pub use nekodrop_storage::{
+    TransferPlanScanPhase, TransferPlanScanProgress, TransferSourceFile, TransferSourcePlan,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TransferSendReport {
@@ -60,6 +63,16 @@ pub enum IncomingSessionReport {
 
 pub fn create_transfer_plan(paths: &[PathBuf]) -> NekoDropResult<TransferSourcePlan> {
     create_source_plan_from_paths(paths)
+}
+
+pub fn create_transfer_plan_with_scan_progress<F>(
+    paths: &[PathBuf],
+    on_progress: F,
+) -> NekoDropResult<TransferSourcePlan>
+where
+    F: FnMut(TransferPlanScanProgress),
+{
+    create_source_plan_from_paths_with_progress(paths, on_progress)
 }
 
 pub fn connection_code_for_endpoint(

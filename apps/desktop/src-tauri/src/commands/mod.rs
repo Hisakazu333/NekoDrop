@@ -19,14 +19,15 @@ use nekodrop_network::{
 };
 use nekodrop_service::{
     accept_incoming_stream_with_cancel, create_transfer_plan as create_service_transfer_plan,
-    send_pairing_request, send_plan_with_sender_identity_and_cancel, IncomingSessionReport,
+    create_transfer_plan_with_scan_progress, send_pairing_request,
+    send_plan_with_sender_identity_and_cancel, IncomingSessionReport, TransferPlanScanProgress,
     TransferProgressEvent, TransferReceiveReport, TransferSendReport, TransferSourceFile,
     TransferSourcePlan,
 };
 use nekodrop_storage::{build_resume_plan_for_files, ResumeExpectedFile, ResumePlan};
 use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 
 use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
@@ -44,6 +45,8 @@ use crate::trusted_devices::{
     trusted_record_matches, trusted_record_matches_identity, upsert_trusted_device,
     TrustedDeviceRecord,
 };
+
+const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSnapshot {
@@ -135,6 +138,15 @@ pub struct TransferPlanDto {
     pub total_bytes: u64,
     pub items: Vec<ManifestItemDto>,
     pub files: Vec<TransferSourceFileDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct TransferScanProgressDto {
+    pub phase: String,
+    pub current_path: Option<String>,
+    pub files_found: usize,
+    pub directories_found: usize,
+    pub bytes_found: u64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -483,16 +495,25 @@ pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> 
 }
 
 #[tauri::command]
-pub fn create_transfer_plan(paths: Vec<String>) -> Result<TransferPlanDto, String> {
+pub fn create_transfer_plan(app: AppHandle, paths: Vec<String>) -> Result<TransferPlanDto, String> {
     let paths = string_paths_to_path_bufs(paths)?;
-    let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
+    let plan = create_transfer_plan_with_scan_progress(&paths, |progress| {
+        emit_transfer_scan_progress(&app, progress);
+    })
+    .map_err(|error| error.to_string())?;
     Ok(source_plan_to_dto(&plan))
 }
 
 #[tauri::command]
-pub fn create_transfer_plan_from_text(paths_text: String) -> Result<TransferPlanDto, String> {
+pub fn create_transfer_plan_from_text(
+    app: AppHandle,
+    paths_text: String,
+) -> Result<TransferPlanDto, String> {
     let paths = parse_paths_text(&paths_text)?;
-    let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
+    let plan = create_transfer_plan_with_scan_progress(&paths, |progress| {
+        emit_transfer_scan_progress(&app, progress);
+    })
+    .map_err(|error| error.to_string())?;
     Ok(source_plan_to_dto(&plan))
 }
 
@@ -1748,6 +1769,23 @@ fn source_plan_to_dto(plan: &TransferSourcePlan) -> TransferPlanDto {
     }
 }
 
+fn emit_transfer_scan_progress(app: &AppHandle, progress: TransferPlanScanProgress) {
+    let _ = app.emit(
+        TRANSFER_SCAN_PROGRESS_EVENT,
+        transfer_scan_progress_to_dto(progress),
+    );
+}
+
+fn transfer_scan_progress_to_dto(progress: TransferPlanScanProgress) -> TransferScanProgressDto {
+    TransferScanProgressDto {
+        phase: progress.phase.as_str().to_string(),
+        current_path: progress.current_path,
+        files_found: progress.files_found,
+        directories_found: progress.directories_found,
+        bytes_found: progress.bytes_found,
+    }
+}
+
 fn manifest_items_to_dto(manifest: &FileManifest) -> Vec<ManifestItemDto> {
     manifest.items.iter().map(manifest_item_to_dto).collect()
 }
@@ -2644,6 +2682,7 @@ fn friendly_transfer_error(error: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nekodrop_service::TransferPlanScanPhase;
 
     #[test]
     fn friendly_transfer_error_explains_connection_failures() {
@@ -2876,6 +2915,23 @@ mod tests {
         assert!(script.contains("[Console]::OutputEncoding"));
         assert!(script.contains("UTF8Encoding"));
         assert!(script.contains("$OutputEncoding"));
+    }
+
+    #[test]
+    fn transfer_scan_progress_dto_uses_stable_wire_labels() {
+        let dto = transfer_scan_progress_to_dto(TransferPlanScanProgress {
+            phase: TransferPlanScanPhase::Hashing,
+            current_path: Some("drop/audio.m4a".to_string()),
+            files_found: 2,
+            directories_found: 1,
+            bytes_found: 4096,
+        });
+
+        assert_eq!(dto.phase, "hashing");
+        assert_eq!(dto.current_path.as_deref(), Some("drop/audio.m4a"));
+        assert_eq!(dto.files_found, 2);
+        assert_eq!(dto.directories_found, 1);
+        assert_eq!(dto.bytes_found, 4096);
     }
 
     #[test]
@@ -3156,6 +3212,7 @@ fn parse_dialog_output(output: &[u8]) -> Vec<String> {
         .collect()
 }
 
+#[cfg(any(target_os = "windows", test))]
 fn windows_dialog_script(kind: PathDialogKind) -> String {
     let picker_script = match kind {
         PathDialogKind::Files => {

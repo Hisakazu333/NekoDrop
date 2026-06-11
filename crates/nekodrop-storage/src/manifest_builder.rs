@@ -23,6 +23,46 @@ pub struct TransferSourcePlan {
     pub files: Vec<TransferSourceFile>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferPlanScanPhase {
+    Started,
+    Scanning,
+    Hashing,
+    Completed,
+}
+
+impl TransferPlanScanPhase {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Started => "started",
+            Self::Scanning => "scanning",
+            Self::Hashing => "hashing",
+            Self::Completed => "completed",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TransferPlanScanProgress {
+    pub phase: TransferPlanScanPhase,
+    pub current_path: Option<String>,
+    pub files_found: usize,
+    pub directories_found: usize,
+    pub bytes_found: u64,
+}
+
+impl TransferPlanScanProgress {
+    fn new(phase: TransferPlanScanPhase) -> Self {
+        Self {
+            phase,
+            current_path: None,
+            files_found: 0,
+            directories_found: 0,
+            bytes_found: 0,
+        }
+    }
+}
+
 impl TransferSourcePlan {
     pub fn file_count(&self) -> usize {
         self.files.len()
@@ -38,18 +78,34 @@ pub fn create_manifest_from_paths(paths: &[PathBuf]) -> NekoDropResult<FileManif
 }
 
 pub fn create_source_plan_from_paths(paths: &[PathBuf]) -> NekoDropResult<TransferSourcePlan> {
+    create_source_plan_from_paths_with_progress(paths, |_| {})
+}
+
+pub fn create_source_plan_from_paths_with_progress<F>(
+    paths: &[PathBuf],
+    mut on_progress: F,
+) -> NekoDropResult<TransferSourcePlan>
+where
+    F: FnMut(TransferPlanScanProgress),
+{
     if paths.is_empty() {
         return Err(NekoDropError::Storage(
             "at least one file or directory must be selected".into(),
         ));
     }
 
+    on_progress(TransferPlanScanProgress::new(
+        TransferPlanScanPhase::Started,
+    ));
+
     let root_name = manifest_root_name(paths)?;
-    let mut builder = ManifestBuilder::default();
+    let mut builder = ManifestBuilder::new(&mut on_progress);
 
     for path in paths {
         builder.push_path(path)?;
     }
+
+    builder.emit(TransferPlanScanPhase::Completed, None);
 
     let manifest = FileManifest::new(root_name, builder.items);
     Ok(TransferSourcePlan {
@@ -58,14 +114,25 @@ pub fn create_source_plan_from_paths(paths: &[PathBuf]) -> NekoDropResult<Transf
     })
 }
 
-#[derive(Default)]
-struct ManifestBuilder {
+struct ManifestBuilder<'a> {
     items: Vec<ManifestItem>,
     files: Vec<TransferSourceFile>,
     seen_paths: HashSet<String>,
+    progress: TransferPlanScanProgress,
+    on_progress: &'a mut dyn FnMut(TransferPlanScanProgress),
 }
 
-impl ManifestBuilder {
+impl<'a> ManifestBuilder<'a> {
+    fn new(on_progress: &'a mut dyn FnMut(TransferPlanScanProgress)) -> Self {
+        Self {
+            items: Vec::new(),
+            files: Vec::new(),
+            seen_paths: HashSet::new(),
+            progress: TransferPlanScanProgress::new(TransferPlanScanPhase::Started),
+            on_progress,
+        }
+    }
+
     fn push_path(&mut self, path: &Path) -> NekoDropResult<()> {
         let metadata = fs::symlink_metadata(path).map_err(|error| {
             NekoDropError::Storage(format!(
@@ -142,6 +209,8 @@ impl ManifestBuilder {
     ) -> NekoDropResult<()> {
         let manifest_path = relative_manifest_path(base, path)?;
         self.ensure_unique(&manifest_path)?;
+        self.progress.directories_found += 1;
+        self.emit(TransferPlanScanPhase::Scanning, Some(manifest_path.clone()));
         let mut item = ManifestItem::directory(manifest_path)?;
         item.modified_at = modified_at_seconds(metadata);
         self.items.push(item);
@@ -156,6 +225,9 @@ impl ManifestBuilder {
     ) -> NekoDropResult<()> {
         let manifest_path = relative_manifest_path(base, path)?;
         self.ensure_unique(&manifest_path)?;
+        self.progress.files_found += 1;
+        self.progress.bytes_found += metadata.len();
+        self.emit(TransferPlanScanPhase::Hashing, Some(manifest_path.clone()));
         let checksum = sha256_file(path)?;
         let mut item = ManifestItem::file(manifest_path, metadata.len())?;
         item.modified_at = modified_at_seconds(metadata);
@@ -177,6 +249,12 @@ impl ManifestBuilder {
             )));
         }
         Ok(())
+    }
+
+    fn emit(&mut self, phase: TransferPlanScanPhase, current_path: Option<String>) {
+        self.progress.phase = phase;
+        self.progress.current_path = current_path;
+        (self.on_progress)(self.progress.clone());
     }
 }
 
@@ -342,6 +420,40 @@ mod tests {
                 ("drop/two.txt", second.as_path())
             ]
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn emits_scan_progress_while_building_source_plan() {
+        let dir = unique_temp_dir("manifest-progress");
+        let root = dir.join("drop");
+        fs::create_dir_all(root.join("nested")).unwrap();
+        fs::write(root.join("nested").join("one.txt"), b"one").unwrap();
+        fs::write(root.join("two.txt"), b"two").unwrap();
+
+        let mut events = Vec::new();
+        let plan = create_source_plan_from_paths_with_progress(&[root], |event| events.push(event))
+            .unwrap();
+
+        assert_eq!(plan.file_count(), 2);
+        assert_eq!(plan.total_bytes(), 6);
+        assert_eq!(
+            events.first().map(|event| event.phase.as_str()),
+            Some("started")
+        );
+        assert_eq!(
+            events.last().map(|event| event.phase.as_str()),
+            Some("completed")
+        );
+        assert!(events
+            .iter()
+            .any(|event| event.phase.as_str() == "scanning" && event.directories_found >= 1));
+        assert!(events.iter().any(|event| event.phase.as_str() == "hashing"
+            && event.current_path.as_deref() == Some("drop/nested/one.txt")));
+        assert!(events.iter().any(|event| event.phase.as_str() == "hashing"
+            && event.files_found == 2
+            && event.bytes_found == 6));
 
         fs::remove_dir_all(dir).unwrap();
     }

@@ -96,6 +96,14 @@ export interface TransferPlanDto {
   files: TransferSourceFileDto[];
 }
 
+export interface TransferScanProgressDto {
+  phase: "started" | "scanning" | "hashing" | "completed";
+  current_path: string | null;
+  files_found: number;
+  directories_found: number;
+  bytes_found: number;
+}
+
 export interface ReceiveSessionDto {
   bind_addr: string;
   receive_dir: string;

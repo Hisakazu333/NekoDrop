@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { invokeCommand } from "./tauri";
@@ -14,6 +15,7 @@ import type {
   TrustedDeviceDto,
   TransferDto,
   TransferPlanDto,
+  TransferScanProgressDto,
   TransferStatusDto
 } from "./types";
 
@@ -51,6 +53,7 @@ export function App() {
   const [receivePolicy, setReceivePolicy] = useState<ReceivePolicyMode>("always_ask");
   const [bindPort, setBindPort] = useState("45821");
   const [plan, setPlan] = useState<TransferPlanDto | null>(null);
+  const [scanStatus, setScanStatus] = useState<TransferScanProgressDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
   const [nearbyDevices, setNearbyDevices] = useState<DeviceDto[]>([]);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatusDto | null>(null);
@@ -127,6 +130,19 @@ export function App() {
       refreshReceiveState().catch(() => undefined);
     }, 1200);
     return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const unlistenPromise = listen<TransferScanProgressDto>("transfer_scan_progress", (event) => {
+      if (!active) return;
+      setScanStatus(event.payload);
+    });
+
+    return () => {
+      active = false;
+      unlistenPromise.then((unlisten) => unlisten()).catch(() => undefined);
+    };
   }, []);
 
   useEffect(() => {
@@ -351,6 +367,7 @@ export function App() {
 
     setBusy("scan");
     setError(null);
+    setScanStatus(null);
     setSendReport(null);
     try {
       const nextPlan = await invokeCommand<TransferPlanDto>("create_transfer_plan", {
@@ -360,6 +377,7 @@ export function App() {
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
+      setScanStatus(null);
       setBusy(null);
     }
   }
@@ -677,6 +695,7 @@ export function App() {
     setSelectedPaths([]);
     setManualPaths("");
     setPlan(null);
+    setScanStatus(null);
     setSendReport(null);
   }
 
@@ -684,6 +703,7 @@ export function App() {
     const nextPaths = selectedPaths.filter((item) => item !== path);
     setSelectedPaths(nextPaths);
     setPlan(null);
+    setScanStatus(null);
     setSendReport(null);
   }
 
@@ -925,6 +945,7 @@ export function App() {
                   {selectedPaths.length > 0 ? (
                     <QueuePreview
                       plan={plan}
+                      scanStatus={scanStatus}
                       selectedPaths={selectedPaths}
                       onClearQueue={clearQueue}
                       onRemovePath={removePath}
@@ -1061,10 +1082,12 @@ export function App() {
                   busy={busy}
                   manualPaths={manualPaths}
                   plan={plan}
+                  scanStatus={scanStatus}
                   selectedPaths={selectedPaths}
                   setManualPaths={(value) => {
                     setManualPaths(value);
                     setPlan(null);
+                    setScanStatus(null);
                     setSendReport(null);
                   }}
                   onClearQueue={clearQueue}
@@ -1284,11 +1307,13 @@ function TargetPanel({
 
 function QueuePreview({
   plan,
+  scanStatus,
   selectedPaths,
   onClearQueue,
   onRemovePath
 }: {
   plan: TransferPlanDto | null;
+  scanStatus: TransferScanProgressDto | null;
   selectedPaths: string[];
   onClearQueue: () => void;
   onRemovePath: (path: string) => void;
@@ -1301,6 +1326,8 @@ function QueuePreview({
         <strong>待发送</strong>
         <span>{plan ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}` : `${selectedPaths.length} 个路径`}</span>
       </div>
+
+      <TransferScanStatus status={scanStatus} />
 
       {previewPaths.length > 0 ? (
         <div className="queue-preview-list">
@@ -1325,6 +1352,29 @@ function QueuePreview({
         <div className="queue-preview-empty">未选择文件</div>
       )}
     </section>
+  );
+}
+
+function TransferScanStatus({ status }: { status: TransferScanProgressDto | null }) {
+  if (!status || status.phase === "completed") return null;
+
+  const title = status.phase === "hashing" ? "正在校验文件" : "正在准备传输";
+  const discovered = [
+    `${status.files_found} 个文件`,
+    `${status.directories_found} 个文件夹`,
+    formatBytes(status.bytes_found)
+  ].join(" · ");
+
+  return (
+    <div className="transfer-status">
+      <div className="transfer-status-head">
+        <strong>{title}</strong>
+        <span>{discovered}</span>
+      </div>
+      {status.current_path ? (
+        <div className="transfer-status-meta">{status.current_path}</div>
+      ) : null}
+    </div>
   );
 }
 
@@ -1696,6 +1746,7 @@ function QueuePanel({
   busy,
   manualPaths,
   plan,
+  scanStatus,
   selectedPaths,
   setManualPaths,
   onClearQueue,
@@ -1705,6 +1756,7 @@ function QueuePanel({
   busy: BusyMode | null;
   manualPaths: string;
   plan: TransferPlanDto | null;
+  scanStatus: TransferScanProgressDto | null;
   selectedPaths: string[];
   setManualPaths: (value: string) => void;
   onClearQueue: () => void;
@@ -1727,6 +1779,8 @@ function QueuePanel({
           </button>
         </div>
       </div>
+
+      <TransferScanStatus status={scanStatus} />
 
       {selectedPaths.length > 0 ? (
         <div className="path-list">
