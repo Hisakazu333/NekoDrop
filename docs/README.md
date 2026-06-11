@@ -18,6 +18,8 @@ For developers:
 - [Architecture](ARCHITECTURE.md): workspace layout and responsibility boundaries.
 - [Protocol](PROTOCOL.md): NekoLink message envelope, transfer flow, and TCP file frame behavior.
 - [Modules](MODULES.md): module ownership and dependency direction.
+- [Large File Transfer Test Matrix](testing/LARGE_FILE_TRANSFER_MATRIX.md): manual release gate for Mac / Windows transfer reliability.
+- [Transfer Test Result Template](testing/RESULT_TEMPLATE.md): evidence template for release-candidate test runs.
 
 For maintainers and planning:
 
