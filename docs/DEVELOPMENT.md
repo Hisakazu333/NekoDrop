@@ -80,6 +80,7 @@ cargo fmt --all -- --check
 cargo test --workspace
 npm run build
 npm audit --omit=dev
+npm run security:audit
 git diff --check
 ```
 

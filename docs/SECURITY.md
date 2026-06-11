@@ -178,3 +178,34 @@ Failed verification
 ```
 
 Avoid vague states such as "secure" unless the connection is actually authenticated and encrypted.
+
+## Dependency Audits
+
+Run the supported-platform audit before merging security-sensitive changes:
+
+```bash
+npm run security:audit
+```
+
+The script checks:
+
+- `npm audit --json`
+- Cargo dependency graphs for the supported desktop targets:
+  - `aarch64-apple-darwin`
+  - `x86_64-apple-darwin`
+  - `x86_64-pc-windows-msvc`
+- OSV advisories for crates that are present in those target graphs
+
+GitHub Dependabot also scans the full `Cargo.lock`. That can include crates for targets we do not ship yet.
+
+Current known alert:
+
+```text
+GHSA-wrw7-89jp-8q8g / RUSTSEC-2024-0429
+crate: glib 0.18.5
+chain: tauri -> tauri-runtime-wry -> wry -> webkit2gtk / gtk -> glib
+status: Linux GTK/WebKit dependency in Cargo.lock; not part of the macOS or Windows release graph
+upstream fix needed: webkit2gtk/wry stack moving from glib 0.18 to glib >= 0.20
+```
+
+Do not mark this as fixed by editing around `Cargo.lock`. Re-check it when Tauri, wry, or webkit2gtk updates their Linux GTK stack.
