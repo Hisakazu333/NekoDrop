@@ -26,6 +26,7 @@ type CommandName =
   | "cancel_current_transfer"
   | "get_receive_status"
   | "get_receive_session"
+  | "get_receive_port_diagnostics"
   | "get_last_receive_report"
   | "get_pending_receive_offer"
   | "get_pending_pairing_request"

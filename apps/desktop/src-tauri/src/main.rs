@@ -41,6 +41,7 @@ pub fn run() {
             commands::cancel_current_transfer,
             commands::get_receive_status,
             commands::get_receive_session,
+            commands::get_receive_port_diagnostics,
             commands::get_last_receive_report,
             commands::get_pending_receive_offer,
             commands::get_pending_pairing_request,
