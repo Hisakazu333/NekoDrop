@@ -821,24 +821,52 @@ fn send_paths_to_endpoint_with_history_id(
     );
     let transfer_status = state.transfer_status.clone();
     let cancel_for_send = cancel.clone();
-    let report = send_plan_with_sender_identity_and_cancel(
-        &endpoint,
-        plan.clone(),
-        Some(&sender_identity),
-        move |event| {
-            if let Some(status) = status_from_progress_event("send", None, event) {
-                set_transfer_status(&transfer_status, status);
-            }
+    let report = send_with_auto_retry(
+        || {
+            let transfer_status = transfer_status.clone();
+            let cancel_for_attempt = cancel_for_send.clone();
+            send_plan_with_sender_identity_and_cancel(
+                &endpoint,
+                plan.clone(),
+                Some(&sender_identity),
+                move |event| {
+                    if let Some(status) = status_from_progress_event("send", None, event) {
+                        set_transfer_status(&transfer_status, status);
+                    }
+                },
+                || cancel_for_attempt.load(Ordering::SeqCst),
+            )
+            .map_err(|error| error.to_string())
         },
-        || cancel_for_send.load(Ordering::SeqCst),
+        |retry_number, retry_limit, error| {
+            let (file_index, current_file, bytes_transferred, _) =
+                current_transfer_progress(&state.transfer_status);
+            set_transfer_status(
+                &state.transfer_status,
+                TransferStatusState {
+                    direction: "send".to_string(),
+                    phase: "retrying".to_string(),
+                    root_name: Some(plan.manifest.root_name.clone()),
+                    file_count: plan.file_count(),
+                    file_index,
+                    current_file,
+                    bytes_transferred,
+                    total_bytes: plan.total_bytes(),
+                    message: format!(
+                        "连接中断，正在自动重试 {retry_number}/{retry_limit}：{}",
+                        friendly_transfer_error(error)
+                    ),
+                    updated_at_ms: now_ms(),
+                },
+            );
+        },
     )
     .map_err(|error| {
-        let cancelled =
-            cancel.load(Ordering::SeqCst) || error.to_string().contains("transfer cancelled");
+        let cancelled = cancel.load(Ordering::SeqCst) || error.contains("transfer cancelled");
         let message = if cancelled {
             "传输已取消".to_string()
         } else {
-            friendly_transfer_error(&error.to_string())
+            friendly_transfer_error(&error)
         };
         let status_phase = if cancelled { "cancelled" } else { "failed" };
         let (file_index, current_file, bytes_transferred, _) =
@@ -923,6 +951,71 @@ fn history_transfer_id(started_at_ms: u128, existing_transfer_id: Option<&str>) 
         .filter(|id| !id.is_empty())
         .map(str::to_string)
         .unwrap_or_else(|| format!("send-{started_at_ms}"))
+}
+
+const SEND_AUTO_RETRY_LIMIT: usize = 1;
+
+fn send_with_auto_retry<T, S, R>(mut send: S, mut on_retry: R) -> Result<T, String>
+where
+    S: FnMut() -> Result<T, String>,
+    R: FnMut(usize, usize, &str),
+{
+    for attempt_index in 0..=SEND_AUTO_RETRY_LIMIT {
+        match send() {
+            Ok(result) => return Ok(result),
+            Err(error)
+                if attempt_index < SEND_AUTO_RETRY_LIMIT && is_retryable_send_error(&error) =>
+            {
+                on_retry(attempt_index + 1, SEND_AUTO_RETRY_LIMIT, &error);
+            }
+            Err(error) => return Err(error),
+        }
+    }
+
+    unreachable!("send retry loop always returns from success or final error")
+}
+
+fn is_retryable_send_error(error: &str) -> bool {
+    let lower = error.to_lowercase();
+
+    if lower.contains("transfer cancelled")
+        || lower.contains("receiver declined")
+        || lower.contains("transfer declined by receiver")
+        || lower.contains("checksum")
+        || lower.contains("sha-256")
+        || lower.contains("sha256")
+        || lower.contains("does not match accepted offer")
+        || lower.contains("no such file")
+        || lower.contains("not found")
+        || lower.contains("路径不存在")
+        || lower.contains("permission denied")
+        || lower.contains("access is denied")
+        || lower.contains("operation not permitted")
+        || lower.contains("unsupported connection code")
+        || lower.contains("invalid connection code")
+        || lower.contains("invalid endpoint")
+        || lower.contains("transport is not available")
+        || lower.contains("unsupported transport")
+        || lower.contains("requested iroh")
+        || lower.contains("requested relay")
+        || lower.contains("requested quic")
+    {
+        return false;
+    }
+
+    lower.contains("failed to connect")
+        || lower.contains("connection refused")
+        || lower.contains("actively refused")
+        || lower.contains("connection reset")
+        || lower.contains("connection aborted")
+        || lower.contains("broken pipe")
+        || lower.contains("timed out")
+        || lower.contains("timeout")
+        || lower.contains("network is unreachable")
+        || lower.contains("no route to host")
+        || lower.contains("host unreachable")
+        || lower.contains("连接尝试失败")
+        || lower.contains("由于目标计算机积极拒绝")
 }
 
 #[tauri::command]
@@ -2700,6 +2793,71 @@ mod tests {
             "send-original"
         );
         assert_eq!(history_transfer_id(42, None), "send-42");
+    }
+
+    #[test]
+    fn send_auto_retry_retries_once_for_transient_network_error() {
+        let mut attempts = 0;
+        let mut retry_events = Vec::new();
+
+        let result = send_with_auto_retry(
+            || {
+                attempts += 1;
+                if attempts == 1 {
+                    Err("failed to connect to 192.168.1.20:45821: Connection refused".to_string())
+                } else {
+                    Ok("sent")
+                }
+            },
+            |retry_number, retry_limit, error| {
+                retry_events.push((retry_number, retry_limit, error.to_string()));
+            },
+        );
+
+        assert_eq!(result.unwrap(), "sent");
+        assert_eq!(attempts, 2);
+        assert_eq!(retry_events.len(), 1);
+        assert_eq!(retry_events[0].0, 1);
+        assert_eq!(retry_events[0].1, 1);
+        assert!(retry_events[0].2.contains("Connection refused"));
+    }
+
+    #[test]
+    fn send_auto_retry_does_not_retry_terminal_failures() {
+        for error in [
+            "transfer cancelled",
+            "receiver declined transfer: no reason provided",
+            "incoming file does not match accepted offer",
+        ] {
+            let mut attempts = 0;
+
+            let result = send_with_auto_retry(
+                || {
+                    attempts += 1;
+                    Err::<(), _>(error.to_string())
+                },
+                |_, _, _| panic!("terminal send failures must not be retried"),
+            );
+
+            assert_eq!(result.unwrap_err(), error);
+            assert_eq!(attempts, 1);
+        }
+    }
+
+    #[test]
+    fn send_auto_retry_stops_after_retry_limit() {
+        let mut attempts = 0;
+
+        let result = send_with_auto_retry(
+            || {
+                attempts += 1;
+                Err::<(), _>("connection reset by peer".to_string())
+            },
+            |_, _, _| {},
+        );
+
+        assert_eq!(result.unwrap_err(), "connection reset by peer");
+        assert_eq!(attempts, 2);
     }
 
     #[test]
