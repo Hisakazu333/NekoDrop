@@ -1,172 +1,45 @@
 # NekoDrop
 
-> 本地优先的跨设备文件互传桌面软件，也是 NekoLink 个人设备网络的第一个落地产品。
+macOS / Windows 桌面文件互传工具。
 
-NekoDrop 的目标很明确：让 Mac、Windows，后续再加手机、平板、NAS 和 OpenNeko Agent 节点，能在一个可信设备网络里传文件、同步状态、下发任务。
-
-当前版本先把第一件事做实：桌面端之间的真实文件互传。
-
-```text
-打开 NekoDrop
-  -> 自动发现附近设备
-  -> 选择文件或文件夹
-  -> 点设备发送
-  -> 对方确认接收
-  -> 传输、显示进度、完成校验
-  -> 进入历史记录
-```
-
-NekoDrop 不是网盘，不是聊天软件，也不是浏览器页面。它是一个 Tauri 桌面应用，依赖本地文件选择、后台接收、局域网发现、桌面安装包和系统能力。
+当前重点是桌面端互传：发现设备、选择文件或文件夹、对方确认、传输、校验、写入历史。
 
 ## 当前状态
 
-当前阶段：桌面互传 MVP + NekoLink 协议雏形。
+详细状态以 [docs/STATUS.md](docs/STATUS.md) 为准。README 只放入口信息。
 
-最近完成：
+已接入：
 
-- 客户端改成克制的桌面工作台：左侧导航、中央发送 Composer、右侧状态/最近记录。
-- 新增独立设备页、传输历史页和设置/诊断页；这些页面只展示真实状态，不放 mock 数据。
-- 传输历史接入真实记录，支持打开位置、重发/继续发送、删除和清空。
-- 设备页接入真实附近设备和可信设备，支持选择目标、发起配对和移除信任。
-- macOS DMG 打包修复：生成 icon resources，对 `.app` 整体 ad-hoc 签名，再生成并校验 DMG。
-- 当前 DMG 可从镜像内启动，`codesign --verify --deep --strict` 和 `hdiutil verify` 已进入打包流程。
-
-已经真实接入：
-
-- macOS / Windows 桌面端工程
-- 启动后自动打开后台接收服务
-- mDNS / DNS-SD 局域网自动发现
-- 发现状态诊断和无设备短提示
-- 附近设备列表和离线过期
-- 连接码兜底发送
+- macOS / Windows Tauri 桌面端
 - 文件和文件夹选择
-- transfer offer / accept / decline
-- 真实传输进度、速度、ETA
-- 发送中取消
-- 接收中取消
-- 发送端瞬时网络失败自动重试
-- TCP partial offset 断点续传基础
-- 接收端 resume 明细 UI
+- mDNS / DNS-SD 局域网发现
+- 连接码兜底发送
+- 传输 offer / accept / decline
+- TCP 文件传输
+- SHA-256 校验
+- 进度、速度、ETA
+- 发送中取消、接收中取消
+- partial offset 断点续传基础
 - 接收目录持久化
-- 网络/传输错误提示和目标地址预检
-- 坏编码路径、Windows 不安全 manifest 路径和异常文件帧数量防护
-- manifest 和 SHA-256 校验
-- 持久化传输历史
-- 历史记录打开位置、重发、继续发送、删除、清空
-- 稳定设备 ID 和设备指纹
-- 可信配对基础：配对请求、配对码、接受、拒绝、忘记设备
-- 设备页：附近设备、可信设备
-- 设置/诊断页：设备身份、收件目录、接收策略、网络状态和最近错误
-- macOS DMG 打包脚本和 ad-hoc bundle 签名
-- Win11 NSIS / MSI 打包脚本
-- NekoLink 协议 crate
-- NekoLink transport 抽象和 TCP 实现
+- 传输历史
+- 设备身份和可信配对基础
+- 设备页、历史页、设置/诊断页
+- NekoLink envelope、协议 crate、transport 抽象和 TCP transport
+- macOS DMG 打包脚本
+- Windows NSIS / MSI 打包脚本
 
-还没有接入：
+未接入：
 
 - iroh / Relay / P2P 真实运行时
 - 加密 session
-- 手机端主流程
+- 手机端互传主流程
 - OpenNeko Agent 指令通道
-- NekoState 跨设备状态同步
-- 系统级 Windows 防火墙自动配置
+- NekoState 同步
+- Apple Developer ID 签名和 notarization
+- Windows 防火墙自动配置
 - 云账号、云盘、中心化文件存储
 
-## 开发规范
-
-本仓库使用 GitHub Flow：`main` 保持可打包、可发布；功能、修复、安全收口、UI 改动和发布打包都通过短分支 + PR 合并。完整规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
-
-## NekoDrop 是什么
-
-NekoDrop 是产品层。
-
-它负责用户看得见、摸得着的文件互传流程：
-
-- 选择文件
-- 发现设备
-- 配对设备
-- 发送文件
-- 接收确认
-- 展示进度
-- 管理历史
-- 打包成桌面软件
-
-NekoDrop 不应该吞掉所有能力。长期结构是：
-
-```text
-NekoLink   = 可信设备通信协议
-NekoDrop   = 第一个落地产品：文件互传
-NekoState  = 后续跨设备状态同步层
-OpenNeko   = AI 伴侣 / Agent 入口
-```
-
-现在这个仓库先用 NekoDrop 孵化 NekoLink。等协议、传输抽象、加密会话、手机端和 OpenNeko 接入点稳定后，再考虑把 NekoLink 拆成独立仓库。
-
-## 为什么做它
-
-普通互传工具只解决“把文件发过去”。
-
-NekoDrop / NekoLink 要解决的是更底层的设备关系：
-
-- 这台电脑是谁
-- 哪些设备可信
-- 文件该走局域网、Relay 还是 P2P
-- 传输是否可校验、可恢复、可追踪
-- 手机能不能把任务发给电脑
-- OpenNeko Agent 能不能跨设备调用能力
-
-短期目标是一个好用的 Mac / Win 文件互传工具。长期目标是个人设备网络的通信底座。
-
-## 快速开始
-
-### 使用安装包
-
-macOS：
-
-```bash
-./scripts/package-desktop.sh --skip-tests --dmg
-```
-
-打包完成后，打开 `release/desktop/<时间戳>/bundle/dmg/` 里的 DMG，把 `NekoDrop.app` 拖到 `Applications`。
-
-当前 macOS 预览包使用 ad-hoc 签名，脚本会校验 `.app` bundle 和 DMG 结构，但还没有 Apple Developer ID 签名和 notarization 公证。首次打开时如果 macOS 提示无法验证开发者，请右键 `NekoDrop.app` 选择“打开”。正式公开分发前必须补 Developer ID 签名和公证。
-
-Windows 11：
-
-```powershell
-npm run package:windows -- -SkipTests -Bundles nsis
-```
-
-打包完成后，运行脚本输出的 `setup.exe` 安装器。不要直接运行开发模式下的 debug exe。
-
-### 发送文件
-
-两台设备都打开 NekoDrop，尽量处在同一局域网。
-
-正常流程：
-
-```text
-附近设备出现
-  -> 选择文件或文件夹
-  -> 点击目标设备
-  -> 对方接受
-  -> 开始传输
-```
-
-自动发现失败时，用连接码兜底：
-
-```text
-接收端查看连接码
-  -> 发送端粘贴连接码
-  -> 选择文件或文件夹
-  -> 发送
-```
-
-手动连接框也支持输入 `IP:端口`，用于调试 Mac / Windows 局域网互通。
-
-连接码是兜底，不是最终主流程。主流程应该是自动扫描附近设备、点设备发送。
-
-## 本地开发
+## 本地运行
 
 安装依赖：
 
@@ -174,86 +47,45 @@ npm run package:windows -- -SkipTests -Bundles nsis
 npm install
 ```
 
-前端构建：
+构建前端：
 
 ```bash
 npm run build
 ```
 
-Rust 测试：
-
-```bash
-PATH="/opt/homebrew/opt/rustup/bin:$PATH" cargo test --workspace
-```
-
 运行桌面开发模式：
 
 ```bash
-PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri:dev
+npm --workspace apps/desktop run tauri:dev
 ```
 
-注意：不要只用浏览器打开 Vite 页面。浏览器预览不能代表桌面软件，因为文件选择、后台接收、系统托盘、安装包和 Tauri 命令都依赖桌面运行时。
+运行 Rust 测试：
+
+```bash
+cargo test --workspace
+```
+
+不要只用浏览器打开 Vite 页面判断可用性。文件选择、后台接收、系统能力和安装包行为都需要 Tauri 桌面运行时。
 
 ## 打包
 
-### macOS
-
-生成 `.app`：
-
-```bash
-./scripts/package-desktop.sh
-```
-
-跳过测试：
-
-```bash
-./scripts/package-desktop.sh --skip-tests
-```
-
-生成 DMG：
+macOS：
 
 ```bash
 ./scripts/package-desktop.sh --skip-tests --dmg
 ```
 
-`--dmg` 的真实流程是：
-
-```text
-构建前端
-  -> Tauri 构建 NekoDrop.app
-  -> 对整个 .app 做 ad-hoc codesign
-  -> codesign --verify --deep --strict
-  -> 将签名后的 .app 和 Applications 链接写入 DMG
-  -> hdiutil verify
-```
-
 输出目录：
 
 ```text
-release/desktop/<时间戳>/
+release/desktop/<timestamp>/
 ```
 
-DMG 是安装物。脚本也会保留 `bundle/macos/NekoDrop.app`，用于签名和启动问题诊断；用户安装时仍然应该从 `bundle/dmg/` 里的 DMG 拖到 `Applications`。
+脚本会构建 `.app`，做 ad-hoc 签名，校验签名，再生成 DMG 并执行 `hdiutil verify`。
 
-发布或提交 GitHub Release 前至少记录：
+当前 DMG 不是正式签名发布包。公开分发前还需要 Apple Developer ID 签名和 notarization。
 
-```bash
-hdiutil verify release/desktop/<时间戳>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
-codesign --verify --deep --strict release/desktop/<时间戳>/bundle/macos/NekoDrop.app
-shasum -a 256 release/desktop/<时间戳>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
-```
-
-Release 安装包必须从 tag 对应代码构建，不要从临时 worktree 直接当正式包发布。
-
-### Windows 11
-
-默认打包：
-
-```powershell
-npm run package:windows
-```
-
-跳过测试并只生成 NSIS 安装器：
+Windows 11：
 
 ```powershell
 npm run package:windows -- -SkipTests -Bundles nsis
@@ -262,173 +94,77 @@ npm run package:windows -- -SkipTests -Bundles nsis
 输出目录：
 
 ```text
-release\desktop\<时间戳>\
+release\desktop\<timestamp>\
 ```
 
-优先安装脚本最后打印出来的安装器：
+优先使用脚本输出的安装器，不要把开发模式 exe 当正式包。
 
-```text
-bundle\nsis\...\setup.exe
-bundle\msi\...\*.msi
+## 安装包校验
+
+macOS DMG：
+
+```bash
+hdiutil verify release/desktop/<timestamp>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
+codesign --verify --deep --strict release/desktop/<timestamp>/bundle/macos/NekoDrop.app
+shasum -a 256 release/desktop/<timestamp>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
 ```
 
-如果 Windows 上看到 `127.0.0.1:1420` 白屏，通常说明运行到了开发形态，不是正式安装包。
+GitHub Release 使用的安装包应该从 tag 对应代码构建。
 
 ## 仓库结构
 
 ```text
-NekoDrop/
-  apps/
-    desktop/
-      src/              React UI
-      src-tauri/        Tauri / Rust 桌面层
-    sidecar/            后台进程实验入口
+apps/
+  desktop/              React + Tauri 桌面端
+  sidecar/              后台进程实验入口
 
-  crates/
-    nekolink-protocol/  NekoLink 消息、能力、设备身份、配对、文件 offer
-    nekodrop-core/      产品领域模型、manifest、pairing、transfer
-    nekodrop-network/   mDNS、连接码、TCP、transport 抽象
-    nekodrop-service/   文件发送和接收流程
-    nekodrop-storage/   文件写入、checksum、received files、partial/resume 基础
+crates/
+  nekolink-protocol/    协议消息、设备身份、配对、文件 offer
+  nekodrop-core/        产品领域模型
+  nekodrop-network/     发现、连接码、TCP、transport 抽象
+  nekodrop-service/     发送和接收流程
+  nekodrop-storage/     文件写入、checksum、partial/resume
 
-  docs/                 产品、架构、协议、安全、路线图
-  scripts/              macOS / Windows 打包脚本
+docs/                   状态、架构、协议、安全、路线图
+scripts/                macOS / Windows 打包脚本
 ```
 
-## NekoLink 协议
+## 开发流程
 
-NekoLink 当前是应用层设备通信协议雏形，不是已经完成的底层网络协议栈。
-
-现在已经有：
-
-- `Envelope`
-- 协议名和版本
-- `session_id`
-- `message_id`
-- 消息类型
-- 能力声明
-- 设备身份
-- `device.hello`
-- `pairing.request`
-- `pairing.accept`
-- `pairing.reject`
-- `file.offer`
-- `file.accept`
-- `file.decline`
-- Agent / companion / state sync 的保留消息类型
-
-当前真实传输方式：
+本仓库按 GitHub Flow 走：
 
 ```text
-NekoLink message
-  -> TCP transport
-  -> NekoDrop file transfer
+main
+  -> feature/fix/docs 分支
+  -> PR
+  -> 检查通过
+  -> merge 回 main
+  -> 必要时从 tag 打包
 ```
 
-后续目标：
+`main` 应保持可构建、可打包。规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
-```text
-NekoLink message
-  -> TCP / iroh / Relay / P2P
-  -> file / state / Agent command
-```
-
-iroh 还没有作为运行时依赖接入。现在仓库里只有 transport 抽象和 `iroh` transport 的预留错误。后续接入 iroh 时，NekoDrop 不应该把 iroh 写死在 UI 里，而应该通过 NekoLink transport 层选择通道。
-
-## 路线图
+## 下一步
 
 近期优先级：
 
-```text
-当前分支收口
-      README / docs 同步，PR 合并到 main，从 tag 重新打 preview 包
-
-V0.6  Mac / Win 预览验证
-      macOS 安装、Win11 安装、Mac -> Win、Win -> Mac、中文路径、防火墙提示
-
-V0.7  大文件可靠性
-      断点续传、失败重试、partial 文件、历史重发
-
-V0.8  加密 session
-      设备身份、可信配对、会话密钥、消息认证、防重放
-
-V0.9  iroh / Relay 技术验证
-      先做 spike，不替换 TCP 主线；确认 NekoLink envelope 能跑在 iroh stream 上
-
-V1.0  Mac / Windows 稳定版
-      安装、发现、配对、发送、接收、历史、错误恢复完整可用
-
-V1.1  手机端接入
-      手机作为可信设备，能收发文件和发起桌面任务
-
-V1.2  OpenNeko / NekoState 试点
-      Agent 指令通道、伴侣状态同步、跨设备任务状态
-```
-
-更详细路线见：
-
-- [Roadmap](docs/ROADMAP.md)
-- [Future Iteration Plan](docs/FUTURE_ITERATION_PLAN.md)
-- [模块化路线图](docs/modules/MODULE_ROADMAP.md)
+1. 合并当前桌面 UI、打包和文档分支。
+2. 从 main/tag 重新打 macOS 预览 DMG。
+3. 做 Win11 安装和 Mac <-> Win 互传验证。
+4. 补大文件传输矩阵：中文路径、文件夹、取消、失败重试、续传。
+5. 收口加密 session 设计和实现。
+6. iroh / Relay / P2P 先做 spike，不替换 TCP 主线。
 
 ## 文档
 
-- [文档入口](docs/README.md)
-- [产品定义](docs/PRODUCT.md)
+- [当前状态](docs/STATUS.md)
 - [架构](docs/ARCHITECTURE.md)
 - [开发说明](docs/DEVELOPMENT.md)
-- [当前状态](docs/STATUS.md)
 - [协议草案](docs/PROTOCOL.md)
 - [安全模型](docs/SECURITY.md)
-- [模块边界](docs/MODULES.md)
-- [大文件传输测试矩阵](docs/testing/LARGE_FILE_TRANSFER_MATRIX.md)
-- [传输测试结果模板](docs/testing/RESULT_TEMPLATE.md)
-- [NekoDrop 产品层](docs/modules/NEKODROP.md)
-- [NekoLink 协议层](docs/modules/NEKOLINK.md)
-- [发现与传输层](docs/modules/DISCOVERY_AND_TRANSPORT.md)
-- [OpenNeko 生态层](docs/modules/OPENNEKO_ECOSYSTEM.md)
+- [路线图](docs/ROADMAP.md)
 - [第三方声明](THIRD_PARTY_NOTICES.md)
 
-## 常见问题
+## 许可
 
-### 为什么不用浏览器打开
-
-NekoDrop 是桌面软件。浏览器页面不能代表真实运行状态，也不能完整测试 Tauri 命令、文件选择、后台接收、系统托盘和安装包。
-
-### 附近设备不出现怎么办
-
-先检查：
-
-- 两台设备是否在同一局域网
-- Windows 是否弹出防火墙提示
-- 是否开启 VPN、代理或虚拟网卡
-- 公司、校园或公共网络是否屏蔽 mDNS
-- 有线和无线是否处在不同网段
-
-临时解决方式：使用连接码兜底发送。
-
-### 为什么出现 `198.18.x.x`
-
-`198.18.x.x` 常见于代理、测试网络或虚拟网卡，不应该作为局域网互传地址。优先关闭 VPN、代理和虚拟网卡后重启 NekoDrop。
-
-### 现在是不是已经用了 iroh
-
-没有。
-
-当前版本有 NekoLink transport 抽象，真实可用传输是 TCP。iroh / Relay / P2P 是后续接入方向，不是当前已完成能力。
-
-## 贡献原则
-
-- UI 展示的设备、历史、进度、配对和扫描状态必须来自真实服务。
-- 未完成能力需要在文档和界面中标记为规划中或实验中。
-- 连接码是自动发现失败时的兜底方案，主流程仍然是发现附近设备后直接发送。
-- NekoDrop 负责文件互传产品体验，NekoLink 负责通信协议和消息模型。
-- OpenNeko / NekoState 相关接口可以预留，但不能描述成当前已完成的用户功能。
-
-## 第三方与许可
-
-第三方依赖和声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
-
-本仓库基于 [Apache License 2.0](LICENSE) 开源发布。
-
-Apache-2.0 适用于本仓库中提交的 NekoDrop / NekoLink 源代码和文档。它不等于商标授权，也不自动覆盖仓库外的 OpenNeko 商业客户端、Live2D 模型、人设资产、品牌素材、签名证书、云 Relay 服务密钥或其他未提交到本仓库的商业资源。
+源代码和仓库内文档使用 [Apache License 2.0](LICENSE)。
