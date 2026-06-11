@@ -3,6 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { invokeCommand } from "./tauri";
+import { hasReceiveDiagnosticsWarning } from "./receiveDiagnostics";
 import type {
   AppSnapshot,
   DeviceDto,
@@ -1401,9 +1402,10 @@ function HomeStateLine({
   const discoveryCopy = discoveryStateCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
   const latest = transfers[0];
   const receiveDetail = receiveDiagnosticsLabel(diagnostics);
+  const isWarning = hasReceiveDiagnosticsWarning(diagnostics);
 
   return (
-    <div className="home-state-line">
+    <div className={isWarning ? "home-state-line is-warning" : "home-state-line"}>
       <span>{receiveState}{receiveDetail ? ` · ${receiveDetail}` : ""}</span>
       <strong>{latest ? transferDirectionLabel(latest) : discoveryCopy.label}</strong>
     </div>

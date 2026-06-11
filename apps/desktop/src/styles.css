@@ -386,6 +386,10 @@ p {
   white-space: nowrap;
 }
 
+.home-state-line.is-warning span {
+  color: var(--red);
+}
+
 .brand-line {
   display: inline-flex;
   align-items: center;
