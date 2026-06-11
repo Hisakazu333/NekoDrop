@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUN_TESTS=1
 COPY_BUNDLES=1
 BUNDLES="app"
+BUILD_DMG=0
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 usage() {
@@ -33,7 +34,8 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --dmg)
-      BUNDLES="app,dmg"
+      BUNDLES="app"
+      BUILD_DMG=1
       shift
       ;;
     -h|--help)
@@ -91,6 +93,33 @@ fi
 echo "==> Building Tauri desktop bundle"
 npm --workspace apps/desktop run tauri -- build --bundles "$BUNDLES"
 
+APP_BUNDLE="$CARGO_TARGET_DIR/release/bundle/macos/NekoDrop.app"
+
+if [[ -d "$APP_BUNDLE" ]]; then
+  echo "==> Signing macOS app bundle"
+  codesign --force --deep --sign - "$APP_BUNDLE"
+  codesign --verify --deep --strict "$APP_BUNDLE"
+fi
+
+if [[ "$BUILD_DMG" -eq 1 ]]; then
+  if [[ ! -d "$APP_BUNDLE" ]]; then
+    echo "Missing app bundle: $APP_BUNDLE" >&2
+    exit 1
+  fi
+
+  echo "==> Building macOS DMG"
+  DMG_STAGING="$CARGO_TARGET_DIR/dmg-staging"
+  DMG_DIR="$CARGO_TARGET_DIR/release/bundle/dmg"
+  DMG_PATH="$DMG_DIR/NekoDrop_0.1.0_aarch64.dmg"
+
+  rm -rf "$DMG_STAGING"
+  mkdir -p "$DMG_STAGING" "$DMG_DIR"
+  cp -R "$APP_BUNDLE" "$DMG_STAGING/NekoDrop.app"
+  ln -s /Applications "$DMG_STAGING/Applications"
+  hdiutil create -volname "NekoDrop" -srcfolder "$DMG_STAGING" -ov -format UDZO "$DMG_PATH"
+  hdiutil verify "$DMG_PATH"
+fi
+
 if [[ "$COPY_BUNDLES" -eq 1 ]]; then
   OUTPUT_DIR="$ROOT_DIR/release/desktop/$STAMP"
   BUNDLE_DIR="$CARGO_TARGET_DIR/release/bundle"
@@ -111,14 +140,4 @@ if [[ "$COPY_BUNDLES" -eq 1 ]]; then
 else
   echo "==> Bundle output"
   echo "$CARGO_TARGET_DIR/release/bundle"
-fi
-
-if [[ "$BUNDLES" == *dmg* ]]; then
-  # Keep the installer DMG as the install artifact. Leaving generated .app
-  # bundles in project folders makes Launchpad show duplicate apps.
-  find "$CARGO_TARGET_DIR/release/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
-
-  if [[ "$COPY_BUNDLES" -eq 1 ]]; then
-    find "$ROOT_DIR/release/desktop/$STAMP/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
-  fi
 fi
