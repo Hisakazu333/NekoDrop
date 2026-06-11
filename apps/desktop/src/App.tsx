@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
@@ -35,7 +36,7 @@ type BusyMode =
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
+type ComposerMode = "send" | "devices" | "receive" | "queue" | "history" | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
@@ -721,6 +722,8 @@ export function App() {
           ? "发送队列"
           : mode === "history"
             ? "传输历史"
+            : mode === "settings"
+              ? "设置"
             : selectedDevice
               ? `发给 ${selectedDevice.name}`
               : trimmedConnectionCode.length > 0
@@ -743,6 +746,8 @@ export function App() {
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
           ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
+          : mode === "settings"
+            ? snapshot ? "设备与网络" : "加载中"
           : composerSubtitle;
 
   return (
@@ -792,6 +797,14 @@ export function App() {
             type="button"
           >
             <Icon name="clock" />
+          </button>
+          <button
+            className={mode === "settings" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("settings")}
+            title="设置"
+            type="button"
+          >
+            <Icon name="settings" />
           </button>
         </nav>
 
@@ -986,7 +999,15 @@ export function App() {
               </div>
             </div>
           ) : (
-            <div className={mode === "history" ? "single-workbench is-wide" : "single-workbench"}>
+            <div
+              className={[
+                "single-workbench",
+                mode === "history" ? "is-wide" : "",
+                mode === "settings" ? "is-settings" : ""
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
               <div className="pane-head">
                 <div>
                   <strong>{pageTitle}</strong>
@@ -1112,6 +1133,26 @@ export function App() {
                   }
                 />
               ) : null}
+
+              {mode === "settings" ? (
+                <SettingsPanel
+                  busy={busy}
+                  discoveryStatus={discoveryStatus}
+                  nearbyDeviceCount={nearbyDevices.length}
+                  receiveDir={receiveDir}
+                  receivePolicy={receivePolicy}
+                  receiveSession={receiveSession}
+                  receiveState={receiveState}
+                  snapshot={snapshot}
+                  trustedDeviceCount={trustedDevices.length}
+                  onChooseReceiveDir={chooseReceiveDir}
+                  onCopyConnectionCode={copyConnectionCode}
+                  onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onStartReceive={startReceive}
+                  onStopReceive={stopReceive}
+                  onUpdateReceivePolicy={updateReceivePolicy}
+                />
+              ) : null}
             </div>
           )}
         </section>
@@ -1130,6 +1171,7 @@ type IconName =
   | "link"
   | "list"
   | "send"
+  | "settings"
   | "trash";
 
 function Icon({ name }: { name: IconName }) {
@@ -1144,6 +1186,12 @@ function Icon({ name }: { name: IconName }) {
       {name === "link" ? <path d="M10 13a5 5 0 0 0 7.07 0l2-2A5 5 0 0 0 12 4l-1.2 1.2M14 11a5 5 0 0 0-7.07 0l-2 2A5 5 0 0 0 12 20l1.2-1.2" /> : null}
       {name === "list" ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
+      {name === "settings" ? (
+        <>
+          <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 1.55V21a2 2 0 1 1-4 0v-.05a1.7 1.7 0 0 0-1-1.55 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.6 15a1.7 1.7 0 0 0-1.55-1H3a2 2 0 1 1 0-4h.05A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 9 4.6a1.7 1.7 0 0 0 1-1.55V3a2 2 0 1 1 4 0v.05a1.7 1.7 0 0 0 1 1.55 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9c.28.6.86 1 1.55 1H21a2 2 0 1 1 0 4h-.05A1.7 1.7 0 0 0 19.4 15Z" />
+        </>
+      ) : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
     </svg>
   );
@@ -1741,6 +1789,191 @@ function ReceivePanel({
   );
 }
 
+function SettingsPanel({
+  busy,
+  discoveryStatus,
+  nearbyDeviceCount,
+  receiveDir,
+  receivePolicy,
+  receiveSession,
+  receiveState,
+  snapshot,
+  trustedDeviceCount,
+  onChooseReceiveDir,
+  onCopyConnectionCode,
+  onOpenReceiveDir,
+  onStartReceive,
+  onStopReceive,
+  onUpdateReceivePolicy
+}: {
+  busy: BusyMode | null;
+  discoveryStatus: DiscoveryStatusDto | null;
+  nearbyDeviceCount: number;
+  receiveDir: string;
+  receivePolicy: ReceivePolicyMode;
+  receiveSession: ReceiveSessionDto | null;
+  receiveState: string;
+  snapshot: AppSnapshot | null;
+  trustedDeviceCount: number;
+  onChooseReceiveDir: () => void;
+  onCopyConnectionCode: () => void;
+  onOpenReceiveDir: () => void;
+  onStartReceive: () => void;
+  onStopReceive: () => void;
+  onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
+}) {
+  const identity = snapshot?.device_identity ?? null;
+  const receivePath = receiveSession?.receive_dir ?? receiveDir;
+  const networkAddress = formatNetworkAddress(discoveryStatus, receiveSession);
+
+  return (
+    <section className="settings-panel">
+      <section className="settings-group">
+        <div className="settings-group-head">
+          <strong>设备</strong>
+          <span>{identity ? platformLabel(identity.platform) : "加载中"}</span>
+        </div>
+        <SettingsRow label="名称" value={snapshot?.device_name ?? "加载中"} />
+        <SettingsRow
+          label="设备 ID"
+          mono
+          title={identity?.device_id}
+          value={identity ? shortDeviceId(identity.device_id) : "加载中"}
+        />
+        <SettingsRow
+          label="指纹"
+          mono
+          title={identity?.public_key_fingerprint}
+          value={identity ? shortFingerprint(identity.public_key_fingerprint) : "加载中"}
+        />
+        <SettingsRow
+          label="能力"
+          title={identity?.capabilities.join(", ")}
+          value={identity ? capabilitiesLabel(identity.capabilities) : "加载中"}
+        />
+      </section>
+
+      <section className="settings-group">
+        <div className="settings-group-head">
+          <strong>收件</strong>
+          <span>{receiveState}</span>
+        </div>
+        <SettingsRow
+          label="目录"
+          title={receivePath}
+          value={receivePath}
+          actions={(
+            <>
+              <button className="tool-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+                打开
+              </button>
+              <button
+                className="tool-button"
+                disabled={busy === "pick-receive" || Boolean(receiveSession)}
+                onClick={onChooseReceiveDir}
+                type="button"
+              >
+                选择
+              </button>
+            </>
+          )}
+        />
+        <SettingsRow
+          label="策略"
+          value={(
+            <div className="policy-segment">
+              {RECEIVE_POLICY_OPTIONS.map((option) => (
+                <button
+                  className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
+                  disabled={busy === "receive-policy"}
+                  key={option.value}
+                  onClick={() => onUpdateReceivePolicy(option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
+          title={receivePolicyLabel(receivePolicy)}
+        />
+        <SettingsRow
+          label="状态"
+          value={receiveSession ? receiveSession.bind_addr : receiveState}
+          actions={receiveSession ? (
+            <button
+              className="danger-button"
+              disabled={busy === "stop-receive" || busy === "receive"}
+              onClick={onStopReceive}
+              type="button"
+            >
+              关闭
+            </button>
+          ) : (
+            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+              打开
+            </button>
+          )}
+        />
+        {receiveSession ? (
+          <SettingsRow
+            label="连接码"
+            mono
+            title={receiveSession.connection_code}
+            value={receiveSession.connection_code}
+            actions={(
+              <button className="tool-button" onClick={onCopyConnectionCode} type="button">
+                复制
+              </button>
+            )}
+          />
+        ) : null}
+      </section>
+
+      <section className="settings-group">
+        <div className="settings-group-head">
+          <strong>网络</strong>
+          <span>{discoveryStatus?.phase ?? "启动中"}</span>
+        </div>
+        <SettingsRow label="广播" value={discoveryStatus?.advertised ? "已广播" : "未广播"} />
+        <SettingsRow label="地址" mono title={networkAddress} value={networkAddress} />
+        <SettingsRow label="服务" mono value={discoveryStatus?.service_type ?? "加载中"} />
+        <SettingsRow label="设备" value={`${nearbyDeviceCount} 在线 · ${trustedDeviceCount} 信任`} />
+        <SettingsRow label="最近发现" value={formatLastSeen(discoveryStatus?.last_seen_seconds_ago)} />
+        {discoveryStatus?.last_error ? (
+          <SettingsRow label="最近错误" tone="error" title={discoveryStatus.last_error} value={discoveryStatus.last_error} />
+        ) : null}
+      </section>
+    </section>
+  );
+}
+
+function SettingsRow({
+  actions,
+  label,
+  mono = false,
+  title,
+  tone = "default",
+  value
+}: {
+  actions?: ReactNode;
+  label: string;
+  mono?: boolean;
+  title?: string;
+  tone?: "default" | "error";
+  value: ReactNode;
+}) {
+  return (
+    <div className={tone === "error" ? "settings-row is-error" : "settings-row"}>
+      <span className="settings-label">{label}</span>
+      <div className={mono ? "settings-value is-mono" : "settings-value"} title={title}>
+        {value}
+      </div>
+      {actions ? <div className="settings-actions">{actions}</div> : null}
+    </div>
+  );
+}
+
 function QueuePanel({
   busy,
   manualPaths,
@@ -2159,6 +2392,26 @@ function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
   };
 }
 
+function capabilitiesLabel(capabilities: string[]) {
+  if (capabilities.length === 0) return "无";
+  if (capabilities.length <= 2) return capabilities.join(" · ");
+  return `${capabilities.slice(0, 2).join(" · ")} +${capabilities.length - 2}`;
+}
+
+function formatNetworkAddress(status: DiscoveryStatusDto | null, session: ReceiveSessionDto | null) {
+  if (status?.lan_ip && status.port) return `${status.lan_ip}:${status.port}`;
+  if (status?.lan_ip) return status.lan_ip;
+  if (status?.port) return `:${status.port}`;
+  if (session) return session.bind_addr;
+  return "未监听";
+}
+
+function formatLastSeen(secondsAgo: number | null | undefined) {
+  if (secondsAgo == null) return "无记录";
+  if (secondsAgo < 1) return "刚刚";
+  return `${formatDuration(secondsAgo)} 前`;
+}
+
 function formatBytes(bytes: number) {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
@@ -2404,6 +2657,11 @@ function trustStateLabel(trustState: string) {
 function shortDeviceId(deviceId: string) {
   if (deviceId.length <= 22) return deviceId;
   return `${deviceId.slice(0, 17)}…${deviceId.slice(-4)}`;
+}
+
+function shortFingerprint(fingerprint: string) {
+  if (fingerprint.length <= 24) return fingerprint;
+  return `${fingerprint.slice(0, 12)}…${fingerprint.slice(-8)}`;
 }
 
 function errorMessage(error: unknown) {
