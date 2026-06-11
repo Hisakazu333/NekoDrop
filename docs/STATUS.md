@@ -40,7 +40,7 @@
 | 发送端瞬时网络失败自动重试 | 已接入 | 连接拒绝、连接重置、超时等短暂网络错误会自动重试 1 次；用户取消、对方拒绝、校验失败、权限和路径错误不会自动重试。 |
 | TCP partial offset 断点续传基础 | 已接入 | 接收端可以基于 `.nekodrop-part` 生成 resume files，发送端按 offset 只补传剩余 payload，接收端追加后做 SHA-256 校验。 |
 | 接收端 resume 明细 UI | 已接入 | 接收确认卡片会在存在可续传内容时显示可继续文件数、可跳过已完成文件数和已接收字节数。 |
-| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会自动接受 device_id + fingerprint 匹配的可信设备。 |
+| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；未接入加密会话前，旧配置中的 `auto_accept_trusted` 会按人工确认处理，不再仅凭公开 device_id + fingerprint 静默接收。 |
 | 接收目录持久化 | 已接入 | 选择或启动收件时会写入 `app_config.json`，重启后继续使用。 |
 | 失败/取消历史进度 | 已接入 | 发送失败或取消时，历史记录会保留最后一次真实已传字节数；未传完的发送记录会显示“继续发送”，重试结果会更新同一条历史记录。 |
 | 网络/传输错误提示和地址预检 | 已接入 | 连接阶段有短超时保护；连接拒绝、超时、127.0.0.1、0.0.0.0、169.254.x.x、198.18/198.19、未接入 transport、checksum 等问题会在发送/配对前或失败后转成人能看懂的提示。 |
@@ -67,10 +67,10 @@
 | Envelope | 已接入 | 包含 protocol、version、session_id、message_id、kind、capabilities、payload。 |
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
-| Device hello | 已接入 | 用于设备发现和能力说明。 |
+| Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256 和配对能力，不声明未接入的加密 session / Agent host。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
-| File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path 和半截 sender identity。 |
-| TCP transport | 已接入 | 当前真实传输主线。 |
+| File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path、Windows 不安全路径片段和半截 sender identity。 |
+| TCP transport | 已接入 | 当前真实传输主线；接收文件帧数量有上限，并会按已接受 offer 的 file_count 做早期校验。 |
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |

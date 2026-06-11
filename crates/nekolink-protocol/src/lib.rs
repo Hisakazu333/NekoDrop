@@ -628,29 +628,81 @@ impl TransferOffer {
 }
 
 fn validate_transfer_manifest_path(path: &str) -> Result<(), ProtocolError> {
-    let path = path.trim();
-    if path.is_empty() {
+    let original = path;
+    let trimmed = original.trim();
+    if trimmed.is_empty() {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             "file manifest_path cannot be empty",
         ));
     }
+    if original != trimmed {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "file manifest_path contains leading or trailing whitespace",
+        ));
+    }
+    let path = trimmed;
     if path.starts_with('/') || path.starts_with('\\') || path.contains('\\') {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             "file manifest_path must be a relative slash-separated path",
         ));
     }
-    if path
-        .split('/')
-        .any(|segment| segment.is_empty() || segment == "." || segment == "..")
-    {
-        return Err(ProtocolError::new(
-            ErrorCode::InvalidPayload,
-            "file manifest_path contains an unsafe path segment",
-        ));
+    for segment in path.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "file manifest_path contains an unsafe path segment",
+            ));
+        }
+        if is_windows_unsafe_path_segment(segment) {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "file manifest_path contains a Windows-unsafe path segment",
+            ));
+        }
     }
     Ok(())
+}
+
+fn is_windows_unsafe_path_segment(segment: &str) -> bool {
+    segment.ends_with(' ')
+        || segment.ends_with('.')
+        || segment
+            .chars()
+            .any(|ch| matches!(ch, '<' | '>' | ':' | '"' | '|' | '?' | '*') || ch.is_control())
+        || is_windows_reserved_name(segment)
+}
+
+fn is_windows_reserved_name(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or(segment);
+    let upper = stem.to_ascii_uppercase();
+    matches!(
+        upper.as_str(),
+        "CON"
+            | "PRN"
+            | "AUX"
+            | "NUL"
+            | "COM1"
+            | "COM2"
+            | "COM3"
+            | "COM4"
+            | "COM5"
+            | "COM6"
+            | "COM7"
+            | "COM8"
+            | "COM9"
+            | "LPT1"
+            | "LPT2"
+            | "LPT3"
+            | "LPT4"
+            | "LPT5"
+            | "LPT6"
+            | "LPT7"
+            | "LPT8"
+            | "LPT9"
+    )
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -797,6 +849,10 @@ mod tests {
             "drop/../secret.txt",
             "drop//file.txt",
             r"drop\file.txt",
+            "drop/CON.txt",
+            "drop/file.txt:stream",
+            "drop/trailing.",
+            "drop/trailing ",
         ] {
             let offer = TransferOffer::new(
                 "transfer-1",

@@ -15,6 +15,7 @@ use serde::{Deserialize, Serialize};
 
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
 const MAX_JSON_FRAME_SIZE: usize = 256 * 1024;
+const MAX_FILE_FRAME_COUNT: u32 = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileFrameHeader {
@@ -592,7 +593,43 @@ where
     R: Read,
     F: FnMut(&FileFrameHeader, &mut R) -> NekoDropResult<T>,
 {
+    receive_file_frames_checked(stream, None, &mut receive_file)
+}
+
+pub fn receive_file_frames_with_expected_count<R, F, T>(
+    stream: &mut R,
+    expected_count: usize,
+    mut receive_file: F,
+) -> NekoDropResult<Vec<T>>
+where
+    R: Read,
+    F: FnMut(&FileFrameHeader, &mut R) -> NekoDropResult<T>,
+{
+    let expected_count = u32::try_from(expected_count).map_err(|_| {
+        NekoDropError::Network(format!(
+            "expected file frame count exceeds maximum: {expected_count}"
+        ))
+    })?;
+    receive_file_frames_checked(stream, Some(expected_count), &mut receive_file)
+}
+
+fn receive_file_frames_checked<R, F, T>(
+    stream: &mut R,
+    expected_count: Option<u32>,
+    receive_file: &mut F,
+) -> NekoDropResult<Vec<T>>
+where
+    R: Read,
+    F: FnMut(&FileFrameHeader, &mut R) -> NekoDropResult<T>,
+{
     let count = read_file_count(stream)?;
+    if let Some(expected_count) = expected_count {
+        if count != expected_count {
+            return Err(NekoDropError::Network(format!(
+                "file frame count mismatch: {count} != {expected_count}"
+            )));
+        }
+    }
     let mut received = Vec::with_capacity(count as usize);
 
     for _ in 0..count {
@@ -656,7 +693,13 @@ fn read_file_count(stream: &mut impl Read) -> NekoDropResult<u32> {
     stream
         .read_exact(&mut count_bytes)
         .map_err(|error| NekoDropError::Network(format!("failed to read file count: {error}")))?;
-    Ok(u32::from_be_bytes(count_bytes))
+    let count = u32::from_be_bytes(count_bytes);
+    if count > MAX_FILE_FRAME_COUNT {
+        return Err(NekoDropError::Network(format!(
+            "file frame count exceeds maximum: {count} > {MAX_FILE_FRAME_COUNT}"
+        )));
+    }
+    Ok(count)
 }
 
 fn write_json_frame<T: Serialize>(stream: &mut impl Write, value: &T) -> NekoDropResult<()> {
@@ -941,6 +984,30 @@ mod tests {
         );
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn receive_file_frames_rejects_declared_count_over_limit() {
+        let mut stream = Cursor::new((MAX_FILE_FRAME_COUNT + 1).to_be_bytes().to_vec());
+
+        let error = receive_file_frames(&mut stream, |_, _| -> NekoDropResult<()> {
+            panic!("count validation should happen before reading file headers");
+        })
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("file frame count exceeds maximum"));
+    }
+
+    #[test]
+    fn receive_file_frames_rejects_count_that_differs_from_expected_count() {
+        let mut stream = Cursor::new(2_u32.to_be_bytes().to_vec());
+
+        let error =
+            receive_file_frames_with_expected_count(&mut stream, 1, |_, _| Ok(())).unwrap_err();
+
+        assert!(error.to_string().contains("file frame count mismatch"));
     }
 
     #[test]

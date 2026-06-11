@@ -6,11 +6,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     connect_endpoint, read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
-    read_transfer_offer, receive_file_frames, send_file_frames_with_resume_and_cancel,
-    write_pairing_decision, write_pairing_request, write_transfer_decision_for_transfer,
-    write_transfer_offer, ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame,
-    PairingDecisionPayload, PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer,
-    TransferOfferFile, TransferProgress, TransferResumeFile,
+    read_transfer_offer, receive_file_frames_with_expected_count,
+    send_file_frames_with_resume_and_cancel, write_pairing_decision, write_pairing_request,
+    write_transfer_decision_for_transfer, write_transfer_offer, ConnectionTicket, Endpoint,
+    IncomingControlFrame, OutgoingFileFrame, PairingDecisionPayload, PairingRequestPayload,
+    SentFileFrame, TransferDecision, TransferOffer, TransferOfferFile, TransferProgress,
+    TransferResumeFile,
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, create_source_plan_from_paths,
@@ -330,77 +331,78 @@ where
     let mut bytes_transferred = resume_plan.total_received_bytes();
     let mut file_index = 0_usize;
     let mut on_progress = on_progress;
-    let files = receive_file_frames(stream, |header, stream| {
-        if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
-        }
-        let expected = offer.files.get(file_index).ok_or_else(|| {
-            NekoDropError::Network(format!(
-                "received unexpected extra file frame: {}",
-                header.manifest_path
-            ))
+    let files =
+        receive_file_frames_with_expected_count(stream, offer.file_count, |header, stream| {
+            if should_cancel() {
+                return Err(NekoDropError::Network("transfer cancelled".into()));
+            }
+            let expected = offer.files.get(file_index).ok_or_else(|| {
+                NekoDropError::Network(format!(
+                    "received unexpected extra file frame: {}",
+                    header.manifest_path
+                ))
+            })?;
+            if header.manifest_path != expected.manifest_path
+                || header.size != expected.size
+                || !header.sha256.eq_ignore_ascii_case(&expected.sha256)
+            {
+                return Err(NekoDropError::Network(format!(
+                    "incoming file does not match accepted offer: {}",
+                    header.manifest_path
+                )));
+            }
+            let expected_offset = resume_offsets
+                .get(header.manifest_path.as_str())
+                .copied()
+                .unwrap_or(0);
+            if header.offset != expected_offset {
+                return Err(NekoDropError::Network(format!(
+                    "incoming file resume offset does not match accepted decision for {}: {} != {}",
+                    header.manifest_path, header.offset, expected_offset
+                )));
+            }
+            file_index += 1;
+            on_progress(TransferProgressEvent::Receiving(TransferProgress {
+                manifest_path: header.manifest_path.clone(),
+                file_index,
+                file_count: offer.file_count,
+                file_bytes_transferred: header.offset,
+                file_size: header.size,
+                bytes_transferred,
+                total_bytes: offer.total_bytes,
+            }));
+            let mut last_file_bytes = header.offset;
+            let received = write_received_file_with_resume_and_cancel(
+                receive_dir,
+                &header.manifest_path,
+                header.size,
+                &header.sha256,
+                header.offset,
+                stream,
+                |file_bytes| {
+                    let delta = file_bytes.saturating_sub(last_file_bytes);
+                    last_file_bytes = file_bytes;
+                    on_progress(TransferProgressEvent::Receiving(TransferProgress {
+                        manifest_path: header.manifest_path.clone(),
+                        file_index,
+                        file_count: offer.file_count,
+                        file_bytes_transferred: file_bytes,
+                        file_size: header.size,
+                        bytes_transferred: bytes_transferred.saturating_add(delta),
+                        total_bytes: offer.total_bytes,
+                    }));
+                },
+                || should_cancel(),
+            )?;
+            bytes_transferred = bytes_transferred
+                .saturating_add(received.bytes_written.saturating_sub(header.offset));
+            on_progress(TransferProgressEvent::Verifying {
+                manifest_path: received.manifest_path.clone(),
+                bytes_transferred,
+                total_bytes: offer.total_bytes,
+            });
+            Ok(received)
         })?;
-        if header.manifest_path != expected.manifest_path
-            || header.size != expected.size
-            || !header.sha256.eq_ignore_ascii_case(&expected.sha256)
-        {
-            return Err(NekoDropError::Network(format!(
-                "incoming file does not match accepted offer: {}",
-                header.manifest_path
-            )));
-        }
-        let expected_offset = resume_offsets
-            .get(header.manifest_path.as_str())
-            .copied()
-            .unwrap_or(0);
-        if header.offset != expected_offset {
-            return Err(NekoDropError::Network(format!(
-                "incoming file resume offset does not match accepted decision for {}: {} != {}",
-                header.manifest_path, header.offset, expected_offset
-            )));
-        }
-        file_index += 1;
-        on_progress(TransferProgressEvent::Receiving(TransferProgress {
-            manifest_path: header.manifest_path.clone(),
-            file_index,
-            file_count: offer.file_count,
-            file_bytes_transferred: header.offset,
-            file_size: header.size,
-            bytes_transferred,
-            total_bytes: offer.total_bytes,
-        }));
-        let mut last_file_bytes = header.offset;
-        let received = write_received_file_with_resume_and_cancel(
-            receive_dir,
-            &header.manifest_path,
-            header.size,
-            &header.sha256,
-            header.offset,
-            stream,
-            |file_bytes| {
-                let delta = file_bytes.saturating_sub(last_file_bytes);
-                last_file_bytes = file_bytes;
-                on_progress(TransferProgressEvent::Receiving(TransferProgress {
-                    manifest_path: header.manifest_path.clone(),
-                    file_index,
-                    file_count: offer.file_count,
-                    file_bytes_transferred: file_bytes,
-                    file_size: header.size,
-                    bytes_transferred: bytes_transferred.saturating_add(delta),
-                    total_bytes: offer.total_bytes,
-                }));
-            },
-            || should_cancel(),
-        )?;
-        bytes_transferred =
-            bytes_transferred.saturating_add(received.bytes_written.saturating_sub(header.offset));
-        on_progress(TransferProgressEvent::Verifying {
-            manifest_path: received.manifest_path.clone(),
-            bytes_transferred,
-            total_bytes: offer.total_bytes,
-        });
-        Ok(received)
-    })?;
     if files.len() != offer.file_count {
         return Err(NekoDropError::Network(format!(
             "received file count does not match accepted offer: {} != {}",

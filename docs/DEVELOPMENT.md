@@ -50,6 +50,41 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 不要把 `npm run dev` 的浏览器页面当作软件运行结果。用户要的是桌面软件，验证时必须启动 Tauri 窗口。
 
+## GitHub 开发流程
+
+本项目使用 GitHub Flow。`main` 必须始终保持可构建、可测试、可打包；功能、修复、安全收口、UI 改动和发布打包都必须开短分支，通过 PR 合并。
+
+分支命名示例：
+
+```text
+fix/windows-path-encoding
+hardening/security-reliability
+feat/large-file-scan-status
+ui/desktop-style-refresh
+docs/release-checklist
+```
+
+每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
+
+```text
+fix: preserve windows file picker paths
+feat: show large file scan status
+security: harden transfer frame validation
+docs: add release checklist
+```
+
+合并前至少跑：
+
+```bash
+cargo fmt --all -- --check
+cargo test --workspace
+npm run build
+npm audit --omit=dev
+git diff --check
+```
+
+Release 安装包必须从 tag 对应代码构建，不从临时工作区随手打包。预览版 tag 使用 `v0.1.0-preview.N` 形式，发布资产需要同时写出 DMG / Windows 安装包的 SHA256。完整规范见仓库根目录 `CONTRIBUTING.md`。
+
 ## 实现顺序
 
 1. 保持 `nekodrop-core` 作为产品模型源头。
