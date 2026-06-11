@@ -50,6 +50,26 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 不要把 `npm run dev` 的浏览器页面当作软件运行结果。用户要的是桌面软件，验证时必须启动 Tauri 窗口。
 
+## macOS 打包验证
+
+生成预览 DMG：
+
+```bash
+./scripts/package-desktop.sh --skip-tests --dmg
+```
+
+脚本会先生成 `NekoDrop.app`，再对整个 `.app` 做 ad-hoc 签名，然后用签名后的 `.app` 生成 DMG。不要直接依赖 Tauri 生成的未验证 bundle 作为发布资产。
+
+打包后至少检查：
+
+```bash
+hdiutil verify release/desktop/<时间戳>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
+codesign --verify --deep --strict release/desktop/<时间戳>/bundle/macos/NekoDrop.app
+shasum -a 256 release/desktop/<时间戳>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
+```
+
+当前 macOS 包是 ad-hoc 签名，不是 Developer ID 签名，也没有 notarization 公证。它适合内部预览和开发验证；公开分发前必须补 Developer ID 证书、公证和 stapling。
+
 ## GitHub 开发流程
 
 本项目使用 GitHub Flow。`main` 必须始终保持可构建、可测试、可打包；功能、修复、安全收口、UI 改动和发布打包都必须开短分支，通过 PR 合并。

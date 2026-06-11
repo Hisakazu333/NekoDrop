@@ -18,7 +18,7 @@ Usage:
 Options:
   --skip-tests   Build without running cargo test.
   --no-copy      Leave Tauri bundles under the package target directory only.
-  --dmg          Ask Tauri to build both app and dmg bundles.
+  --dmg          Build a signed app bundle, then create and verify a DMG.
   -h, --help     Show this help.
 USAGE
 }

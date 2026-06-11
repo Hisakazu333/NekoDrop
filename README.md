@@ -119,6 +119,8 @@ macOS：
 
 打包完成后，打开 `release/desktop/<时间戳>/bundle/dmg/` 里的 DMG，把 `NekoDrop.app` 拖到 `Applications`。
 
+当前 macOS 预览包使用 ad-hoc 签名，脚本会校验 `.app` bundle 和 DMG 结构，但还没有 Apple Developer ID 签名和 notarization 公证。首次打开时如果 macOS 提示无法验证开发者，请右键 `NekoDrop.app` 选择“打开”。正式公开分发前必须补 Developer ID 签名和公证。
+
 Windows 11：
 
 ```powershell
@@ -204,13 +206,34 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 ./scripts/package-desktop.sh --skip-tests --dmg
 ```
 
+`--dmg` 的真实流程是：
+
+```text
+构建前端
+  -> Tauri 构建 NekoDrop.app
+  -> 对整个 .app 做 ad-hoc codesign
+  -> codesign --verify --deep --strict
+  -> 将签名后的 .app 和 Applications 链接写入 DMG
+  -> hdiutil verify
+```
+
 输出目录：
 
 ```text
 release/desktop/<时间戳>/
 ```
 
-DMG 是安装物。使用 `--dmg` 时，脚本会保留 DMG，清理额外复制出来的 `.app`，避免 Launchpad 里出现重复应用。
+DMG 是安装物。脚本也会保留 `bundle/macos/NekoDrop.app`，用于签名和启动问题诊断；用户安装时仍然应该从 `bundle/dmg/` 里的 DMG 拖到 `Applications`。
+
+发布或提交 GitHub Release 前至少记录：
+
+```bash
+hdiutil verify release/desktop/<时间戳>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
+codesign --verify --deep --strict release/desktop/<时间戳>/bundle/macos/NekoDrop.app
+shasum -a 256 release/desktop/<时间戳>/bundle/dmg/NekoDrop_0.1.0_aarch64.dmg
+```
+
+Release 安装包必须从 tag 对应代码构建，不要从临时 worktree 直接当正式包发布。
 
 ### Windows 11
 

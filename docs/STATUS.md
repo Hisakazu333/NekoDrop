@@ -58,7 +58,7 @@
 | 可信设备地址刷新 | 已接入 | 自动发现扫到可信设备时，会用 device_id + fingerprint 更新可信记录里的 host、port 和 last_seen；收到可信设备真实来件或主动发送成功后也会刷新 last_seen；可信设备列表按最近活跃优先恢复，并按 device_id 去重。 |
 | 备用码复制兜底 | 已接入 | 系统剪贴板写入失败时会尝试 DOM fallback，并给出失败提示。 |
 | 设备管理页 | 已接入 | 展示附近设备和可信设备。 |
-| macOS DMG | 已接入 | `scripts/package-desktop.sh --dmg`。 |
+| macOS DMG | 已接入 | `scripts/package-desktop.sh --dmg` 会构建 `.app`、生成 icon resources、对 `.app` 做 ad-hoc 签名、执行 `codesign --verify --deep --strict`，再生成并 `hdiutil verify` DMG。 |
 | Windows NSIS / MSI | 已接入 | `scripts/package-windows.ps1`。 |
 
 ## 协议与传输
@@ -83,6 +83,7 @@
 - Relay 服务器
 - P2P / NAT 打洞
 - 加密 session
+- Apple Developer ID 签名和 macOS notarization 公证
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - NekoState 状态同步
