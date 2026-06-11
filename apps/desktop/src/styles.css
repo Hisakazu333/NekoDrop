@@ -380,7 +380,10 @@ p {
 }
 
 .home-state-line span {
-  flex: 0 0 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .brand-line {

@@ -9,6 +9,7 @@ import type {
   DiscoveryStatusDto,
   PendingPairingRequestDto,
   PendingReceiveOfferDto,
+  ReceivePortDiagnosticsDto,
   ReceiveReportDto,
   ReceiveSessionDto,
   SendReportDto,
@@ -57,6 +58,7 @@ export function App() {
   const [nearbyDevices, setNearbyDevices] = useState<DeviceDto[]>([]);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatusDto | null>(null);
   const [receiveSession, setReceiveSession] = useState<ReceiveSessionDto | null>(null);
+  const [receiveDiagnostics, setReceiveDiagnostics] = useState<ReceivePortDiagnosticsDto | null>(null);
   const [receiveStatus, setReceiveStatus] = useState<string | null>(null);
   const [receiveReport, setReceiveReport] = useState<ReceiveReportDto | null>(null);
   const [pendingReceiveOffer, setPendingReceiveOffer] = useState<PendingReceiveOfferDto | null>(null);
@@ -243,6 +245,7 @@ export function App() {
       pendingOffer,
       pairingRequest,
       nextTransferStatus,
+      diagnostics,
       devices,
       trusted,
       discovery,
@@ -254,6 +257,7 @@ export function App() {
       invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
       invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
       invokeCommand<TransferStatusDto | null>("get_transfer_status"),
+      invokeCommand<ReceivePortDiagnosticsDto>("get_receive_port_diagnostics"),
       invokeCommand<DeviceDto[]>("list_nearby_devices"),
       invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
       invokeCommand<DiscoveryStatusDto>("get_discovery_status"),
@@ -265,6 +269,7 @@ export function App() {
     setPendingReceiveOffer(pendingOffer);
     setPendingPairingRequest(pairingRequest);
     setTransferStatus(nextTransferStatus);
+    setReceiveDiagnostics(diagnostics);
     setNearbyDevices(devices);
     setTrustedDevices(trusted);
     setDiscoveryStatus(discovery);
@@ -966,7 +971,12 @@ export function App() {
                       onCancelTransfer={cancelCurrentTransfer}
                     />
                   ) : (
-                    <HomeStateLine discoveryStatus={discoveryStatus} receiveState={receiveState} transfers={transfers} />
+                    <HomeStateLine
+                      diagnostics={receiveDiagnostics}
+                      discoveryStatus={discoveryStatus}
+                      receiveState={receiveState}
+                      transfers={transfers}
+                    />
                   )}
 
                   <RecentActivity
@@ -1378,20 +1388,23 @@ function TransferScanStatus({ status }: { status: TransferScanProgressDto | null
 }
 
 function HomeStateLine({
+  diagnostics,
   discoveryStatus,
   receiveState,
   transfers
 }: {
+  diagnostics: ReceivePortDiagnosticsDto | null;
   discoveryStatus: DiscoveryStatusDto | null;
   receiveState: string;
   transfers: TransferDto[];
 }) {
   const discoveryCopy = discoveryStateCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
   const latest = transfers[0];
+  const receiveDetail = receiveDiagnosticsLabel(diagnostics);
 
   return (
     <div className="home-state-line">
-      <span>{receiveState}</span>
+      <span>{receiveState}{receiveDetail ? ` · ${receiveDetail}` : ""}</span>
       <strong>{latest ? transferDirectionLabel(latest) : discoveryCopy.label}</strong>
     </div>
   );
@@ -2211,6 +2224,17 @@ function pendingOfferResumeSummaryLabel(summary: PendingReceiveOfferDto["resume_
 function receivePolicyLabel(value: ReceivePolicyMode) {
   if (value === "block_all") return "已阻止外部接收";
   return "接收前询问";
+}
+
+function receiveDiagnosticsLabel(diagnostics: ReceivePortDiagnosticsDto | null) {
+  if (!diagnostics) return "";
+  if (!diagnostics.listening) return "未监听";
+  if (diagnostics.phase === "no_lan_ip") return "无局域网地址";
+  if (diagnostics.phase === "invalid_bind_addr") return "监听地址异常";
+  if (diagnostics.advertised_host && diagnostics.port) {
+    return `${diagnostics.advertised_host}:${diagnostics.port}`;
+  }
+  return diagnostics.port ? `端口 ${diagnostics.port}` : "";
 }
 
 function transferDirectionLabel(transfer: TransferDto) {
