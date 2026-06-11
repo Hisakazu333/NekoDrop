@@ -4,6 +4,7 @@ pub mod manifest_builder;
 pub mod receive_dir;
 pub mod received_file;
 pub mod resume;
+pub mod space;
 
 pub use checksum::{sha256_file, verify_sha256_file, Checksum, ChecksumAlgorithm};
 pub use chunk::{ChunkPlan, ChunkRange};
@@ -20,4 +21,8 @@ pub use received_file::{
 pub use resume::{
     build_resume_plan, build_resume_plan_for_files, inspect_resume_file_state, ResumeExpectedFile,
     ResumeFileState, ResumePlan,
+};
+pub use space::{
+    check_receive_space, check_receive_space_with_available_bytes, remaining_receive_bytes,
+    ReceiveSpaceStatus,
 };

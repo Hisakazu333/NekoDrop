@@ -13,7 +13,7 @@ use nekodrop_network::{
     TransferOfferFile, TransferProgress, TransferResumeFile,
 };
 use nekodrop_storage::{
-    build_resume_plan_for_files, create_source_plan_from_paths,
+    build_resume_plan_for_files, check_receive_space, create_source_plan_from_paths,
     write_received_file_with_resume_and_cancel, ReceivedFile, ResumeExpectedFile, ResumePlan,
 };
 use nekolink_protocol::DeviceIdentity;
@@ -323,6 +323,14 @@ where
             return Err(error);
         }
     };
+    if let Err(error) = check_receive_space(receive_dir, offer.total_bytes, &resume_plan) {
+        let _ = write_transfer_decision_for_transfer(
+            stream,
+            &offer.transfer_id,
+            &TransferDecision::decline("insufficient receive space"),
+        );
+        return Err(error);
+    }
     let decision = TransferDecision::accept_with_resume(resume_files_from_plan(&resume_plan)?);
     write_transfer_decision_for_transfer(stream, &offer.transfer_id, &decision)?;
     let resume_offsets = resume_offsets_by_path(&decision.resume_files)?;
@@ -621,6 +629,48 @@ mod tests {
         assert!(send_result.is_err());
         assert!(receive_result.is_err());
         assert!(!receive_dir.join("drop/sample.txt").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn receiver_declines_transfer_when_receive_space_is_insufficient() {
+        let dir = unique_temp_dir("service-space-preflight");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            move || accept_transfer_with_decision(&listener, &receive_dir, |_| true, |_| {})
+        });
+
+        let mut stream = connect_endpoint(&endpoint).unwrap();
+        let offer = TransferOffer::new(
+            "transfer-huge",
+            "huge",
+            vec![TransferOfferFile {
+                manifest_path: "huge/video.bin".to_string(),
+                size: u64::MAX,
+                sha256: "0".repeat(64),
+            }],
+        );
+        write_transfer_offer(&mut stream, &offer).unwrap();
+        let decision = read_transfer_decision(&mut stream).unwrap();
+        drop(stream);
+        let receive_result = receiver.join().unwrap();
+
+        assert!(!decision.accepted);
+        assert!(decision
+            .reason
+            .as_deref()
+            .unwrap_or_default()
+            .contains("insufficient receive space"));
+        assert!(receive_result
+            .unwrap_err()
+            .to_string()
+            .contains("insufficient receive space"));
 
         fs::remove_dir_all(dir).unwrap();
     }
