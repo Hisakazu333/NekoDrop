@@ -340,6 +340,8 @@ V1.2  OpenNeko / NekoState 试点
 - [协议草案](docs/PROTOCOL.md)
 - [安全模型](docs/SECURITY.md)
 - [模块边界](docs/MODULES.md)
+- [大文件传输测试矩阵](docs/testing/LARGE_FILE_TRANSFER_MATRIX.md)
+- [传输测试结果模板](docs/testing/RESULT_TEMPLATE.md)
 - [NekoDrop 产品层](docs/modules/NEKODROP.md)
 - [NekoLink 协议层](docs/modules/NEKOLINK.md)
 - [发现与传输层](docs/modules/DISCOVERY_AND_TRANSPORT.md)
