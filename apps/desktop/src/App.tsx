@@ -34,11 +34,10 @@ type BusyMode =
   | "open";
 
 type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
-type ReceivePolicyMode = "always_ask" | "auto_accept_trusted" | "block_all";
+type ReceivePolicyMode = "always_ask" | "block_all";
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
   { value: "always_ask", label: "询问" },
-  { value: "auto_accept_trusted", label: "可信" },
   { value: "block_all", label: "阻止" }
 ];
 
@@ -2114,7 +2113,7 @@ function formatBytes(bytes: number) {
 }
 
 function normalizeReceivePolicy(value: string): ReceivePolicyMode {
-  if (value === "auto_accept_trusted" || value === "block_all") return value;
+  if (value === "block_all") return value;
   return "always_ask";
 }
 
@@ -2156,7 +2155,6 @@ function pendingOfferResumeSummaryLabel(summary: PendingReceiveOfferDto["resume_
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {
-  if (value === "auto_accept_trusted") return "仅可信设备自动接收";
   if (value === "block_all") return "已阻止外部接收";
   return "接收前询问";
 }
