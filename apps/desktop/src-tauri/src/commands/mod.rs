@@ -2544,6 +2544,10 @@ fn friendly_transfer_error(error: &str) -> String {
     if lower.contains("transfer cancelled") {
         return "传输已取消".to_string();
     }
+    if lower.contains("insufficient receive space") || lower.contains("disk full") {
+        return "接收目录所在磁盘空间不足。请清理空间，或在设置里选择另一个接收目录后重试。"
+            .to_string();
+    }
 
     if lower.contains("unsupported connection code")
         || lower.contains("connection code missing")
@@ -2663,6 +2667,16 @@ mod tests {
 
         let checksum = friendly_transfer_error("incoming file does not match accepted offer");
         assert!(checksum.contains("文件校验失败"));
+    }
+
+    #[test]
+    fn friendly_transfer_error_explains_insufficient_receive_space() {
+        let message = friendly_transfer_error(
+            "storage error: insufficient receive space: need 100 bytes, available 70 bytes",
+        );
+
+        assert!(message.contains("接收目录"));
+        assert!(message.contains("空间不足"));
     }
 
     #[test]

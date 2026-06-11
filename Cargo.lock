@@ -1890,9 +1890,11 @@ name = "nekodrop-storage"
 version = "0.1.0"
 dependencies = [
  "hex",
+ "libc",
  "nekodrop-core",
  "sha2",
  "walkdir",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
