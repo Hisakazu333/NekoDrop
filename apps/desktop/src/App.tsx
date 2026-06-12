@@ -9,6 +9,10 @@ import {
   platformLabel as devicePlatformLabel
 } from "./deviceDisplay";
 import {
+  currentTransferRecoveryActions,
+  findCurrentFailedTransfer
+} from "./currentTransferRecovery";
+import {
   hasReceiveDiagnosticsWarning,
   receiveDiagnosticsAdvice
 } from "./receiveDiagnostics";
@@ -117,6 +121,10 @@ export function App() {
       (selectedDeviceSnapshot?.id === selectedDeviceId ? selectedDeviceSnapshot : null) ??
       null,
     [selectedDeviceId, selectedDeviceSnapshot, trustedNearbyDevices]
+  );
+  const currentFailedTransfer = useMemo(
+    () => findCurrentFailedTransfer(transferStatus, transfers),
+    [transferStatus, transfers]
   );
   const trimmedConnectionCode = connectionCode.trim();
   const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
@@ -901,7 +909,9 @@ export function App() {
               busy={busy}
               metrics={transferMetrics}
               status={transferStatus}
+              recoveryTransfer={currentFailedTransfer}
               onCancel={cancelCurrentTransfer}
+              onRecover={resendTransfer}
               onUseFallbackCode={openFallbackCode}
             />
           ) : null}
@@ -1009,7 +1019,10 @@ export function App() {
                       transferStatus={transferStatus}
                       transferCount={transferPaths.length}
                       busy={busy}
+                      recoveryTransfer={currentFailedTransfer}
                       onCancelTransfer={cancelCurrentTransfer}
+                      onRecoverTransfer={resendTransfer}
+                      onUseFallbackCode={openFallbackCode}
                     />
                   ) : (
                     <HomeStateLine
@@ -2024,7 +2037,10 @@ function StatusLine({
   transferMetrics,
   transferStatus,
   transferCount,
-  onCancelTransfer
+  recoveryTransfer,
+  onCancelTransfer,
+  onRecoverTransfer,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   plan: TransferPlanDto | null;
@@ -2037,7 +2053,10 @@ function StatusLine({
   };
   transferStatus: TransferStatusDto | null;
   transferCount: number;
+  recoveryTransfer: TransferDto | null;
   onCancelTransfer: () => void;
+  onRecoverTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
 }) {
   if (transferStatus && transferStatus.phase !== "completed") {
     return (
@@ -2045,7 +2064,10 @@ function StatusLine({
         busy={busy}
         metrics={transferMetrics}
         status={transferStatus}
+        recoveryTransfer={recoveryTransfer}
         onCancel={onCancelTransfer}
+        onRecover={onRecoverTransfer}
+        onUseFallbackCode={onUseFallbackCode}
       />
     );
   }
@@ -2184,7 +2206,9 @@ function ActiveTransferBar({
   busy,
   metrics,
   status,
+  recoveryTransfer,
   onCancel,
+  onRecover,
   onUseFallbackCode
 }: {
   busy: BusyMode | null;
@@ -2193,10 +2217,13 @@ function ActiveTransferBar({
     etaSeconds: number | null;
   };
   status: TransferStatusDto;
+  recoveryTransfer: TransferDto | null;
   onCancel: () => void;
+  onRecover: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
   const model = buildTransferProgressViewModel(status, metrics);
+  const recoveryActions = currentTransferRecoveryActions(status, recoveryTransfer);
   const canCancel =
     !matchesTerminalTransferPhase(status.phase) &&
     (status.direction === "send" ||
@@ -2226,9 +2253,18 @@ function ActiveTransferBar({
           取消
         </button>
       ) : status.phase === "failed" ? (
-        <button className="text-button" onClick={onUseFallbackCode} type="button">
-          备用码
-        </button>
+        <div className="transfer-status-actions">
+          {recoveryActions.primaryLabel && recoveryTransfer ? (
+            <button className="text-button" disabled={busy === "resend"} onClick={() => onRecover(recoveryTransfer)} type="button">
+              {recoveryActions.primaryLabel}
+            </button>
+          ) : null}
+          {recoveryActions.fallbackLabel ? (
+            <button className="text-button" onClick={onUseFallbackCode} type="button">
+              {recoveryActions.fallbackLabel}
+            </button>
+          ) : null}
+        </div>
       ) : null}
     </section>
   );
@@ -2238,7 +2274,9 @@ function TransferStatusView({
   busy,
   metrics,
   status,
+  recoveryTransfer,
   onCancel,
+  onRecover,
   onUseFallbackCode
 }: {
   busy?: BusyMode | null;
@@ -2247,10 +2285,13 @@ function TransferStatusView({
     etaSeconds: number | null;
   };
   status: TransferStatusDto;
+  recoveryTransfer?: TransferDto | null;
   onCancel?: () => void;
+  onRecover?: (transfer: TransferDto) => void;
   onUseFallbackCode?: () => void;
 }) {
   const model = buildTransferProgressViewModel(status, metrics ?? { speedBytesPerSecond: null, etaSeconds: null });
+  const recoveryActions = currentTransferRecoveryActions(status, recoveryTransfer ?? null);
   const canCancel =
     onCancel &&
     !matchesTerminalTransferPhase(status.phase) &&
@@ -2268,10 +2309,19 @@ function TransferStatusView({
           <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
             取消
           </button>
-        ) : status.phase === "failed" && onUseFallbackCode ? (
-          <button className="text-button" onClick={onUseFallbackCode} type="button">
-            备用码
-          </button>
+        ) : status.phase === "failed" ? (
+          <span className="transfer-status-actions">
+            {recoveryActions.primaryLabel && recoveryTransfer && onRecover ? (
+              <button className="text-button" disabled={busy === "resend"} onClick={() => onRecover(recoveryTransfer)} type="button">
+                {recoveryActions.primaryLabel}
+              </button>
+            ) : null}
+            {recoveryActions.fallbackLabel && onUseFallbackCode ? (
+              <button className="text-button" onClick={onUseFallbackCode} type="button">
+                {recoveryActions.fallbackLabel}
+              </button>
+            ) : null}
+          </span>
         ) : null}
       </div>
       {status.total_bytes > 0 ? (
