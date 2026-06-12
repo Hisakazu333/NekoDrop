@@ -9,19 +9,31 @@ export interface DiscoveryCopy {
   isError: boolean;
 }
 
-export function discoveryTroubleshootingHint() {
+export type NetworkGuidancePlatform = string | null | undefined;
+
+export function discoveryTroubleshootingHint(platform?: NetworkGuidancePlatform) {
+  if (isWindows(platform)) return "确认同一局域网；Windows 允许专用网络；可用备用码";
+  if (isMacos(platform)) return "确认同一局域网；macOS 允许本地网络；可用备用码";
   return "确认同一局域网；Windows 允许专用网络；macOS 允许本地网络；可用备用码";
 }
 
-export function unavailableDiscoveryHint() {
+export function unavailableDiscoveryHint(platform?: NetworkGuidancePlatform) {
+  if (isWindows(platform)) return "检查 Windows 防火墙和专用网络权限；可用备用码";
+  if (isMacos(platform)) return "检查 macOS 本地网络权限；可用备用码";
   return "检查 Windows 防火墙或 macOS 本地网络权限；可用备用码";
 }
 
-export function broadcastTroubleshootingHint() {
+export function broadcastTroubleshootingHint(platform?: NetworkGuidancePlatform) {
+  if (isWindows(platform)) return "允许 NekoDrop 访问 Windows 专用网络；可用备用码";
+  if (isMacos(platform)) return "允许 NekoDrop 访问 macOS 本地网络；可用备用码";
   return "允许 NekoDrop 访问专用网络或本地网络；可用备用码";
 }
 
-export function buildDiscoveryCopy(status: DiscoveryStatusDto | null, deviceCount: number): DiscoveryCopy {
+export function buildDiscoveryCopy(
+  status: DiscoveryStatusDto | null,
+  deviceCount: number,
+  platform?: NetworkGuidancePlatform
+): DiscoveryCopy {
   if (!status) {
     return {
       label: "启动中",
@@ -38,7 +50,7 @@ export function buildDiscoveryCopy(status: DiscoveryStatusDto | null, deviceCoun
       label: "发现异常",
       subtitle: status.last_error ? "mDNS 异常" : "不可用",
       emptyTitle: "发现异常",
-      emptyBody: unavailableDiscoveryHint(),
+      emptyBody: unavailableDiscoveryHint(platform),
       targetLabel: "发现异常 · 备用码",
       isError: true
     };
@@ -50,7 +62,7 @@ export function buildDiscoveryCopy(status: DiscoveryStatusDto | null, deviceCoun
       label: hasNetworkError ? "广播异常" : "未广播",
       subtitle: hasNetworkError ? "检查网络" : "收件关闭",
       emptyTitle: hasNetworkError ? "广播异常" : "未广播",
-      emptyBody: hasNetworkError ? broadcastTroubleshootingHint() : "打开收件后会广播本机",
+      emptyBody: hasNetworkError ? broadcastTroubleshootingHint(platform) : "打开收件后会广播本机",
       targetLabel: hasNetworkError ? "广播异常 · 权限/网络" : "未广播 · 打开收件",
       isError: hasNetworkError
     };
@@ -71,8 +83,17 @@ export function buildDiscoveryCopy(status: DiscoveryStatusDto | null, deviceCoun
     label: "扫描中",
     subtitle: "搜索中",
     emptyTitle: "无设备",
-    emptyBody: discoveryTroubleshootingHint(),
+    emptyBody: discoveryTroubleshootingHint(platform),
     targetLabel: "扫描中 · 权限/同网段",
     isError: false
   };
+}
+
+function isWindows(platform?: NetworkGuidancePlatform) {
+  return platform?.toLowerCase() === "windows";
+}
+
+function isMacos(platform?: NetworkGuidancePlatform) {
+  const normalized = platform?.toLowerCase();
+  return normalized === "macos" || normalized === "darwin";
 }

@@ -138,6 +138,7 @@ export function App() {
   const selectedTargetCopy = selectedTrustedRecord
     ? selectedTrustedTargetCopy(selectedTrustedRecord, selectedTrustedOnline)
     : null;
+  const localPlatform = snapshot?.device_identity.platform ?? null;
   const trimmedConnectionCode = connectionCode.trim();
   const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
   const receiveState = receiveSession
@@ -1004,6 +1005,7 @@ export function App() {
                     busy={busy}
                     discoveryStatus={discoveryStatus}
                     devices={nearbyDevices}
+                    localPlatform={localPlatform}
                     selectedDeviceId={selectedDeviceId}
                     onSelectDevice={(device) => {
                       setSelectedDeviceId(device.id);
@@ -1046,6 +1048,7 @@ export function App() {
                     <HomeStateLine
                       diagnostics={receiveDiagnostics}
                       discoveryStatus={discoveryStatus}
+                      localPlatform={localPlatform}
                       receiveState={receiveState}
                       transfers={transfers}
                     />
@@ -1085,6 +1088,7 @@ export function App() {
                     connectionCodeOpen={connectionCodeOpen}
                     discoveryStatus={discoveryStatus}
                     devices={nearbyDevices}
+                    localPlatform={localPlatform}
                     receiveSession={receiveSession}
                     receiveState={receiveState}
                     selectedDeviceId={selectedDeviceId}
@@ -1135,6 +1139,7 @@ export function App() {
                 <DevicePanel
                   busy={busy}
                   discoveryStatus={discoveryStatus}
+                  localPlatform={localPlatform}
                   nearbyDevices={nearbyDevices}
                   selectedDeviceId={selectedDeviceId}
                   trustedDevices={trustedDevices}
@@ -1238,6 +1243,7 @@ function TargetStrip({
   busy,
   discoveryStatus,
   devices,
+  localPlatform,
   selectedDeviceId,
   onSelectDevice,
   onTrustDevice
@@ -1245,11 +1251,12 @@ function TargetStrip({
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
+  localPlatform: string | null;
   selectedDeviceId: string | null;
   onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length, localPlatform);
 
   return (
     <section className="target-strip" aria-label="附近设备">
@@ -1298,6 +1305,7 @@ function TargetPanel({
   connectionCodeOpen,
   discoveryStatus,
   devices,
+  localPlatform,
   receiveSession,
   receiveState,
   selectedDeviceId,
@@ -1315,6 +1323,7 @@ function TargetPanel({
   connectionCodeOpen: boolean;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
+  localPlatform: string | null;
   receiveSession: ReceiveSessionDto | null;
   receiveState: string;
   selectedDeviceId: string | null;
@@ -1333,6 +1342,7 @@ function TargetPanel({
         busy={busy}
         discoveryStatus={discoveryStatus}
         devices={devices}
+        localPlatform={localPlatform}
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={onSelectDevice}
         onTrustDevice={onTrustDevice}
@@ -1465,15 +1475,17 @@ function TransferScanStatus({ status }: { status: TransferScanProgressDto | null
 function HomeStateLine({
   diagnostics,
   discoveryStatus,
+  localPlatform,
   receiveState,
   transfers
 }: {
   diagnostics: ReceivePortDiagnosticsDto | null;
   discoveryStatus: DiscoveryStatusDto | null;
+  localPlatform: string | null;
   receiveState: string;
   transfers: TransferDto[];
 }) {
-  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, discoveryStatus?.device_count ?? 0, localPlatform);
   const latest = transfers[0];
   const receiveDetail = receiveDiagnosticsLabel(diagnostics);
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
@@ -1492,6 +1504,7 @@ function NearbyDevices({
   busy,
   discoveryStatus,
   devices,
+  localPlatform,
   selectedDeviceId,
   onSelectDevice,
   onTrustDevice
@@ -1499,11 +1512,12 @@ function NearbyDevices({
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
+  localPlatform: string | null;
   selectedDeviceId: string | null;
   onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length, localPlatform);
 
   return (
     <section className="nearby-strip">
@@ -1575,6 +1589,7 @@ function NearbyDevices({
 function DevicePanel({
   busy,
   discoveryStatus,
+  localPlatform,
   nearbyDevices,
   selectedDeviceId,
   trustedDevices,
@@ -1585,6 +1600,7 @@ function DevicePanel({
 }: {
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
+  localPlatform: string | null;
   nearbyDevices: DeviceDto[];
   selectedDeviceId: string | null;
   trustedDevices: TrustedDeviceDto[];
@@ -1650,6 +1666,7 @@ function DevicePanel({
         busy={busy}
         discoveryStatus={discoveryStatus}
         devices={nearbyDevices}
+        localPlatform={localPlatform}
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={onSelectNearbyDevice}
         onTrustDevice={onTrustDevice}

@@ -33,6 +33,17 @@ test("no-device discovery hint names Windows and macOS network permissions", () 
   assert.match(hint, /本地网络/);
 });
 
+test("platform-specific discovery hints focus on the current system", () => {
+  assert.equal(
+    discoveryTroubleshootingHint("windows"),
+    "确认同一局域网；Windows 允许专用网络；可用备用码"
+  );
+  assert.equal(
+    discoveryTroubleshootingHint("macos"),
+    "确认同一局域网；macOS 允许本地网络；可用备用码"
+  );
+});
+
 test("discovery failure hints keep connection code as the fallback", () => {
   assert.match(unavailableDiscoveryHint(), /备用码/);
   assert.match(broadcastTroubleshootingHint(), /备用码/);
@@ -43,11 +54,12 @@ test("builds actionable copy for unavailable discovery", () => {
     phase: "unavailable",
     advertised: false,
     last_error: "mdns failed"
-  }), 0);
+  }), 0, "windows");
 
   assert.equal(copy.label, "发现异常");
   assert.equal(copy.isError, true);
-  assert.match(copy.emptyBody, /防火墙/);
+  assert.match(copy.emptyBody, /Windows/);
+  assert.doesNotMatch(copy.emptyBody, /macOS/);
   assert.match(copy.emptyBody, /备用码/);
 });
 
