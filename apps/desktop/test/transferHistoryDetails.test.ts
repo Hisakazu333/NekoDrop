@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { buildTransferHistoryDetailViewModel } from "../src/transferHistoryDetails.ts";
+import {
+  buildRecentTransferDetailLine,
+  buildTransferHistoryDetailViewModel
+} from "../src/transferHistoryDetails.ts";
 import type { TransferDto } from "../src/types.ts";
 
 function transfer(overrides: Partial<TransferDto> = {}): TransferDto {
@@ -77,4 +80,19 @@ test("uses resend as the primary action for completed send transfers", () => {
   }));
 
   assert.equal(model.primaryActionLabel, "重发");
+});
+
+test("summarizes recent failed transfers with the next recovery step", () => {
+  assert.equal(
+    buildRecentTransferDetailLine(transfer()),
+    "已传 2.0 GB，剩余 1.0 GB，可继续发送"
+  );
+
+  assert.equal(
+    buildRecentTransferDetailLine(transfer({
+      transferred_bytes: 0,
+      error_message: "连接超时。常见原因是 Windows 防火墙拦截、两台设备不在同一网段、路由器隔离了有线/无线，或 VPN/代理影响了局域网连接。"
+    })),
+    "确认同一局域网；关闭 VPN/代理；可用备用码"
+  );
 });

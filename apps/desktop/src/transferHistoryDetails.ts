@@ -37,6 +37,11 @@ export function transferPrimaryActionLabel(transfer: TransferDto) {
   return "重发";
 }
 
+export function buildRecentTransferDetailLine(transfer: TransferDto) {
+  const detail = buildTransferHistoryDetailViewModel(transfer);
+  return detail.recoveryLabel ?? detail.adviceLabel ?? detail.errorLabel ?? null;
+}
+
 function firstAvailablePath(transfer: TransferDto) {
   return transfer.received_paths[0] ?? transfer.source_paths[0] ?? null;
 }

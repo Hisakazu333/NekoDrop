@@ -1785,11 +1785,18 @@ input::placeholder {
   font-size: 12px;
 }
 
+.recent-detail strong,
 .recent-detail span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-detail strong {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .recent-actions {

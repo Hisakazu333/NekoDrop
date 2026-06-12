@@ -21,6 +21,7 @@ import {
 } from "./networkPermissionHints";
 import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
+  buildRecentTransferDetailLine,
   buildTransferHistoryDetailViewModel,
   transferPrimaryActionLabel
 } from "./transferHistoryDetails";
@@ -2150,6 +2151,7 @@ function RecentActivity({
           const selected = transfer.id === selectedTransferId;
           const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
           const actionLabel = transferPrimaryActionLabel(transfer);
+          const detailLine = buildRecentTransferDetailLine(transfer);
           return (
             <div
               className={[
@@ -2170,6 +2172,7 @@ function RecentActivity({
               </button>
               {selected ? (
                 <div className="recent-detail">
+                  {detailLine ? <strong>{detailLine}</strong> : null}
                   {paths.slice(0, 3).map((path) => (
                     <span key={path} title={path}>{path}</span>
                   ))}
