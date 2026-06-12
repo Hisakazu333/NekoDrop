@@ -15,6 +15,7 @@ import {
 import {
   buildDiscoveryCopy
 } from "./networkPermissionHints";
+import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
   buildTransferHistoryDetailViewModel,
   transferPrimaryActionLabel
@@ -656,7 +657,8 @@ export function App() {
       setToast(`配对完成：${trusted.device_name} · ${trusted.pairing_code}`);
       await refreshReceiveState();
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      const message = errorMessage(nextError);
+      setError(pairingFailureAdvice(message) ?? message);
     } finally {
       setBusy(null);
     }
@@ -671,7 +673,8 @@ export function App() {
       setToast(accept ? "已接受配对" : "已拒绝配对");
       await refreshReceiveState();
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      const message = errorMessage(nextError);
+      setError(pairingFailureAdvice(message) ?? message);
     } finally {
       setBusy(null);
     }
@@ -1774,6 +1777,7 @@ function ReceivePanel({
               {pendingPairingRequest.device_name} · {devicePlatformLabel(pendingPairingRequest.platform)} · 配对码{" "}
               {pendingPairingRequest.pairing_code}
             </span>
+            <small>确认两端配对码一致</small>
           </div>
           <div className="offer-actions">
             <button className="tool-button" disabled={busy === "pair"} onClick={() => onRespondPairingRequest(false)} type="button">
