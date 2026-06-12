@@ -1,4 +1,5 @@
 import type { TransferStatusDto } from "./types";
+import { transferFailureAdvice } from "./transferFailureAdvice.ts";
 
 export interface TransferProgressMetrics {
   speedBytesPerSecond: number | null;
@@ -15,6 +16,7 @@ export interface TransferProgressViewModel {
   speedLabel: string | null;
   etaLabel: string | null;
   currentFileLabel: string | null;
+  adviceLabel: string | null;
   message: string;
 }
 
@@ -65,6 +67,7 @@ export function buildTransferProgressViewModel(
     speedLabel: metrics.speedBytesPerSecond ? formatSpeed(metrics.speedBytesPerSecond) : null,
     etaLabel: metrics.etaSeconds != null ? `剩余 ${formatDuration(metrics.etaSeconds)}` : null,
     currentFileLabel,
+    adviceLabel: status.phase === "failed" ? transferFailureAdvice(status.message) : null,
     message: status.message
   };
 }

@@ -1941,6 +1941,9 @@ function HistoryPanel({
                         {detail.errorLabel ? (
                           <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
                         ) : null}
+                        {detail.adviceLabel ? (
+                          <span><strong>建议</strong>{detail.adviceLabel}</span>
+                        ) : null}
                       </div>
                       <div className="history-paths">
                         {paths.slice(0, 6).map((path) => (
@@ -2223,6 +2226,7 @@ function TransferStatusView({
         <span>{model.message}</span>
         <span>{model.fileIndexLabel}</span>
         {model.speedLabel ? <span>{model.speedLabel}{model.etaLabel ? ` · ${model.etaLabel}` : ""}</span> : null}
+        {model.adviceLabel ? <span>{model.adviceLabel}</span> : null}
         {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
       </div>
     </div>

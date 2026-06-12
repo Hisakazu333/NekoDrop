@@ -56,6 +56,7 @@ test("builds a user-facing active transfer progress model", () => {
   assert.equal(model.speedLabel, "42.0 MB/s");
   assert.equal(model.etaLabel, "剩余 25s");
   assert.equal(model.currentFileLabel, "软软/IMG_0012.jpg");
+  assert.equal(model.adviceLabel, null);
 });
 
 test("labels failed and cancelled transfer phases clearly", () => {
@@ -67,4 +68,16 @@ test("labels failed and cancelled transfer phases clearly", () => {
     speedBytesPerSecond: null,
     etaSeconds: null
   }).title, "已取消");
+});
+
+test("adds short advice to failed transfer status messages", () => {
+  const model = buildTransferProgressViewModel(status({
+    phase: "failed",
+    message: "连接超时。常见原因是 Windows 防火墙拦截、两台设备不在同一网段、路由器隔离了有线/无线，或 VPN/代理影响了局域网连接。"
+  }), {
+    speedBytesPerSecond: null,
+    etaSeconds: null
+  });
+
+  assert.equal(model.adviceLabel, "确认同一局域网；关闭 VPN/代理；可用备用码");
 });

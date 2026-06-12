@@ -1,10 +1,12 @@
 import type { TransferDto } from "./types";
+import { transferFailureAdvice } from "./transferFailureAdvice.ts";
 
 export interface TransferHistoryDetailViewModel {
   progressLabel: string | null;
   peerLabel: string | null;
   locationLabel: string | null;
   errorLabel: string | null;
+  adviceLabel: string | null;
   recoveryLabel: string | null;
   canContinue: boolean;
 }
@@ -20,6 +22,7 @@ export function buildTransferHistoryDetailViewModel(transfer: TransferDto): Tran
     peerLabel: transfer.peer_name ?? transfer.target_host,
     locationLabel: transfer.receive_dir ?? firstAvailablePath(transfer),
     errorLabel: transfer.error_message,
+    adviceLabel: transferFailureAdvice(transfer.error_message),
     recoveryLabel: canContinue ? "可以继续发送" : null,
     canContinue
   };
