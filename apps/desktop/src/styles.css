@@ -484,6 +484,85 @@ button:disabled {
   background: var(--surface-app);
 }
 
+.active-transfer {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: min(100%, 1120px);
+  min-height: 58px;
+  margin: 0 auto 26px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface-card) 92%, var(--accent-soft));
+}
+
+.active-transfer.is-error {
+  border-color: transparent;
+  background: var(--danger-soft);
+}
+
+.active-transfer-main {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+
+.active-transfer-title,
+.active-transfer-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.active-transfer-title strong {
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.active-transfer-title span,
+.active-transfer-meta span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-transfer-title span {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.active-transfer-meta {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.active-transfer-meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+}
+
+.active-transfer-meter span {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--t);
+}
+
+.active-transfer.is-error .active-transfer-meter span {
+  background: var(--danger);
+}
+
 .drop-home {
   display: grid;
   justify-items: stretch;
@@ -1776,6 +1855,22 @@ input::placeholder {
 .history-item.is-failed .history-kind,
 .history-item.is-failed .history-main strong {
   color: var(--danger);
+}
+
+.history-progress {
+  height: 3px;
+  overflow: hidden;
+  margin: -3px 10px 2px 88px;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+}
+
+.history-progress span {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: var(--accent);
 }
 
 .history-kind {

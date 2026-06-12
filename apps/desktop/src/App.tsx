@@ -9,6 +9,10 @@ import {
   discoveryTroubleshootingHint,
   unavailableDiscoveryHint
 } from "./networkPermissionHints";
+import {
+  buildTransferProgressViewModel,
+  formatBytes
+} from "./transferProgress";
 import type {
   AppSnapshot,
   DeviceDto,
@@ -871,6 +875,15 @@ export function App() {
         ) : null}
 
         <section className={mode === "send" ? "work-surface" : "work-surface is-single"}>
+          {transferStatus && shouldShowActiveTransferBar(transferStatus) ? (
+            <ActiveTransferBar
+              busy={busy}
+              metrics={transferMetrics}
+              status={transferStatus}
+              onCancel={cancelCurrentTransfer}
+            />
+          ) : null}
+
           {mode === "send" ? (
             <div className="drop-home">
               <div className="brand-line">
@@ -1902,6 +1915,11 @@ function HistoryPanel({
                   </span>
                   <time>{formatTransferTime(transfer.updated_at_ms)}</time>
                 </button>
+                {shouldShowHistoryProgress(transfer) ? (
+                  <div className="history-progress" aria-label="历史传输进度">
+                    <span style={{ width: `${Math.round(transfer.progress * 100)}%` }} />
+                  </div>
+                ) : null}
                 {selected ? (
                   <div className="history-detail">
                     <div className="history-paths">
@@ -2093,6 +2111,54 @@ function RecentActivity({
   );
 }
 
+function ActiveTransferBar({
+  busy,
+  metrics,
+  status,
+  onCancel
+}: {
+  busy: BusyMode | null;
+  metrics: {
+    speedBytesPerSecond: number | null;
+    etaSeconds: number | null;
+  };
+  status: TransferStatusDto;
+  onCancel: () => void;
+}) {
+  const model = buildTransferProgressViewModel(status, metrics);
+  const canCancel =
+    !matchesTerminalTransferPhase(status.phase) &&
+    (status.direction === "send" ||
+      (status.direction === "receive" && isReceiveTransferActivePhase(status.phase)));
+
+  return (
+    <section className={status.phase === "failed" ? "active-transfer is-error" : "active-transfer"}>
+      <div className="active-transfer-main">
+        <div className="active-transfer-title">
+          <strong>{model.title}</strong>
+          <span title={model.rootName}>{model.rootName}</span>
+        </div>
+        <div className="active-transfer-meter" aria-label="当前传输进度">
+          <span style={{ width: `${model.progressPercent}%` }} />
+        </div>
+        <div className="active-transfer-meta">
+          <span>{model.percentLabel}</span>
+          <span>{model.bytesLabel}</span>
+          <span>{model.fileIndexLabel}</span>
+          {model.speedLabel ? <span>{model.speedLabel}</span> : null}
+          {model.etaLabel ? <span>{model.etaLabel}</span> : null}
+          {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
+        </div>
+      </div>
+      {canCancel ? (
+        <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
+          取消
+        </button>
+      ) : null}
+    </section>
+  );
+}
+
 function TransferStatusView({
   busy,
   metrics,
@@ -2107,6 +2173,7 @@ function TransferStatusView({
   status: TransferStatusDto;
   onCancel?: () => void;
 }) {
+  const model = buildTransferProgressViewModel(status, metrics ?? { speedBytesPerSecond: null, etaSeconds: null });
   const canCancel =
     onCancel &&
     !matchesTerminalTransferPhase(status.phase) &&
@@ -2116,11 +2183,9 @@ function TransferStatusView({
   return (
     <div className={status.phase === "failed" ? "transfer-status is-error" : "transfer-status"}>
       <div className="transfer-status-head">
-        <strong>{phaseLabel(status.phase)}</strong>
+        <strong>{model.title}</strong>
         {status.total_bytes > 0 ? (
-          <span>
-            {formatBytes(status.bytes_transferred)} / {formatBytes(status.total_bytes)}
-          </span>
+          <span>{model.percentLabel} · {model.bytesLabel}</span>
         ) : null}
         {canCancel ? (
           <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
@@ -2130,18 +2195,14 @@ function TransferStatusView({
       </div>
       {status.total_bytes > 0 ? (
         <div className="progress-track" aria-label="传输进度">
-          <span style={{ width: `${Math.round(status.progress * 100)}%` }} />
+          <span style={{ width: `${model.progressPercent}%` }} />
         </div>
       ) : null}
       <div className="transfer-status-meta">
-        <span>{status.message}</span>
-        {metrics?.speedBytesPerSecond ? (
-          <span>
-            {formatBytes(metrics.speedBytesPerSecond)}/s
-            {metrics.etaSeconds ? ` · 剩余 ${formatDuration(metrics.etaSeconds)}` : ""}
-          </span>
-        ) : null}
-        {status.current_file ? <span>{status.current_file}</span> : null}
+        <span>{model.message}</span>
+        <span>{model.fileIndexLabel}</span>
+        {model.speedLabel ? <span>{model.speedLabel}{model.etaLabel ? ` · ${model.etaLabel}` : ""}</span> : null}
+        {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
       </div>
     </div>
   );
@@ -2177,13 +2238,6 @@ function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
     public_key_fingerprint: device.public_key_fingerprint,
     pairing_code: device.pairing_code
   };
-}
-
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 function normalizeReceivePolicy(value: string): ReceivePolicyMode {
@@ -2289,22 +2343,6 @@ function transferRecoveryLabel(transfer: TransferDto) {
   return `已传 ${formatBytes(transfer.transferred_bytes)} / ${formatBytes(transfer.total_bytes)}`;
 }
 
-function phaseLabel(phase: string) {
-  if (phase === "cancelled") return "已取消";
-  if (phase === "connecting") return "连接中";
-  if (phase === "listening") return "收件开启";
-  if (phase === "awaiting_approval") return "等待确认";
-  if (phase === "accepted") return "已接受";
-  if (phase === "transferring") return "传输中";
-  if (phase === "verifying") return "校验中";
-  if (phase === "failed") return "传输失败";
-  if (phase === "declined") return "已拒绝";
-  if (phase === "expired") return "已超时";
-  if (phase === "closed") return "收件关闭";
-  if (phase === "completed") return "传输完成";
-  return phase;
-}
-
 function matchesTerminalTransferPhase(phase: string) {
   return ["completed", "failed", "cancelled", "declined", "expired", "closed", "blocked"].includes(phase);
 }
@@ -2313,14 +2351,17 @@ function isReceiveTransferActivePhase(phase: string) {
   return phase === "accepted" || phase === "transferring" || phase === "verifying";
 }
 
-function formatDuration(seconds: number) {
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  if (minutes < 60) return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const minuteRest = minutes % 60;
-  return minuteRest > 0 ? `${hours}h ${minuteRest}m` : `${hours}h`;
+function shouldShowActiveTransferBar(status: TransferStatusDto) {
+  return status.phase !== "completed" && status.phase !== "closed";
+}
+
+function shouldShowHistoryProgress(transfer: TransferDto) {
+  return (
+    transfer.total_bytes > 0 &&
+    transfer.transferred_bytes > 0 &&
+    transfer.transferred_bytes < transfer.total_bytes &&
+    transfer.status !== "completed"
+  );
 }
 
 function formatTransferTime(timestampMs: number) {
