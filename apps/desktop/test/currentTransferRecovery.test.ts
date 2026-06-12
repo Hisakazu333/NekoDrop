@@ -121,3 +121,20 @@ test("only shows fallback code when no matching transfer record exists", () => {
     fallbackLabel: "备用码"
   });
 });
+
+test("does not show send recovery actions for receive failures", () => {
+  assert.deepEqual(currentTransferRecoveryActions(status({
+    direction: "receive"
+  }), null), {
+    primaryLabel: null,
+    fallbackLabel: null
+  });
+
+  assert.deepEqual(currentTransferRecoveryActions(status({
+    direction: "receive",
+    phase: "cancelled"
+  }), null), {
+    primaryLabel: null,
+    fallbackLabel: null
+  });
+});

@@ -26,7 +26,7 @@ export function currentTransferRecoveryActions(
   status: TransferStatusDto,
   transfer: TransferDto | null
 ): CurrentTransferRecoveryActions {
-  if (!isRecoverableCurrentPhase(status.phase)) {
+  if (status.direction !== "send" || !isRecoverableCurrentPhase(status.phase)) {
     return {
       primaryLabel: null,
       fallbackLabel: null
