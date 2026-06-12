@@ -24,7 +24,7 @@ export function buildTransferHistoryDetailViewModel(transfer: TransferDto): Tran
     locationLabel: transfer.receive_dir ?? firstAvailablePath(transfer),
     errorLabel: transfer.error_message,
     adviceLabel: transferFailureAdvice(transfer.error_message),
-    recoveryLabel: canContinue ? "可以继续发送" : null,
+    recoveryLabel: canContinue ? transferRecoveryLabel(transfer) : null,
     primaryActionLabel: transferPrimaryActionLabel(transfer),
     canContinue
   };
@@ -49,6 +49,11 @@ function isRecoverableSendTransfer(transfer: TransferDto) {
     transfer.transferred_bytes > 0 &&
     transfer.transferred_bytes < transfer.total_bytes
   );
+}
+
+function transferRecoveryLabel(transfer: TransferDto) {
+  const remainingBytes = Math.max(0, transfer.total_bytes - transfer.transferred_bytes);
+  return `已传 ${formatBytes(transfer.transferred_bytes)}，剩余 ${formatBytes(remainingBytes)}，可继续发送`;
 }
 
 function formatBytes(bytes: number) {

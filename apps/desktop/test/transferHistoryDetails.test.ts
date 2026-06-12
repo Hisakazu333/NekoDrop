@@ -34,7 +34,7 @@ test("summarizes recoverable failed send transfers", () => {
   assert.equal(model.peerLabel, "HISAKAZU");
   assert.equal(model.locationLabel, "/Users/hisakazu/Downloads/soft");
   assert.equal(model.errorLabel, "连接中断");
-  assert.equal(model.recoveryLabel, "可以继续发送");
+  assert.equal(model.recoveryLabel, "已传 2.0 GB，剩余 1.0 GB，可继续发送");
   assert.equal(model.adviceLabel, null);
   assert.equal(model.primaryActionLabel, "继续发送");
   assert.equal(model.canContinue, true);
