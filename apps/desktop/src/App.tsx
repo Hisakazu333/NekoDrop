@@ -3,11 +3,12 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { invokeCommand } from "./tauri";
-import { hasReceiveDiagnosticsWarning } from "./receiveDiagnostics";
 import {
-  broadcastTroubleshootingHint,
-  discoveryTroubleshootingHint,
-  unavailableDiscoveryHint
+  hasReceiveDiagnosticsWarning,
+  receiveDiagnosticsAdvice
+} from "./receiveDiagnostics";
+import {
+  buildDiscoveryCopy
 } from "./networkPermissionHints";
 import { buildTransferHistoryDetailViewModel } from "./transferHistoryDetails";
 import {
@@ -722,7 +723,7 @@ export function App() {
     setSendReport(null);
   }
 
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, nearbyDevices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length);
   const targetLabel = selectedDevice
     ? selectedDevice.name
     : trimmedConnectionCode.length > 0
@@ -1057,6 +1058,7 @@ export function App() {
                   <ReceivePanel
                     bindPort={bindPort}
                     busy={busy}
+                    diagnostics={receiveDiagnostics}
                     receiveDir={receiveDir}
                     receivePolicy={receivePolicy}
                     pendingOffer={pendingReceiveOffer}
@@ -1194,7 +1196,7 @@ function TargetStrip({
   onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length);
 
   return (
     <section className="target-strip" aria-label="附近设备">
@@ -1418,15 +1420,17 @@ function HomeStateLine({
   receiveState: string;
   transfers: TransferDto[];
 }) {
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
   const latest = transfers[0];
   const receiveDetail = receiveDiagnosticsLabel(diagnostics);
+  const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
   const isWarning = hasReceiveDiagnosticsWarning(diagnostics);
 
   return (
     <div className={isWarning ? "home-state-line is-warning" : "home-state-line"}>
       <span>{receiveState}{receiveDetail ? ` · ${receiveDetail}` : ""}</span>
       <strong>{latest ? transferDirectionLabel(latest) : discoveryCopy.label}</strong>
+      {diagnosticsAdvice ? <small>{diagnosticsAdvice}</small> : null}
     </div>
   );
 }
@@ -1446,7 +1450,7 @@ function NearbyDevices({
   onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length);
 
   return (
     <section className="nearby-strip">
@@ -1606,6 +1610,7 @@ function DevicePanel({
 function ReceivePanel({
   bindPort,
   busy,
+  diagnostics,
   receiveDir,
   receivePolicy,
   pendingOffer,
@@ -1625,6 +1630,7 @@ function ReceivePanel({
 }: {
   bindPort: string;
   busy: BusyMode | null;
+  diagnostics: ReceivePortDiagnosticsDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   pendingOffer: PendingReceiveOfferDto | null;
@@ -1654,6 +1660,7 @@ function ReceivePanel({
     receiveReport?.sender_device_name?.trim() ||
     receiveReport?.sender_device_id ||
     null;
+  const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
 
   return (
     <section className="function-panel">
@@ -1661,6 +1668,7 @@ function ReceivePanel({
         <div>
           <strong>{receiveSession ? "收件开启" : "收件关闭"}</strong>
           <span>{receiveSession?.bind_addr ?? "未监听"}</span>
+          {diagnosticsAdvice ? <small>{diagnosticsAdvice}</small> : null}
         </div>
         <div className="panel-actions">
           {receiveSession ? (
@@ -2414,62 +2422,6 @@ function formatDeviceSeenTime(timestampMs: number) {
     minute: "2-digit",
     hour12: false
   }).format(new Date(timestampMs));
-}
-
-function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: number) {
-  if (!status) {
-    return {
-      label: "启动中",
-      subtitle: "初始化",
-      emptyTitle: "启动中",
-      emptyBody: "正在准备自动发现",
-      targetLabel: "启动中",
-      isError: false
-    };
-  }
-
-  if (status.phase === "unavailable") {
-    return {
-      label: "发现异常",
-      subtitle: status.last_error ? "mDNS 异常" : "不可用",
-      emptyTitle: "发现异常",
-      emptyBody: unavailableDiscoveryHint(),
-      targetLabel: "发现异常 · 备用码",
-      isError: true
-    };
-  }
-
-  if (!status.advertised) {
-    const hasNetworkError = Boolean(status.last_error);
-    return {
-      label: hasNetworkError ? "广播异常" : "未广播",
-      subtitle: hasNetworkError ? "检查网络" : "收件关闭",
-      emptyTitle: hasNetworkError ? "广播异常" : "未广播",
-      emptyBody: hasNetworkError ? broadcastTroubleshootingHint() : "打开收件后会广播本机",
-      targetLabel: hasNetworkError ? "广播异常 · 权限/网络" : "未广播 · 打开收件",
-      isError: hasNetworkError
-    };
-  }
-
-  if (deviceCount > 0) {
-    return {
-      label: `${deviceCount} 台在线`,
-      subtitle: status.last_seen_seconds_ago == null ? "在线" : `${status.last_seen_seconds_ago}s 前`,
-      emptyTitle: "",
-      emptyBody: "",
-      targetLabel: `${deviceCount} 台在线`,
-      isError: false
-    };
-  }
-
-  return {
-    label: "扫描中",
-    subtitle: "搜索中",
-    emptyTitle: "无设备",
-    emptyBody: discoveryTroubleshootingHint(),
-    targetLabel: "扫描中 · 权限/同网段",
-    isError: false
-  };
 }
 
 function platformLabel(platform: string) {

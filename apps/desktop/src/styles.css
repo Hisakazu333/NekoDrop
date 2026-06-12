@@ -606,23 +606,34 @@ button:disabled {
 }
 
 .home-state-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   min-height: 30px;
   color: var(--text-3);
   font-size: 13px;
 }
 
-.home-state-line strong {
+.home-state-line strong,
+.home-state-line small {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-state-line strong {
   color: var(--text-1);
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.home-state-line small {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: right;
 }
 
 .home-state-line span {
@@ -630,6 +641,10 @@ button:disabled {
 }
 
 .home-state-line.is-warning span {
+  color: var(--danger);
+}
+
+.home-state-line.is-warning small {
   color: var(--danger);
 }
 
@@ -1488,6 +1503,7 @@ button:disabled {
 }
 
 .panel-head span,
+.panel-head small,
 .result-line span,
 .offer-main span {
   min-width: 0;
@@ -1496,6 +1512,11 @@ button:disabled {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.panel-head small {
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .offer-main small {
