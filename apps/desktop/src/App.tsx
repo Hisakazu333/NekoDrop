@@ -10,7 +10,10 @@ import {
 import {
   buildDiscoveryCopy
 } from "./networkPermissionHints";
-import { buildTransferHistoryDetailViewModel } from "./transferHistoryDetails";
+import {
+  buildTransferHistoryDetailViewModel,
+  transferPrimaryActionLabel
+} from "./transferHistoryDetails";
 import {
   buildTransferProgressViewModel,
   formatBytes
@@ -557,7 +560,7 @@ export function App() {
     setError(null);
     setSendReport(null);
     try {
-      const actionLabel = transferRetryActionLabel(transfer);
+      const actionLabel = transferPrimaryActionLabel(transfer) ?? "重发";
       const report = await invokeCommand<SendReportDto>("resend_transfer", {
         transferId: transfer.id
       });
@@ -606,6 +609,14 @@ export function App() {
     } finally {
       setBusy(null);
     }
+  }
+
+  function openFallbackCode() {
+    setMode("send");
+    setConnectionCodeOpen(true);
+    setSelectedDeviceId(null);
+    setSelectedDeviceSnapshot(null);
+    setError(null);
   }
 
   async function clearTransferHistory() {
@@ -883,6 +894,7 @@ export function App() {
               metrics={transferMetrics}
               status={transferStatus}
               onCancel={cancelCurrentTransfer}
+              onUseFallbackCode={openFallbackCode}
             />
           ) : null}
 
@@ -1012,6 +1024,7 @@ export function App() {
                     onSelectTransfer={(transfer) =>
                       setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
                     }
+                    onUseFallbackCode={openFallbackCode}
                   />
                 </aside>
               </div>
@@ -1142,6 +1155,7 @@ export function App() {
                   onSelectTransfer={(transfer) =>
                     setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
                   }
+                  onUseFallbackCode={openFallbackCode}
                 />
               ) : null}
             </div>
@@ -1857,7 +1871,8 @@ function HistoryPanel({
   onDeleteTransfer,
   onOpenTransfer,
   onResendTransfer,
-  onSelectTransfer
+  onSelectTransfer,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   selectedTransferId: string | null;
@@ -1873,6 +1888,7 @@ function HistoryPanel({
   onOpenTransfer: (transfer: TransferDto) => void;
   onResendTransfer: (transfer: TransferDto) => void;
   onSelectTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
 }) {
   return (
     <section className="history-panel">
@@ -1892,6 +1908,7 @@ function HistoryPanel({
           metrics={transferMetrics}
           status={transferStatus}
           onCancel={onCancelTransfer}
+          onUseFallbackCode={onUseFallbackCode}
         />
       ) : null}
 
@@ -1964,9 +1981,14 @@ function HistoryPanel({
                       <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
                         打开
                       </button>
-                      {transfer.direction === "send" ? (
+                      {detail.primaryActionLabel ? (
                         <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                          {transferRetryActionLabel(transfer)}
+                          {detail.primaryActionLabel}
+                        </button>
+                      ) : null}
+                      {transfer.status === "failed" ? (
+                        <button className="text-button" onClick={onUseFallbackCode} type="button">
+                          备用码
                         </button>
                       ) : null}
                       <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -2069,7 +2091,8 @@ function RecentActivity({
   onDeleteTransfer,
   onOpenTransfer,
   onResendTransfer,
-  onSelectTransfer
+  onSelectTransfer,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   compact?: boolean;
@@ -2080,6 +2103,7 @@ function RecentActivity({
   onOpenTransfer: (transfer: TransferDto) => void;
   onResendTransfer: (transfer: TransferDto) => void;
   onSelectTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
 }) {
   const recentTransfers = transfers.slice(0, compact ? 5 : 3);
   if (recentTransfers.length === 0) return null;
@@ -2096,6 +2120,7 @@ function RecentActivity({
         {recentTransfers.map((transfer) => {
           const selected = transfer.id === selectedTransferId;
           const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+          const actionLabel = transferPrimaryActionLabel(transfer);
           return (
             <div
               className={[
@@ -2124,9 +2149,14 @@ function RecentActivity({
                     <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
                       打开
                     </button>
-                    {transfer.direction === "send" ? (
+                    {actionLabel ? (
                       <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                        {transferRetryActionLabel(transfer)}
+                        {actionLabel}
+                      </button>
+                    ) : null}
+                    {transfer.status === "failed" ? (
+                      <button className="text-button" onClick={onUseFallbackCode} type="button">
+                        备用码
                       </button>
                     ) : null}
                     <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -2147,7 +2177,8 @@ function ActiveTransferBar({
   busy,
   metrics,
   status,
-  onCancel
+  onCancel,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   metrics: {
@@ -2156,6 +2187,7 @@ function ActiveTransferBar({
   };
   status: TransferStatusDto;
   onCancel: () => void;
+  onUseFallbackCode: () => void;
 }) {
   const model = buildTransferProgressViewModel(status, metrics);
   const canCancel =
@@ -2186,6 +2218,10 @@ function ActiveTransferBar({
         <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
           取消
         </button>
+      ) : status.phase === "failed" ? (
+        <button className="text-button" onClick={onUseFallbackCode} type="button">
+          备用码
+        </button>
       ) : null}
     </section>
   );
@@ -2195,7 +2231,8 @@ function TransferStatusView({
   busy,
   metrics,
   status,
-  onCancel
+  onCancel,
+  onUseFallbackCode
 }: {
   busy?: BusyMode | null;
   metrics?: {
@@ -2204,6 +2241,7 @@ function TransferStatusView({
   };
   status: TransferStatusDto;
   onCancel?: () => void;
+  onUseFallbackCode?: () => void;
 }) {
   const model = buildTransferProgressViewModel(status, metrics ?? { speedBytesPerSecond: null, etaSeconds: null });
   const canCancel =
@@ -2222,6 +2260,10 @@ function TransferStatusView({
         {canCancel ? (
           <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
             取消
+          </button>
+        ) : status.phase === "failed" && onUseFallbackCode ? (
+          <button className="text-button" onClick={onUseFallbackCode} type="button">
+            备用码
           </button>
         ) : null}
       </div>
@@ -2355,24 +2397,8 @@ function transferMetaLabel(transfer: TransferDto) {
   return peer ? `${count} · ${size} · ${peer}` : `${count} · ${size}`;
 }
 
-function transferRetryActionLabel(transfer: TransferDto) {
-  if (isRecoverableSendTransfer(transfer)) return "继续发送";
-  if (transfer.status === "failed" || transfer.status === "cancelled") return "重试";
-  return "重发";
-}
-
-function isRecoverableSendTransfer(transfer: TransferDto) {
-  return (
-    transfer.direction === "send" &&
-    (transfer.status === "failed" || transfer.status === "cancelled") &&
-    transfer.total_bytes > 0 &&
-    transfer.transferred_bytes > 0 &&
-    transfer.transferred_bytes < transfer.total_bytes
-  );
-}
-
 function transferRecoveryLabel(transfer: TransferDto) {
-  if (!isRecoverableSendTransfer(transfer)) return null;
+  if (transferPrimaryActionLabel(transfer) !== "继续发送") return null;
   return `已传 ${formatBytes(transfer.transferred_bytes)} / ${formatBytes(transfer.total_bytes)}`;
 }
 

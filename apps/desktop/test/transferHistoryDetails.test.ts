@@ -36,6 +36,7 @@ test("summarizes recoverable failed send transfers", () => {
   assert.equal(model.errorLabel, "连接中断");
   assert.equal(model.recoveryLabel, "可以继续发送");
   assert.equal(model.adviceLabel, null);
+  assert.equal(model.primaryActionLabel, "继续发送");
   assert.equal(model.canContinue, true);
 });
 
@@ -54,6 +55,7 @@ test("uses receive directory and avoids recovery copy for completed receives", (
   assert.equal(model.errorLabel, null);
   assert.equal(model.recoveryLabel, null);
   assert.equal(model.adviceLabel, null);
+  assert.equal(model.primaryActionLabel, null);
   assert.equal(model.canContinue, false);
 });
 
@@ -64,4 +66,15 @@ test("adds short advice for failed transfers with actionable network errors", ()
   }));
 
   assert.equal(model.adviceLabel, "确认对方已打开收件；Windows 允许专用网络");
+  assert.equal(model.primaryActionLabel, "重试");
+});
+
+test("uses resend as the primary action for completed send transfers", () => {
+  const model = buildTransferHistoryDetailViewModel(transfer({
+    status: "completed",
+    transferred_bytes: 3 * 1024 * 1024 * 1024,
+    error_message: null
+  }));
+
+  assert.equal(model.primaryActionLabel, "重发");
 });

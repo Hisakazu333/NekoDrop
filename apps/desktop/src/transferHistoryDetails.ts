@@ -8,6 +8,7 @@ export interface TransferHistoryDetailViewModel {
   errorLabel: string | null;
   adviceLabel: string | null;
   recoveryLabel: string | null;
+  primaryActionLabel: string | null;
   canContinue: boolean;
 }
 
@@ -24,8 +25,16 @@ export function buildTransferHistoryDetailViewModel(transfer: TransferDto): Tran
     errorLabel: transfer.error_message,
     adviceLabel: transferFailureAdvice(transfer.error_message),
     recoveryLabel: canContinue ? "可以继续发送" : null,
+    primaryActionLabel: transferPrimaryActionLabel(transfer),
     canContinue
   };
+}
+
+export function transferPrimaryActionLabel(transfer: TransferDto) {
+  if (transfer.direction !== "send") return null;
+  if (isRecoverableSendTransfer(transfer)) return "继续发送";
+  if (transfer.status === "failed" || transfer.status === "cancelled") return "重试";
+  return "重发";
 }
 
 function firstAvailablePath(transfer: TransferDto) {
