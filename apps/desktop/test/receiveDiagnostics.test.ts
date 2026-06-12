@@ -38,6 +38,10 @@ test("suggests a short next step for receive diagnostics warnings", () => {
 
 test("keeps normal receive diagnostics quiet", () => {
   assert.equal(receiveDiagnosticsAdvice(diagnostics("listening")), null);
-  assert.equal(receiveDiagnosticsAdvice(diagnostics("closed")), null);
   assert.equal(receiveDiagnosticsAdvice(null), null);
+});
+
+test("guides closed receive state without treating it as a warning", () => {
+  assert.equal(hasReceiveDiagnosticsWarning(diagnostics("closed")), false);
+  assert.equal(receiveDiagnosticsAdvice(diagnostics("closed")), "打开收件后会广播本机，也可复制连接码");
 });
