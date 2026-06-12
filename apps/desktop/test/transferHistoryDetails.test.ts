@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import {
   buildRecentTransferDetailLine,
-  buildTransferHistoryDetailViewModel
+  buildTransferHistoryDetailViewModel,
+  transferFallbackActionLabel
 } from "../src/transferHistoryDetails.ts";
 import type { TransferDto } from "../src/types.ts";
 
@@ -80,6 +81,13 @@ test("uses resend as the primary action for completed send transfers", () => {
   }));
 
   assert.equal(model.primaryActionLabel, "重发");
+});
+
+test("uses fallback code as a recovery action for failed and cancelled sends", () => {
+  assert.equal(transferFallbackActionLabel(transfer({ status: "failed" })), "备用码");
+  assert.equal(transferFallbackActionLabel(transfer({ status: "cancelled" })), "备用码");
+  assert.equal(transferFallbackActionLabel(transfer({ status: "completed" })), null);
+  assert.equal(transferFallbackActionLabel(transfer({ direction: "receive", status: "failed" })), null);
 });
 
 test("summarizes cancelled send transfers with the next recovery step", () => {

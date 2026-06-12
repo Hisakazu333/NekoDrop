@@ -38,6 +38,12 @@ export function transferPrimaryActionLabel(transfer: TransferDto) {
   return "重发";
 }
 
+export function transferFallbackActionLabel(transfer: TransferDto) {
+  if (transfer.direction !== "send") return null;
+  if (transfer.status === "failed" || transfer.status === "cancelled") return "备用码";
+  return null;
+}
+
 export function buildRecentTransferDetailLine(transfer: TransferDto) {
   const detail = buildTransferHistoryDetailViewModel(transfer);
   return detail.recoveryLabel ?? detail.adviceLabel ?? detail.errorLabel ?? null;

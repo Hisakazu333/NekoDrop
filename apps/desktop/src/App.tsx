@@ -24,6 +24,7 @@ import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
   buildRecentTransferDetailLine,
   buildTransferHistoryDetailViewModel,
+  transferFallbackActionLabel,
   transferPrimaryActionLabel
 } from "./transferHistoryDetails";
 import {
@@ -1973,6 +1974,7 @@ function HistoryPanel({
             const selected = transfer.id === selectedTransferId;
             const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
             const detail = buildTransferHistoryDetailViewModel(transfer);
+            const fallbackActionLabel = transferFallbackActionLabel(transfer);
             return (
               <div
                 className={[
@@ -2041,9 +2043,9 @@ function HistoryPanel({
                           {detail.primaryActionLabel}
                         </button>
                       ) : null}
-                      {transfer.status === "failed" ? (
+                      {fallbackActionLabel ? (
                         <button className="text-button" onClick={onUseFallbackCode} type="button">
-                          备用码
+                          {fallbackActionLabel}
                         </button>
                       ) : null}
                       <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -2185,6 +2187,7 @@ function RecentActivity({
           const selected = transfer.id === selectedTransferId;
           const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
           const actionLabel = transferPrimaryActionLabel(transfer);
+          const fallbackActionLabel = transferFallbackActionLabel(transfer);
           const detailLine = buildRecentTransferDetailLine(transfer);
           return (
             <div
@@ -2220,9 +2223,9 @@ function RecentActivity({
                         {actionLabel}
                       </button>
                     ) : null}
-                    {transfer.status === "failed" ? (
+                    {fallbackActionLabel ? (
                       <button className="text-button" onClick={onUseFallbackCode} type="button">
-                        备用码
+                        {fallbackActionLabel}
                       </button>
                     ) : null}
                     <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
