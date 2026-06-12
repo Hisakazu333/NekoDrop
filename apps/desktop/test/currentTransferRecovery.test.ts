@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import {
   currentTransferRecoveryActions,
-  findCurrentFailedTransfer
+  findCurrentRecoverableTransfer
 } from "../src/currentTransferRecovery.ts";
 import type { TransferDto, TransferStatusDto } from "../src/types.ts";
 
@@ -51,17 +51,17 @@ test("finds the latest matching failed send record for the current failed status
   const older = transfer({ id: "older", updated_at_ms: 1780000000001 });
   const newer = transfer({ id: "newer", updated_at_ms: 1780000000002 });
 
-  assert.equal(findCurrentFailedTransfer(status(), [older, newer])?.id, "newer");
+  assert.equal(findCurrentRecoverableTransfer(status(), [older, newer])?.id, "newer");
 });
 
 test("finds the latest matching cancelled send record for the current cancelled status", () => {
   const record = transfer({ id: "cancelled", status: "cancelled" });
 
-  assert.equal(findCurrentFailedTransfer(status({ phase: "cancelled" }), [record])?.id, "cancelled");
+  assert.equal(findCurrentRecoverableTransfer(status({ phase: "cancelled" }), [record])?.id, "cancelled");
 });
 
 test("does not match receive or completed records for current send failures", () => {
-  assert.equal(findCurrentFailedTransfer(status(), [
+  assert.equal(findCurrentRecoverableTransfer(status(), [
     transfer({ direction: "receive", id: "receive" }),
     transfer({ status: "completed", id: "done" })
   ]), null);

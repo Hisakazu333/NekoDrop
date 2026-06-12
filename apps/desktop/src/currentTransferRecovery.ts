@@ -6,7 +6,7 @@ export interface CurrentTransferRecoveryActions {
   fallbackLabel: string | null;
 }
 
-export function findCurrentFailedTransfer(
+export function findCurrentRecoverableTransfer(
   status: TransferStatusDto | null,
   transfers: TransferDto[]
 ): TransferDto | null {

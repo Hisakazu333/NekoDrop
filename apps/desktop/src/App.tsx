@@ -11,7 +11,7 @@ import {
 } from "./deviceDisplay";
 import {
   currentTransferRecoveryActions,
-  findCurrentFailedTransfer
+  findCurrentRecoverableTransfer
 } from "./currentTransferRecovery";
 import {
   hasReceiveDiagnosticsWarning,
@@ -125,7 +125,7 @@ export function App() {
     [selectedDeviceId, selectedDeviceSnapshot, trustedNearbyDevices]
   );
   const currentFailedTransfer = useMemo(
-    () => findCurrentFailedTransfer(transferStatus, transfers),
+    () => findCurrentRecoverableTransfer(transferStatus, transfers),
     [transferStatus, transfers]
   );
   const selectedTrustedRecord = useMemo(
