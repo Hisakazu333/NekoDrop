@@ -10,7 +10,7 @@ export function findCurrentFailedTransfer(
   status: TransferStatusDto | null,
   transfers: TransferDto[]
 ): TransferDto | null {
-  if (!status || status.phase !== "failed" || status.direction !== "send") return null;
+  if (!status || !isRecoverableCurrentPhase(status.phase) || status.direction !== "send") return null;
   const rootName = status.root_name?.trim();
   if (!rootName) return null;
 
@@ -26,7 +26,7 @@ export function currentTransferRecoveryActions(
   status: TransferStatusDto,
   transfer: TransferDto | null
 ): CurrentTransferRecoveryActions {
-  if (status.phase !== "failed") {
+  if (!isRecoverableCurrentPhase(status.phase)) {
     return {
       primaryLabel: null,
       fallbackLabel: null
@@ -37,4 +37,8 @@ export function currentTransferRecoveryActions(
     primaryLabel: transfer ? transferPrimaryActionLabel(transfer) : null,
     fallbackLabel: "备用码"
   };
+}
+
+function isRecoverableCurrentPhase(phase: string) {
+  return phase === "failed" || phase === "cancelled";
 }

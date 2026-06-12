@@ -54,6 +54,12 @@ test("finds the latest matching failed send record for the current failed status
   assert.equal(findCurrentFailedTransfer(status(), [older, newer])?.id, "newer");
 });
 
+test("finds the latest matching cancelled send record for the current cancelled status", () => {
+  const record = transfer({ id: "cancelled", status: "cancelled" });
+
+  assert.equal(findCurrentFailedTransfer(status({ phase: "cancelled" }), [record])?.id, "cancelled");
+});
+
 test("does not match receive or completed records for current send failures", () => {
   assert.equal(findCurrentFailedTransfer(status(), [
     transfer({ direction: "receive", id: "receive" }),
@@ -70,8 +76,35 @@ test("shows continue and fallback actions for resumable current failures", () =>
   });
 });
 
+test("shows continue and fallback actions for resumable current cancellations", () => {
+  const actions = currentTransferRecoveryActions(status({ phase: "cancelled" }), transfer({
+    status: "cancelled"
+  }));
+
+  assert.deepEqual(actions, {
+    primaryLabel: "继续发送",
+    fallbackLabel: "备用码"
+  });
+});
+
 test("shows retry and fallback actions for non-resumable current failures", () => {
   const actions = currentTransferRecoveryActions(status({ bytes_transferred: 0 }), transfer({
+    transferred_bytes: 0,
+    progress: 0
+  }));
+
+  assert.deepEqual(actions, {
+    primaryLabel: "重试",
+    fallbackLabel: "备用码"
+  });
+});
+
+test("shows retry and fallback actions for non-resumable current cancellations", () => {
+  const actions = currentTransferRecoveryActions(status({
+    phase: "cancelled",
+    bytes_transferred: 0
+  }), transfer({
+    status: "cancelled",
     transferred_bytes: 0,
     progress: 0
   }));

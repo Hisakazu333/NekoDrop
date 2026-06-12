@@ -2267,7 +2267,7 @@ function ActiveTransferBar({
       (status.direction === "receive" && isReceiveTransferActivePhase(status.phase)));
 
   return (
-    <section className={status.phase === "failed" ? "active-transfer is-error" : "active-transfer"}>
+    <section className={isRecoverableCurrentStatus(status.phase) ? "active-transfer is-error" : "active-transfer"}>
       <div className="active-transfer-main">
         <div className="active-transfer-title">
           <strong>{model.title}</strong>
@@ -2289,7 +2289,7 @@ function ActiveTransferBar({
         <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
           取消
         </button>
-      ) : status.phase === "failed" ? (
+      ) : isRecoverableCurrentStatus(status.phase) ? (
         <div className="transfer-status-actions">
           {recoveryActions.primaryLabel && recoveryTransfer ? (
             <button className="text-button" disabled={busy === "resend"} onClick={() => onRecover(recoveryTransfer)} type="button">
@@ -2336,7 +2336,7 @@ function TransferStatusView({
       (status.direction === "receive" && isReceiveTransferActivePhase(status.phase)));
 
   return (
-    <div className={status.phase === "failed" ? "transfer-status is-error" : "transfer-status"}>
+    <div className={isRecoverableCurrentStatus(status.phase) ? "transfer-status is-error" : "transfer-status"}>
       <div className="transfer-status-head">
         <strong>{model.title}</strong>
         {status.total_bytes > 0 ? (
@@ -2346,7 +2346,7 @@ function TransferStatusView({
           <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
             取消
           </button>
-        ) : status.phase === "failed" ? (
+        ) : isRecoverableCurrentStatus(status.phase) ? (
           <span className="transfer-status-actions">
             {recoveryActions.primaryLabel && recoveryTransfer && onRecover ? (
               <button className="text-button" disabled={busy === "resend"} onClick={() => onRecover(recoveryTransfer)} type="button">
@@ -2498,6 +2498,10 @@ function transferRecoveryLabel(transfer: TransferDto) {
 
 function matchesTerminalTransferPhase(phase: string) {
   return ["completed", "failed", "cancelled", "declined", "expired", "closed", "blocked"].includes(phase);
+}
+
+function isRecoverableCurrentStatus(phase: string) {
+  return phase === "failed" || phase === "cancelled";
 }
 
 function isReceiveTransferActivePhase(phase: string) {
