@@ -382,6 +382,27 @@ export function App() {
     }
   }
 
+  async function saveReceiveDir() {
+    if (receiveSession) return;
+    const nextReceiveDir = receiveDir.trim();
+    if (!nextReceiveDir || nextReceiveDir === snapshot?.receive_dir) return;
+    setBusy("pick-receive");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_receive_dir", { receiveDir: nextReceiveDir });
+      setReceiveDir(nextReceiveDir);
+      setSnapshot((current) =>
+        current ? { ...current, receive_dir: nextReceiveDir } : current
+      );
+      await refreshSnapshot();
+      setToast("接收目录已保存");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function updateReceivePolicy(nextPolicy: ReceivePolicyMode) {
     if (nextPolicy === receivePolicy) return;
     setBusy("receive-policy");
@@ -1263,6 +1284,7 @@ export function App() {
                   snapshot={snapshot}
                   onChooseReceiveDir={chooseReceiveDir}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onSaveReceiveDir={saveReceiveDir}
                   onSaveDeviceName={saveDeviceName}
                   onStartReceive={startReceive}
                   onStopReceive={stopReceive}
@@ -1936,6 +1958,7 @@ function SettingsPanel({
   onChooseReceiveDir,
   onOpenReceiveDir,
   onSaveDeviceName,
+  onSaveReceiveDir,
   onStartReceive,
   onStopReceive,
   onUpdateReceivePolicy
@@ -1954,6 +1977,7 @@ function SettingsPanel({
   onChooseReceiveDir: () => void;
   onOpenReceiveDir: () => void;
   onSaveDeviceName: () => void;
+  onSaveReceiveDir: () => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
   onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
@@ -2011,16 +2035,19 @@ function SettingsPanel({
       <div className="control-row">
         <label>
           接收目录
-          <div className="input-action">
-            <input value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
-            <button className="tool-button" disabled={busy === "pick-receive" || Boolean(receiveSession)} onClick={onChooseReceiveDir} type="button">
+          <div className="input-action receive-dir-action">
+            <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
               选择
+            </button>
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
+              保存
             </button>
           </div>
         </label>
         <label className="port-field">
           端口
-          <input disabled={Boolean(receiveSession)} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+          <input disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
         </label>
       </div>
 

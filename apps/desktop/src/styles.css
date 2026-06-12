@@ -1578,6 +1578,10 @@ input::placeholder {
   gap: 8px;
 }
 
+.receive-dir-action {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
 .port-field input {
   text-align: center;
 }

@@ -10,6 +10,8 @@ export interface SettingsViewModel {
   receiveAddressLabel: string;
   discoveryLabel: string;
   trayLabel: string;
+  canSaveReceiveDir: boolean;
+  receiveConfigLocked: boolean;
   receiveDir: string;
   receivePolicyLabel: string;
   bindPort: string;
@@ -34,6 +36,9 @@ export function buildSettingsViewModel({
 }): SettingsViewModel {
   const deviceName = snapshot?.device_name?.trim() || "这台电脑";
   const nextDeviceName = deviceNameInput?.trim() ?? deviceName;
+  const savedReceiveDir = snapshot?.receive_dir?.trim() ?? "";
+  const nextReceiveDir = receiveDir.trim();
+  const receiveConfigLocked = Boolean(receiveSession);
 
   return {
     deviceName,
@@ -44,6 +49,8 @@ export function buildSettingsViewModel({
     receiveAddressLabel: receiveSession?.bind_addr ?? "未监听",
     discoveryLabel: discoveryRuntimeLabel(discoveryStatus ?? null),
     trayLabel: "基础窗口菜单",
+    canSaveReceiveDir: Boolean(snapshot) && !receiveConfigLocked && nextReceiveDir.length > 0 && nextReceiveDir !== savedReceiveDir,
+    receiveConfigLocked,
     receiveDir,
     receivePolicyLabel: receivePolicyDisplayLabel(receivePolicy),
     bindPort

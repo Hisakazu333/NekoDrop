@@ -77,6 +77,8 @@ test("builds a restrained settings view model from real app state", () => {
     receiveAddressLabel: "0.0.0.0:45821",
     discoveryLabel: "已广播",
     trayLabel: "基础窗口菜单",
+    canSaveReceiveDir: false,
+    receiveConfigLocked: true,
     receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
     receivePolicyLabel: "接收前询问",
     bindPort: "45821"
@@ -101,6 +103,8 @@ test("keeps settings usable before the first snapshot arrives", () => {
   assert.equal(model.receiveAddressLabel, "未监听");
   assert.equal(model.discoveryLabel, "未知");
   assert.equal(model.trayLabel, "基础窗口菜单");
+  assert.equal(model.canSaveReceiveDir, false);
+  assert.equal(model.receiveConfigLocked, false);
   assert.equal(model.receivePolicyLabel, "阻止外部接收");
 });
 
@@ -144,4 +148,56 @@ test("only enables saving device name when the trimmed value changes", () => {
     receivePolicy: "always_ask",
     bindPort: "45821"
   }).canSaveDeviceName, false);
+});
+
+test("only enables saving receive directory when stopped and the trimmed value changed", () => {
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "  /Users/hisakazu/Downloads/NekoDrop/manual  ",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveReceiveDir, true);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "  /Users/hisakazu/Downloads/NekoDrop  ",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveReceiveDir, false);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "  ",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveReceiveDir, false);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: receiveSession(),
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop/manual",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveReceiveDir, false);
+});
+
+test("locks receive directory edits while the receiver is running", () => {
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).receiveConfigLocked, false);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: receiveSession(),
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).receiveConfigLocked, true);
 });
