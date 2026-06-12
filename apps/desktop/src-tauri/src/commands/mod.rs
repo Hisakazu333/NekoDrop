@@ -1082,6 +1082,11 @@ pub fn set_receive_policy(
 }
 
 #[tauri::command]
+pub fn set_device_name(state: State<'_, AppState>, device_name: String) -> Result<String, String> {
+    persist_device_name(&state, &device_name)
+}
+
+#[tauri::command]
 pub fn open_path(path: String) -> Result<(), String> {
     let target = expand_home_dir(path.trim());
     if !target.exists() {
@@ -2370,6 +2375,17 @@ fn persist_receive_policy(state: &AppState, receive_policy: ReceivePolicy) -> Re
     save_app_config(&next_config)?;
     *config = next_config;
     Ok(())
+}
+
+fn persist_device_name(state: &AppState, device_name: &str) -> Result<String, String> {
+    let device_name = state.device_identity.save_device_name(device_name)?;
+    let mut config = state.config.lock().map_err(|error| error.to_string())?;
+    if config.device_name == device_name {
+        return Ok(device_name);
+    }
+
+    config.device_name = device_name.clone();
+    Ok(device_name)
 }
 
 fn receive_policy_from_input(value: &str) -> Result<ReceivePolicy, String> {

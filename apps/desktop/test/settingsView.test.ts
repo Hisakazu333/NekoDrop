@@ -53,6 +53,7 @@ test("builds a restrained settings view model from real app state", () => {
 
   assert.deepEqual(model, {
     deviceName: "MacBook",
+    canSaveDeviceName: false,
     platformLabel: "macOS",
     fingerprintLabel: "aa:bb:cc",
     receiveStateLabel: "收件开启",
@@ -73,9 +74,39 @@ test("keeps settings usable before the first snapshot arrives", () => {
   });
 
   assert.equal(model.deviceName, "这台电脑");
+  assert.equal(model.canSaveDeviceName, false);
   assert.equal(model.platformLabel, "Unknown");
   assert.equal(model.fingerprintLabel, null);
   assert.equal(model.receiveStateLabel, "收件关闭");
   assert.equal(model.receiveAddressLabel, "未监听");
   assert.equal(model.receivePolicyLabel, "阻止外部接收");
+});
+
+test("only enables saving device name when the trimmed value changes", () => {
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    deviceNameInput: "  Work Mac  ",
+    receiveSession: null,
+    receiveDir: "~/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveDeviceName, true);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    deviceNameInput: "  MacBook  ",
+    receiveSession: null,
+    receiveDir: "~/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveDeviceName, false);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    deviceNameInput: "  ",
+    receiveSession: null,
+    receiveDir: "~/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveDeviceName, false);
 });

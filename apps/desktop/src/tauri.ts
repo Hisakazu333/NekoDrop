@@ -20,6 +20,7 @@ type CommandName =
   | "select_receive_dir"
   | "set_receive_dir"
   | "set_receive_policy"
+  | "set_device_name"
   | "open_path"
   | "start_receive_once"
   | "stop_receive_once"

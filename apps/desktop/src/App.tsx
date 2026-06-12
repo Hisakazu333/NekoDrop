@@ -58,6 +58,7 @@ type BusyMode =
   | "pick-receive"
   | "stop-receive"
   | "receive-policy"
+  | "device-name"
   | "cancel-transfer"
   | "pair"
   | "forget"
@@ -81,6 +82,7 @@ export function App() {
   const [receiveDir, setReceiveDir] = useState("~/Downloads/NekoDrop");
   const [receivePolicy, setReceivePolicy] = useState<ReceivePolicyMode>("always_ask");
   const [bindPort, setBindPort] = useState("45821");
+  const [deviceNameInput, setDeviceNameInput] = useState("这台电脑");
   const [plan, setPlan] = useState<TransferPlanDto | null>(null);
   const [scanStatus, setScanStatus] = useState<TransferScanProgressDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
@@ -277,6 +279,7 @@ export function App() {
   async function refreshSnapshot() {
     const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
     setSnapshot(nextSnapshot);
+    setDeviceNameInput(nextSnapshot.device_name);
     setReceiveDir(nextSnapshot.receive_dir);
     setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
@@ -390,6 +393,34 @@ export function App() {
         current ? { ...current, receive_policy: nextPolicy } : current
       );
       setToast(receivePolicyLabel(nextPolicy));
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveDeviceName() {
+    const nextName = deviceNameInput.trim();
+    if (!nextName || nextName === snapshot?.device_name) return;
+    setBusy("device-name");
+    setError(null);
+    try {
+      const savedName = await invokeCommand<string>("set_device_name", { deviceName: nextName });
+      setSnapshot((current) =>
+        current
+          ? {
+              ...current,
+              device_name: savedName,
+              device_identity: {
+                ...current.device_identity,
+                device_name: savedName
+              }
+            }
+          : current
+      );
+      setDeviceNameInput(savedName);
+      setToast("设备名已保存");
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -1221,14 +1252,17 @@ export function App() {
                 <SettingsPanel
                   bindPort={bindPort}
                   busy={busy}
+                  deviceNameInput={deviceNameInput}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
                   setBindPort={setBindPort}
+                  setDeviceNameInput={setDeviceNameInput}
                   setReceiveDir={setReceiveDir}
                   snapshot={snapshot}
                   onChooseReceiveDir={chooseReceiveDir}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onSaveDeviceName={saveDeviceName}
                   onStartReceive={startReceive}
                   onStopReceive={stopReceive}
                   onUpdateReceivePolicy={updateReceivePolicy}
@@ -1889,34 +1923,41 @@ function ReceivePanel({
 function SettingsPanel({
   bindPort,
   busy,
+  deviceNameInput,
   receiveDir,
   receivePolicy,
   receiveSession,
   setBindPort,
+  setDeviceNameInput,
   setReceiveDir,
   snapshot,
   onChooseReceiveDir,
   onOpenReceiveDir,
+  onSaveDeviceName,
   onStartReceive,
   onStopReceive,
   onUpdateReceivePolicy
 }: {
   bindPort: string;
   busy: BusyMode | null;
+  deviceNameInput: string;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
   setBindPort: (value: string) => void;
+  setDeviceNameInput: (value: string) => void;
   setReceiveDir: (value: string) => void;
   snapshot: AppSnapshot | null;
   onChooseReceiveDir: () => void;
   onOpenReceiveDir: () => void;
+  onSaveDeviceName: () => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
   onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
 }) {
   const model = buildSettingsViewModel({
     snapshot,
+    deviceNameInput,
     receiveSession,
     receiveDir,
     receivePolicy,
@@ -1942,6 +1983,18 @@ function SettingsPanel({
             </button>
           )}
         </div>
+      </div>
+
+      <div className="control-row is-name">
+        <label>
+          设备名
+          <div className="input-action">
+            <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
+            <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
+              保存
+            </button>
+          </div>
+        </label>
       </div>
 
       <div className="settings-readout">

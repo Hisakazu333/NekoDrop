@@ -35,6 +35,7 @@ pub fn run() {
             commands::select_receive_dir,
             commands::set_receive_dir,
             commands::set_receive_policy,
+            commands::set_device_name,
             commands::open_path,
             commands::start_receive_once,
             commands::stop_receive_once,

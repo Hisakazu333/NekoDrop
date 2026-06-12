@@ -3,6 +3,7 @@ import type { AppSnapshot, ReceiveSessionDto } from "./types.ts";
 
 export interface SettingsViewModel {
   deviceName: string;
+  canSaveDeviceName: boolean;
   platformLabel: string;
   fingerprintLabel: string | null;
   receiveStateLabel: string;
@@ -14,19 +15,25 @@ export interface SettingsViewModel {
 
 export function buildSettingsViewModel({
   snapshot,
+  deviceNameInput,
   receiveSession,
   receiveDir,
   receivePolicy,
   bindPort
 }: {
   snapshot: AppSnapshot | null;
+  deviceNameInput?: string;
   receiveSession: ReceiveSessionDto | null;
   receiveDir: string;
   receivePolicy: string;
   bindPort: string;
 }): SettingsViewModel {
+  const deviceName = snapshot?.device_name?.trim() || "这台电脑";
+  const nextDeviceName = deviceNameInput?.trim() ?? deviceName;
+
   return {
-    deviceName: snapshot?.device_name?.trim() || "这台电脑",
+    deviceName,
+    canSaveDeviceName: nextDeviceName.length > 0 && nextDeviceName !== deviceName,
     platformLabel: snapshot ? platformLabel(snapshot.device_identity.platform) : "Unknown",
     fingerprintLabel: snapshot?.device_identity.public_key_fingerprint ?? null,
     receiveStateLabel: receiveSession ? "收件开启" : "收件关闭",

@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 #[cfg(any(
     target_os = "macos",
     all(not(target_os = "macos"), not(target_os = "windows"))
@@ -16,23 +17,63 @@ const SECRET_SEED_BYTES: usize = 32;
 
 #[derive(Debug, Clone)]
 pub struct LocalDeviceIdentity {
-    persisted: PersistedDeviceIdentity,
+    persisted: Arc<Mutex<PersistedDeviceIdentity>>,
 }
 
 impl LocalDeviceIdentity {
     pub fn public_identity(&self) -> DeviceIdentity {
+        let persisted = self.persisted.lock().expect("device identity lock poisoned");
         DeviceIdentity::new(
-            self.persisted.device_id.clone(),
-            self.persisted.device_name.clone(),
-            self.persisted.device_kind,
-            self.persisted.platform,
-            self.persisted.public_key_fingerprint.clone(),
+            persisted.device_id.clone(),
+            persisted.device_name.clone(),
+            persisted.device_kind,
+            persisted.platform,
+            persisted.public_key_fingerprint.clone(),
             desktop_capabilities(),
         )
     }
 
-    pub fn device_name(&self) -> &str {
-        &self.persisted.device_name
+    pub fn device_name(&self) -> String {
+        self.persisted
+            .lock()
+            .expect("device identity lock poisoned")
+            .device_name
+            .clone()
+    }
+
+    pub fn set_device_name(&self, device_name: &str) -> Result<String, String> {
+        let device_name = normalize_device_name(device_name)?;
+        let mut persisted = self
+            .persisted
+            .lock()
+            .map_err(|error| error.to_string())?;
+        persisted.device_name = device_name.clone();
+        Ok(device_name)
+    }
+
+    pub fn save_device_name(&self, device_name: &str) -> Result<String, String> {
+        let device_name = normalize_device_name(device_name)?;
+        let next_identity = {
+            let persisted = self
+                .persisted
+                .lock()
+                .map_err(|error| error.to_string())?;
+            if persisted.device_name == device_name {
+                return Ok(device_name);
+            }
+            let mut next_identity = persisted.clone();
+            next_identity.device_name = device_name.clone();
+            validate_persisted_identity(&next_identity)?;
+            next_identity
+        };
+
+        save_persisted_identity(&next_identity)?;
+        let mut persisted = self
+            .persisted
+            .lock()
+            .map_err(|error| error.to_string())?;
+        *persisted = next_identity;
+        Ok(device_name)
     }
 }
 
@@ -55,17 +96,10 @@ pub fn load_or_create_device_identity() -> Result<LocalDeviceIdentity, String> {
     }
 
     let identity = new_device_identity()?;
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("无法创建设备身份目录 {}: {error}", parent.display()))?;
-    }
-    let json = serde_json::to_string_pretty(&identity)
-        .map_err(|error| format!("无法序列化设备身份: {error}"))?;
-    fs::write(&path, json)
-        .map_err(|error| format!("无法写入设备身份文件 {}: {error}", path.display()))?;
+    write_persisted_identity(&path, &identity)?;
 
     Ok(LocalDeviceIdentity {
-        persisted: identity,
+        persisted: Arc::new(Mutex::new(identity)),
     })
 }
 
@@ -76,7 +110,7 @@ fn read_device_identity(path: PathBuf) -> Result<LocalDeviceIdentity, String> {
         .map_err(|error| format!("设备身份文件格式无效 {}: {error}", path.display()))?;
     validate_persisted_identity(&identity)?;
     Ok(LocalDeviceIdentity {
-        persisted: identity,
+        persisted: Arc::new(Mutex::new(identity)),
     })
 }
 
@@ -124,8 +158,34 @@ fn validate_persisted_identity(identity: &PersistedDeviceIdentity) -> Result<(),
     Ok(())
 }
 
+fn normalize_device_name(value: &str) -> Result<String, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Err("设备名不能为空".to_string());
+    }
+    Ok(value.to_string())
+}
+
 fn identity_file_path() -> Result<PathBuf, String> {
     Ok(app_config_dir()?.join("device_identity.json"))
+}
+
+fn save_persisted_identity(identity: &PersistedDeviceIdentity) -> Result<(), String> {
+    write_persisted_identity(&identity_file_path()?, identity)
+}
+
+fn write_persisted_identity(
+    path: &PathBuf,
+    identity: &PersistedDeviceIdentity,
+) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| format!("无法创建设备身份目录 {}: {error}", parent.display()))?;
+    }
+    let json = serde_json::to_string_pretty(identity)
+        .map_err(|error| format!("无法序列化设备身份: {error}"))?;
+    fs::write(path, json)
+        .map_err(|error| format!("无法写入设备身份文件 {}: {error}", path.display()))
 }
 
 pub fn app_config_dir() -> Result<PathBuf, String> {
@@ -252,7 +312,7 @@ mod tests {
     fn creates_stable_public_identity_shape() {
         let identity = new_device_identity().unwrap();
         let public = LocalDeviceIdentity {
-            persisted: identity,
+            persisted: Arc::new(Mutex::new(identity)),
         }
         .public_identity();
 
@@ -269,5 +329,29 @@ mod tests {
 
         assert!(!capabilities.contains(&Capability::EncryptedSession));
         assert!(!capabilities.contains(&Capability::DesktopAgentHost));
+    }
+
+    #[test]
+    fn updates_device_name_for_future_public_identity() {
+        let identity = LocalDeviceIdentity {
+            persisted: Arc::new(Mutex::new(new_device_identity().unwrap())),
+        };
+        let original_id = identity.public_identity().device_id;
+
+        let saved_name = identity.set_device_name("  Work Mac  ").unwrap();
+        let public = identity.public_identity();
+
+        assert_eq!(saved_name, "Work Mac");
+        assert_eq!(public.device_name, "Work Mac");
+        assert_eq!(public.device_id, original_id);
+    }
+
+    #[test]
+    fn rejects_empty_device_name_updates() {
+        let identity = LocalDeviceIdentity {
+            persisted: Arc::new(Mutex::new(new_device_identity().unwrap())),
+        };
+
+        assert!(identity.set_device_name("  \n  ").is_err());
     }
 }

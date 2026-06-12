@@ -131,7 +131,7 @@ impl AppState {
         let device_identity = load_or_create_device_identity()?;
         let trusted_devices = load_trusted_devices()?;
         let transfer_history = load_transfer_history()?;
-        let config = load_app_config(device_identity.device_name())?;
+        let config = load_app_config(&device_identity.device_name())?;
 
         Ok(Self {
             config: Arc::new(Mutex::new(config)),

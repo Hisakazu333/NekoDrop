@@ -1539,6 +1539,10 @@ button:disabled {
   gap: 12px;
 }
 
+.control-row.is-name {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 label {
   display: grid;
   gap: 7px;
