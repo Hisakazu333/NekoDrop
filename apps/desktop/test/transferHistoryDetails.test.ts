@@ -82,6 +82,28 @@ test("uses resend as the primary action for completed send transfers", () => {
   assert.equal(model.primaryActionLabel, "重发");
 });
 
+test("summarizes cancelled send transfers with the next recovery step", () => {
+  const recoverable = buildTransferHistoryDetailViewModel(transfer({
+    status: "cancelled",
+    error_message: null
+  }));
+
+  assert.equal(recoverable.recoveryLabel, "已取消，已传 2.0 GB，剩余 1.0 GB，可继续发送");
+  assert.equal(recoverable.primaryActionLabel, "继续发送");
+  assert.equal(recoverable.canContinue, true);
+
+  const retryable = buildTransferHistoryDetailViewModel(transfer({
+    status: "cancelled",
+    transferred_bytes: 0,
+    progress: 0,
+    error_message: null
+  }));
+
+  assert.equal(retryable.recoveryLabel, "已取消，可重试");
+  assert.equal(retryable.primaryActionLabel, "重试");
+  assert.equal(retryable.canContinue, false);
+});
+
 test("summarizes recent failed transfers with the next recovery step", () => {
   assert.equal(
     buildRecentTransferDetailLine(transfer()),
@@ -94,5 +116,25 @@ test("summarizes recent failed transfers with the next recovery step", () => {
       error_message: "连接超时。常见原因是 Windows 防火墙拦截、两台设备不在同一网段、路由器隔离了有线/无线，或 VPN/代理影响了局域网连接。"
     })),
     "确认同一局域网；关闭 VPN/代理；可用备用码"
+  );
+});
+
+test("summarizes recent cancelled transfers with the next recovery step", () => {
+  assert.equal(
+    buildRecentTransferDetailLine(transfer({
+      status: "cancelled",
+      error_message: null
+    })),
+    "已取消，已传 2.0 GB，剩余 1.0 GB，可继续发送"
+  );
+
+  assert.equal(
+    buildRecentTransferDetailLine(transfer({
+      status: "cancelled",
+      transferred_bytes: 0,
+      progress: 0,
+      error_message: null
+    })),
+    "已取消，可重试"
   );
 });

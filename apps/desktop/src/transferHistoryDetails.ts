@@ -14,6 +14,7 @@ export interface TransferHistoryDetailViewModel {
 
 export function buildTransferHistoryDetailViewModel(transfer: TransferDto): TransferHistoryDetailViewModel {
   const canContinue = isRecoverableSendTransfer(transfer);
+  const primaryActionLabel = transferPrimaryActionLabel(transfer);
 
   return {
     progressLabel:
@@ -24,8 +25,8 @@ export function buildTransferHistoryDetailViewModel(transfer: TransferDto): Tran
     locationLabel: transfer.receive_dir ?? firstAvailablePath(transfer),
     errorLabel: transfer.error_message,
     adviceLabel: transferFailureAdvice(transfer.error_message),
-    recoveryLabel: canContinue ? transferRecoveryLabel(transfer) : null,
-    primaryActionLabel: transferPrimaryActionLabel(transfer),
+    recoveryLabel: transferRecoveryLabel(transfer, canContinue, primaryActionLabel),
+    primaryActionLabel,
     canContinue
   };
 }
@@ -56,9 +57,20 @@ function isRecoverableSendTransfer(transfer: TransferDto) {
   );
 }
 
-function transferRecoveryLabel(transfer: TransferDto) {
+function transferRecoveryLabel(
+  transfer: TransferDto,
+  canContinue: boolean,
+  primaryActionLabel: string | null
+) {
+  if (transfer.status === "cancelled" && !canContinue && primaryActionLabel === "重试") {
+    return "已取消，可重试";
+  }
+
+  if (!canContinue) return null;
+
   const remainingBytes = Math.max(0, transfer.total_bytes - transfer.transferred_bytes);
-  return `已传 ${formatBytes(transfer.transferred_bytes)}，剩余 ${formatBytes(remainingBytes)}，可继续发送`;
+  const label = `已传 ${formatBytes(transfer.transferred_bytes)}，剩余 ${formatBytes(remainingBytes)}，可继续发送`;
+  return transfer.status === "cancelled" ? `已取消，${label}` : label;
 }
 
 function formatBytes(bytes: number) {
