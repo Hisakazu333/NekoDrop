@@ -46,7 +46,8 @@ export function transferFallbackActionLabel(transfer: TransferDto) {
 
 export function buildRecentTransferDetailLine(transfer: TransferDto) {
   const detail = buildTransferHistoryDetailViewModel(transfer);
-  return detail.recoveryLabel ?? detail.adviceLabel ?? detail.errorLabel ?? null;
+  if (detail.recoveryLabel && detail.canContinue) return detail.recoveryLabel;
+  return detail.adviceLabel ?? detail.recoveryLabel ?? detail.errorLabel ?? null;
 }
 
 function firstAvailablePath(transfer: TransferDto) {
@@ -70,6 +71,10 @@ function transferRecoveryLabel(
 ) {
   if (transfer.status === "cancelled" && !canContinue && primaryActionLabel === "重试") {
     return "已取消，可重试";
+  }
+
+  if (transfer.status === "failed" && !canContinue && primaryActionLabel === "重试") {
+    return "未保留续传进度，可重试";
   }
 
   if (!canContinue) return null;

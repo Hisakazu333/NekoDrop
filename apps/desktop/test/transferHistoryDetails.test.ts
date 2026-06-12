@@ -112,6 +112,26 @@ test("summarizes cancelled send transfers with the next recovery step", () => {
   assert.equal(retryable.canContinue, false);
 });
 
+test("summarizes non-resumable failed sends with a retry-only recovery step", () => {
+  const retryable = buildTransferHistoryDetailViewModel(transfer({
+    transferred_bytes: 0,
+    progress: 0,
+    error_message: "连接中断"
+  }));
+
+  assert.equal(retryable.recoveryLabel, "未保留续传进度，可重试");
+  assert.equal(retryable.primaryActionLabel, "重试");
+  assert.equal(retryable.canContinue, false);
+  assert.equal(
+    buildRecentTransferDetailLine(transfer({
+      transferred_bytes: 0,
+      progress: 0,
+      error_message: "连接中断"
+    })),
+    "未保留续传进度，可重试"
+  );
+});
+
 test("summarizes recent failed transfers with the next recovery step", () => {
   assert.equal(
     buildRecentTransferDetailLine(transfer()),
