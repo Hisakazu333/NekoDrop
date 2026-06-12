@@ -4,6 +4,11 @@ import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { invokeCommand } from "./tauri";
 import {
+  buildNearbyDeviceViewModel,
+  buildTrustedDeviceViewModel,
+  platformLabel as devicePlatformLabel
+} from "./deviceDisplay";
+import {
   hasReceiveDiagnosticsWarning,
   receiveDiagnosticsAdvice
 } from "./receiveDiagnostics";
@@ -1483,6 +1488,7 @@ function NearbyDevices({
           {devices.map((device) => {
             const trusted = device.trust_state === "Trusted";
             const selected = device.id === selectedDeviceId;
+            const model = buildNearbyDeviceViewModel(device, selected);
             return (
               <div
                 className={[
@@ -1498,23 +1504,23 @@ function NearbyDevices({
                 <span className="device-main">
                   <strong>{device.name}</strong>
                   <small>
-                    {devicePlatformLabel(device.platform)} · {trustStateLabel(device.trust_state)}
+                    {devicePlatformLabel(device.platform)} · {model.statusLabel}
                     {device.pairing_code ? ` · ${device.pairing_code}` : ""}
                   </small>
                 </span>
                 <span className="device-actions">
                   {trusted ? (
                     <button className="target-button" onClick={() => onSelectDevice(device)} type="button">
-                      {selected ? "已选" : "选择"}
+                      {model.actionLabel}
                     </button>
                   ) : (
                     <button
                       className="trust-button"
-                      disabled={busy === "pair" || !device.public_key_fingerprint}
+                      disabled={busy === "pair" || !model.canPair}
                       onClick={() => onTrustDevice(device)}
                       type="button"
                     >
-                      配对
+                      {model.actionLabel}
                     </button>
                   )}
                 </span>
@@ -1577,6 +1583,7 @@ function DevicePanel({
             {trustedDevices.map((device) => {
               const online = nearbyDevices.some((nearby) => nearby.id === device.device_id);
               const selected = selectedDeviceId === device.device_id;
+              const model = buildTrustedDeviceViewModel(device, Date.now(), online);
               return (
                 <div
                   className={selected ? "trusted-device is-selected" : "trusted-device"}
@@ -1585,16 +1592,12 @@ function DevicePanel({
                   <span className={online ? "device-dot is-online" : "device-dot"} />
                   <span className="trusted-main">
                     <strong>{device.device_name}</strong>
-                    <small>
-                      {devicePlatformLabel(device.platform)} · {shortDeviceId(device.device_id)}
-                    </small>
+                    <small>{model.detailLabel}</small>
                   </span>
-                  <span className="trusted-meta">
-                    {online ? "在线" : formatDeviceSeenTime(device.last_seen_at_ms)}
-                  </span>
+                  <span className="trusted-meta">{model.presenceLabel}</span>
                   <span className="trusted-actions">
                     <button className="target-button" onClick={() => onSelectTrustedDevice(device)} type="button">
-                      {selected ? "已选" : "选择"}
+                      {selected ? "已选" : model.actionLabel}
                     </button>
                     <button className="text-button" disabled={busy === "forget"} onClick={() => onForgetTrustedDevice(device)} type="button">
                       移除
@@ -2435,21 +2438,6 @@ function formatTransferTime(timestampMs: number) {
   }).format(date);
 }
 
-function formatDeviceSeenTime(timestampMs: number) {
-  if (timestampMs <= 0) return "未见";
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
-  if (elapsedSeconds < 60) return "刚刚";
-  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)}m 前`;
-  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)}h 前`;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(new Date(timestampMs));
-}
-
 function platformLabel(platform: string) {
   if (platform === "macos") return "macOS";
   if (platform === "windows") return "Windows";
@@ -2459,26 +2447,6 @@ function platformLabel(platform: string) {
   if (platform === "openharmony") return "OpenHarmony";
   if (platform === "web") return "Web";
   return "Unknown";
-}
-
-function devicePlatformLabel(platform: string) {
-  if (platform === "MacOS" || platform === "macos") return "macOS";
-  if (platform === "Windows" || platform === "windows") return "Windows";
-  if (platform === "Linux" || platform === "linux") return "Linux";
-  return platform || "Unknown";
-}
-
-function trustStateLabel(trustState: string) {
-  if (trustState === "Trusted") return "已信任";
-  if (trustState === "Pairing") return "配对中";
-  if (trustState === "Blocked") return "已阻止";
-  if (trustState === "Local") return "本机";
-  return "未配对";
-}
-
-function shortDeviceId(deviceId: string) {
-  if (deviceId.length <= 22) return deviceId;
-  return `${deviceId.slice(0, 17)}…${deviceId.slice(-4)}`;
 }
 
 function errorMessage(error: unknown) {
