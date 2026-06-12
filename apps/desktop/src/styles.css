@@ -1922,6 +1922,45 @@ input::placeholder {
   padding: 0 10px 8px 88px;
 }
 
+.history-detail-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.history-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
+  min-width: 0;
+}
+
+.history-detail-grid span {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-detail-grid strong {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.history-detail-grid .is-error {
+  color: var(--danger);
+}
+
+.history-detail-grid .is-error strong {
+  color: var(--danger);
+}
+
 .history-paths {
   display: grid;
   gap: 5px;

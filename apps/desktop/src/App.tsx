@@ -9,6 +9,7 @@ import {
   discoveryTroubleshootingHint,
   unavailableDiscoveryHint
 } from "./networkPermissionHints";
+import { buildTransferHistoryDetailViewModel } from "./transferHistoryDetails";
 import {
   buildTransferProgressViewModel,
   formatBytes
@@ -1891,6 +1892,7 @@ function HistoryPanel({
           {transfers.map((transfer) => {
             const selected = transfer.id === selectedTransferId;
             const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+            const detail = buildTransferHistoryDetailViewModel(transfer);
             return (
               <div
                 className={[
@@ -1922,11 +1924,30 @@ function HistoryPanel({
                 ) : null}
                 {selected ? (
                   <div className="history-detail">
-                    <div className="history-paths">
-                      {paths.slice(0, 6).map((path) => (
-                        <span key={path} title={path}>{path}</span>
-                      ))}
-                      {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+                    <div className="history-detail-main">
+                      <div className="history-detail-grid">
+                        {detail.progressLabel ? (
+                          <span><strong>进度</strong>{detail.progressLabel}</span>
+                        ) : null}
+                        {detail.peerLabel ? (
+                          <span><strong>对方</strong>{detail.peerLabel}</span>
+                        ) : null}
+                        {detail.locationLabel ? (
+                          <span><strong>位置</strong>{detail.locationLabel}</span>
+                        ) : null}
+                        {detail.recoveryLabel ? (
+                          <span><strong>恢复</strong>{detail.recoveryLabel}</span>
+                        ) : null}
+                        {detail.errorLabel ? (
+                          <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
+                        ) : null}
+                      </div>
+                      <div className="history-paths">
+                        {paths.slice(0, 6).map((path) => (
+                          <span key={path} title={path}>{path}</span>
+                        ))}
+                        {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+                      </div>
                     </div>
                     <div className="history-actions">
                       <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
