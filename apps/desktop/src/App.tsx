@@ -6,7 +6,8 @@ import { invokeCommand } from "./tauri";
 import {
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
-  platformLabel as devicePlatformLabel
+  platformLabel as devicePlatformLabel,
+  selectedTrustedTargetCopy
 } from "./deviceDisplay";
 import {
   currentTransferRecoveryActions,
@@ -127,6 +128,16 @@ export function App() {
     () => findCurrentFailedTransfer(transferStatus, transfers),
     [transferStatus, transfers]
   );
+  const selectedTrustedRecord = useMemo(
+    () => trustedDevices.find((device) => device.device_id === selectedDeviceId) ?? null,
+    [selectedDeviceId, trustedDevices]
+  );
+  const selectedTrustedOnline = Boolean(
+    selectedDeviceId && trustedNearbyDevices.some((device) => device.id === selectedDeviceId)
+  );
+  const selectedTargetCopy = selectedTrustedRecord
+    ? selectedTrustedTargetCopy(selectedTrustedRecord, selectedTrustedOnline)
+    : null;
   const trimmedConnectionCode = connectionCode.trim();
   const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
   const receiveState = receiveSession
@@ -752,8 +763,10 @@ export function App() {
   }
 
   const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length);
-  const targetLabel = selectedDevice
-    ? selectedDevice.name
+  const targetLabel = selectedTargetCopy
+    ? selectedTargetCopy.targetLabel
+    : selectedDevice
+      ? selectedDevice.name
     : trimmedConnectionCode.length > 0
       ? "备用码"
       : "选择目标";
@@ -766,8 +779,10 @@ export function App() {
           ? "发送队列"
           : mode === "history"
             ? "传输历史"
-            : selectedDevice
-              ? `发给 ${selectedDevice.name}`
+            : selectedTargetCopy
+              ? `发给 ${selectedTargetCopy.targetLabel}`
+              : selectedDevice
+                ? `发给 ${selectedDevice.name}`
               : trimmedConnectionCode.length > 0
                 ? "使用备用码发送"
                 : "把文件发到哪台设备？";
@@ -788,7 +803,9 @@ export function App() {
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
           ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
-          : composerSubtitle;
+          : selectedTargetCopy
+            ? selectedTargetCopy.subtitle
+            : composerSubtitle;
 
   return (
     <main className="app-shell">

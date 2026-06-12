@@ -12,6 +12,11 @@ export interface TrustedDeviceViewModel {
   actionLabel: string;
 }
 
+export interface TrustedTargetCopy {
+  targetLabel: string;
+  subtitle: string;
+}
+
 export function buildNearbyDeviceViewModel(device: DeviceDto, selected: boolean): NearbyDeviceViewModel {
   if (device.trust_state === "Trusted") {
     return {
@@ -45,6 +50,14 @@ export function buildTrustedDeviceViewModel(
     detailLabel: `${platformLabel(device.platform)} · ${device.host}:${device.port}`,
     presenceLabel: online ? "在线" : formatLastSeen(nowMs, device.last_seen_at_ms),
     actionLabel: online ? "选择" : "用历史地址发送"
+  };
+}
+
+export function selectedTrustedTargetCopy(device: TrustedDeviceDto, online: boolean): TrustedTargetCopy {
+  const endpoint = `${device.host}:${device.port}`;
+  return {
+    targetLabel: device.device_name,
+    subtitle: online ? `在线 · ${endpoint}` : `使用上次地址 · ${endpoint}`
   };
 }
 

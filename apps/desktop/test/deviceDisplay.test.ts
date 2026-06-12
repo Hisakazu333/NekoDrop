@@ -3,7 +3,8 @@ import { test } from "node:test";
 
 import {
   buildNearbyDeviceViewModel,
-  buildTrustedDeviceViewModel
+  buildTrustedDeviceViewModel,
+  selectedTrustedTargetCopy
 } from "../src/deviceDisplay.ts";
 import type { DeviceDto, TrustedDeviceDto } from "../src/types.ts";
 
@@ -63,4 +64,16 @@ test("labels offline trusted devices with the last address fallback", () => {
   assert.equal(model.presenceLabel, "1 小时前");
   assert.equal(model.detailLabel, "Windows · 192.168.1.20:45821");
   assert.equal(model.actionLabel, "用历史地址发送");
+});
+
+test("describes selected offline trusted devices as historical-address targets", () => {
+  assert.deepEqual(selectedTrustedTargetCopy(trusted(), true), {
+    targetLabel: "Win11",
+    subtitle: "在线 · 192.168.1.20:45821"
+  });
+
+  assert.deepEqual(selectedTrustedTargetCopy(trusted(), false), {
+    targetLabel: "Win11",
+    subtitle: "使用上次地址 · 192.168.1.20:45821"
+  });
 });
