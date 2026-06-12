@@ -26,6 +26,7 @@ NekoDrop 是一个 macOS / Windows 局域网文件互传桌面应用。当前仓
 - 稳定设备 ID 和 fingerprint
 - 可信配对基础、可信设备管理
 - 持久化传输历史，支持打开位置、重发、继续发送、删除、清空
+- 独立设置页，管理收件目录、端口、接收策略和收件开关
 - macOS DMG 打包脚本
 - Windows NSIS / MSI 打包脚本
 

@@ -27,6 +27,7 @@ import {
   transferFallbackActionLabel,
   transferPrimaryActionLabel
 } from "./transferHistoryDetails";
+import { buildSettingsViewModel } from "./settingsView";
 import {
   buildTransferProgressViewModel,
   formatBytes
@@ -64,7 +65,7 @@ type BusyMode =
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
+type ComposerMode = "send" | "devices" | "receive" | "queue" | "history" | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
@@ -781,13 +782,15 @@ export function App() {
           ? "发送队列"
           : mode === "history"
             ? "传输历史"
-            : selectedTargetCopy
-              ? `发给 ${selectedTargetCopy.targetLabel}`
-              : selectedDevice
-                ? `发给 ${selectedDevice.name}`
-              : trimmedConnectionCode.length > 0
-                ? "使用备用码发送"
-                : "把文件发到哪台设备？";
+            : mode === "settings"
+              ? "设置"
+              : selectedTargetCopy
+                ? `发给 ${selectedTargetCopy.targetLabel}`
+                : selectedDevice
+                  ? `发给 ${selectedDevice.name}`
+                  : trimmedConnectionCode.length > 0
+                    ? "使用备用码发送"
+                    : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -805,9 +808,11 @@ export function App() {
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
           ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
-          : selectedTargetCopy
-            ? selectedTargetCopy.subtitle
-            : composerSubtitle;
+          : mode === "settings"
+            ? snapshot?.device_name ?? "这台电脑"
+            : selectedTargetCopy
+              ? selectedTargetCopy.subtitle
+              : composerSubtitle;
 
   return (
     <main className="app-shell">
@@ -856,6 +861,14 @@ export function App() {
             type="button"
           >
             <Icon name="clock" />
+          </button>
+          <button
+            className={mode === "settings" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("settings")}
+            title="设置"
+            type="button"
+          >
+            <Icon name="settings" />
           </button>
         </nav>
 
@@ -1203,6 +1216,24 @@ export function App() {
                   onUseFallbackCode={openFallbackCode}
                 />
               ) : null}
+
+              {mode === "settings" ? (
+                <SettingsPanel
+                  bindPort={bindPort}
+                  busy={busy}
+                  receiveDir={receiveDir}
+                  receivePolicy={receivePolicy}
+                  receiveSession={receiveSession}
+                  setBindPort={setBindPort}
+                  setReceiveDir={setReceiveDir}
+                  snapshot={snapshot}
+                  onChooseReceiveDir={chooseReceiveDir}
+                  onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onStartReceive={startReceive}
+                  onStopReceive={stopReceive}
+                  onUpdateReceivePolicy={updateReceivePolicy}
+                />
+              ) : null}
             </div>
           )}
         </section>
@@ -1220,6 +1251,7 @@ type IconName =
   | "inbox"
   | "link"
   | "list"
+  | "settings"
   | "send"
   | "trash";
 
@@ -1234,6 +1266,7 @@ function Icon({ name }: { name: IconName }) {
       {name === "inbox" ? <path d="M4 4h16v11l-3 5H7l-3-5V4Zm0 11h5l2 2h2l2-2h5" /> : null}
       {name === "link" ? <path d="M10 13a5 5 0 0 0 7.07 0l2-2A5 5 0 0 0 12 4l-1.2 1.2M14 11a5 5 0 0 0-7.07 0l-2 2A5 5 0 0 0 12 20l1.2-1.2" /> : null}
       {name === "list" ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : null}
+      {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
     </svg>
@@ -1849,6 +1882,113 @@ function ReceivePanel({
           </span>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function SettingsPanel({
+  bindPort,
+  busy,
+  receiveDir,
+  receivePolicy,
+  receiveSession,
+  setBindPort,
+  setReceiveDir,
+  snapshot,
+  onChooseReceiveDir,
+  onOpenReceiveDir,
+  onStartReceive,
+  onStopReceive,
+  onUpdateReceivePolicy
+}: {
+  bindPort: string;
+  busy: BusyMode | null;
+  receiveDir: string;
+  receivePolicy: ReceivePolicyMode;
+  receiveSession: ReceiveSessionDto | null;
+  setBindPort: (value: string) => void;
+  setReceiveDir: (value: string) => void;
+  snapshot: AppSnapshot | null;
+  onChooseReceiveDir: () => void;
+  onOpenReceiveDir: () => void;
+  onStartReceive: () => void;
+  onStopReceive: () => void;
+  onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
+}) {
+  const model = buildSettingsViewModel({
+    snapshot,
+    receiveSession,
+    receiveDir,
+    receivePolicy,
+    bindPort
+  });
+
+  return (
+    <section className="function-panel settings-panel">
+      <div className="panel-head">
+        <div>
+          <strong>{model.deviceName}</strong>
+          <span>{model.platformLabel} · {model.receiveStateLabel}</span>
+          {model.fingerprintLabel ? <small>{model.fingerprintLabel}</small> : null}
+        </div>
+        <div className="panel-actions">
+          {receiveSession ? (
+            <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
+              关闭收件
+            </button>
+          ) : (
+            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+              打开收件
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="settings-readout">
+        <span><strong>监听</strong>{model.receiveAddressLabel}</span>
+        <span><strong>策略</strong>{model.receivePolicyLabel}</span>
+        <span><strong>发现</strong>{snapshot?.discovery_enabled ? "开启" : "关闭"}</span>
+        <span><strong>托盘</strong>{snapshot?.tray_enabled ? "开启" : "关闭"}</span>
+      </div>
+
+      <div className="control-row">
+        <label>
+          接收目录
+          <div className="input-action">
+            <input value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || Boolean(receiveSession)} onClick={onChooseReceiveDir} type="button">
+              选择
+            </button>
+          </div>
+        </label>
+        <label className="port-field">
+          端口
+          <input disabled={Boolean(receiveSession)} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+        </label>
+      </div>
+
+      <div className="policy-row">
+        <span>接收策略</span>
+        <div className="policy-segment">
+          {RECEIVE_POLICY_OPTIONS.map((option) => (
+            <button
+              className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
+              disabled={busy === "receive-policy"}
+              key={option.value}
+              onClick={() => onUpdateReceivePolicy(option.value)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <button className="tool-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+          打开接收目录
+        </button>
+      </div>
     </section>
   );
 }
