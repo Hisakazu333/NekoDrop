@@ -1,5 +1,5 @@
 import { platformLabel } from "./deviceDisplay.ts";
-import type { AppSnapshot, ReceiveSessionDto } from "./types.ts";
+import type { AppSnapshot, DiscoveryStatusDto, ReceiveSessionDto } from "./types.ts";
 
 export interface SettingsViewModel {
   deviceName: string;
@@ -8,6 +8,8 @@ export interface SettingsViewModel {
   fingerprintLabel: string | null;
   receiveStateLabel: string;
   receiveAddressLabel: string;
+  discoveryLabel: string;
+  trayLabel: string;
   receiveDir: string;
   receivePolicyLabel: string;
   bindPort: string;
@@ -16,6 +18,7 @@ export interface SettingsViewModel {
 export function buildSettingsViewModel({
   snapshot,
   deviceNameInput,
+  discoveryStatus,
   receiveSession,
   receiveDir,
   receivePolicy,
@@ -23,6 +26,7 @@ export function buildSettingsViewModel({
 }: {
   snapshot: AppSnapshot | null;
   deviceNameInput?: string;
+  discoveryStatus?: DiscoveryStatusDto | null;
   receiveSession: ReceiveSessionDto | null;
   receiveDir: string;
   receivePolicy: string;
@@ -38,6 +42,8 @@ export function buildSettingsViewModel({
     fingerprintLabel: snapshot?.device_identity.public_key_fingerprint ?? null,
     receiveStateLabel: receiveSession ? "收件开启" : "收件关闭",
     receiveAddressLabel: receiveSession?.bind_addr ?? "未监听",
+    discoveryLabel: discoveryRuntimeLabel(discoveryStatus ?? null),
+    trayLabel: "基础窗口菜单",
     receiveDir,
     receivePolicyLabel: receivePolicyDisplayLabel(receivePolicy),
     bindPort
@@ -47,4 +53,12 @@ export function buildSettingsViewModel({
 export function receivePolicyDisplayLabel(value: string) {
   if (value === "block_all") return "阻止外部接收";
   return "接收前询问";
+}
+
+export function discoveryRuntimeLabel(status: DiscoveryStatusDto | null) {
+  if (!status) return "未知";
+  if (status.phase === "unavailable") return "不可用";
+  if (status.advertised) return "已广播";
+  if (status.phase === "active") return "扫描中";
+  return "未广播";
 }

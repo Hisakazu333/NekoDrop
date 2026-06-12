@@ -1253,6 +1253,7 @@ export function App() {
                   bindPort={bindPort}
                   busy={busy}
                   deviceNameInput={deviceNameInput}
+                  discoveryStatus={discoveryStatus}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
@@ -1924,6 +1925,7 @@ function SettingsPanel({
   bindPort,
   busy,
   deviceNameInput,
+  discoveryStatus,
   receiveDir,
   receivePolicy,
   receiveSession,
@@ -1941,6 +1943,7 @@ function SettingsPanel({
   bindPort: string;
   busy: BusyMode | null;
   deviceNameInput: string;
+  discoveryStatus: DiscoveryStatusDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
@@ -1958,6 +1961,7 @@ function SettingsPanel({
   const model = buildSettingsViewModel({
     snapshot,
     deviceNameInput,
+    discoveryStatus,
     receiveSession,
     receiveDir,
     receivePolicy,
@@ -2000,8 +2004,8 @@ function SettingsPanel({
       <div className="settings-readout">
         <span><strong>监听</strong>{model.receiveAddressLabel}</span>
         <span><strong>策略</strong>{model.receivePolicyLabel}</span>
-        <span><strong>发现</strong>{snapshot?.discovery_enabled ? "开启" : "关闭"}</span>
-        <span><strong>托盘</strong>{snapshot?.tray_enabled ? "开启" : "关闭"}</span>
+        <span><strong>发现</strong>{model.discoveryLabel}</span>
+        <span><strong>托盘</strong>{model.trayLabel}</span>
       </div>
 
       <div className="control-row">

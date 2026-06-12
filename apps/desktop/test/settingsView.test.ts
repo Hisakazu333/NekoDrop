@@ -3,9 +3,10 @@ import { test } from "node:test";
 
 import {
   buildSettingsViewModel,
+  discoveryRuntimeLabel,
   receivePolicyDisplayLabel
 } from "../src/settingsView.ts";
-import type { AppSnapshot, ReceiveSessionDto } from "../src/types.ts";
+import type { AppSnapshot, DiscoveryStatusDto, ReceiveSessionDto } from "../src/types.ts";
 
 function snapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
   return {
@@ -35,6 +36,21 @@ function receiveSession(overrides: Partial<ReceiveSessionDto> = {}): ReceiveSess
   };
 }
 
+function discoveryStatus(overrides: Partial<DiscoveryStatusDto> = {}): DiscoveryStatusDto {
+  return {
+    phase: "active",
+    message: "本机已广播，正在扫描附近设备",
+    service_type: "_nekodrop._tcp.local.",
+    advertised: true,
+    lan_ip: "192.168.1.10",
+    port: 45821,
+    device_count: 1,
+    last_seen_seconds_ago: 5,
+    last_error: null,
+    ...overrides
+  };
+}
+
 test("labels receive policies for settings without exposing unsupported auto accept", () => {
   assert.equal(receivePolicyDisplayLabel("always_ask"), "接收前询问");
   assert.equal(receivePolicyDisplayLabel("block_all"), "阻止外部接收");
@@ -45,6 +61,7 @@ test("labels receive policies for settings without exposing unsupported auto acc
 test("builds a restrained settings view model from real app state", () => {
   const model = buildSettingsViewModel({
     snapshot: snapshot(),
+    discoveryStatus: discoveryStatus(),
     receiveSession: receiveSession(),
     receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
     receivePolicy: "always_ask",
@@ -58,6 +75,8 @@ test("builds a restrained settings view model from real app state", () => {
     fingerprintLabel: "aa:bb:cc",
     receiveStateLabel: "收件开启",
     receiveAddressLabel: "0.0.0.0:45821",
+    discoveryLabel: "已广播",
+    trayLabel: "基础窗口菜单",
     receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
     receivePolicyLabel: "接收前询问",
     bindPort: "45821"
@@ -67,6 +86,7 @@ test("builds a restrained settings view model from real app state", () => {
 test("keeps settings usable before the first snapshot arrives", () => {
   const model = buildSettingsViewModel({
     snapshot: null,
+    discoveryStatus: null,
     receiveSession: null,
     receiveDir: "~/Downloads/NekoDrop",
     receivePolicy: "block_all",
@@ -79,7 +99,22 @@ test("keeps settings usable before the first snapshot arrives", () => {
   assert.equal(model.fingerprintLabel, null);
   assert.equal(model.receiveStateLabel, "收件关闭");
   assert.equal(model.receiveAddressLabel, "未监听");
+  assert.equal(model.discoveryLabel, "未知");
+  assert.equal(model.trayLabel, "基础窗口菜单");
   assert.equal(model.receivePolicyLabel, "阻止外部接收");
+});
+
+test("labels discovery runtime state from diagnostics instead of config flags", () => {
+  assert.equal(discoveryRuntimeLabel(discoveryStatus({ advertised: true })), "已广播");
+  assert.equal(discoveryRuntimeLabel(discoveryStatus({ advertised: false })), "扫描中");
+  assert.equal(discoveryRuntimeLabel(discoveryStatus({
+    advertised: false,
+    phase: "unavailable"
+  })), "不可用");
+  assert.equal(discoveryRuntimeLabel(discoveryStatus({
+    advertised: false,
+    phase: "starting"
+  })), "未广播");
 });
 
 test("only enables saving device name when the trimmed value changes", () => {
