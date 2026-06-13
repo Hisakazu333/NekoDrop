@@ -130,6 +130,11 @@ Implemented message kinds:
 ```text
 device.hello
 device.heartbeat
+session.hello
+session.ready
+pairing.request
+pairing.accept
+pairing.reject
 file.offer
 file.accept
 file.decline
@@ -143,7 +148,7 @@ companion.state
 state.sync
 ```
 
-Only `file.offer`, `file.accept`, and `file.decline` are currently used by NekoDrop transfer sessions. The other kinds reserve the protocol surface for device identity, OpenNeko Agent commands, companion state, and future state sync.
+NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `file.offer`, `file.accept`, and `file.decline`. `session.hello` and `session.ready` are implemented at the protocol and TCP frame level for encrypted-session groundwork, but the desktop transfer path does not yet encrypt control messages or file bytes with them.
 
 ### DEVICE_HELLO
 
@@ -161,6 +166,49 @@ Reserved NekoLink identity handshake payload:
   },
   "app_name": "NekoDrop",
   "app_version": "0.1.0"
+}
+```
+
+### session.hello
+
+Encrypted-session offer payload. This is protocol groundwork only; current desktop transfers do not yet switch into encrypted file streams.
+
+```json
+{
+  "session_id": "session-1781010000000",
+  "identity": {
+    "device_id": "sender-device-id",
+    "device_name": "Hisakazu MacBook",
+    "device_kind": "desktop",
+    "platform": "macos",
+    "public_key_fingerprint": "sha256:hex",
+    "capabilities": ["file_transfer", "device_pairing", "encrypted_session"]
+  },
+  "key_agreement": "x25519",
+  "ephemeral_public_key": "base64-public-key",
+  "supported_ciphers": ["xchacha20poly1305", "aes256gcm"]
+}
+```
+
+### session.ready
+
+Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator can verify the ready payload with the original hello before deriving future session keys.
+
+```json
+{
+  "session_id": "session-1781010000000",
+  "identity": {
+    "device_id": "receiver-device-id",
+    "device_name": "Peer Windows",
+    "device_kind": "desktop",
+    "platform": "windows",
+    "public_key_fingerprint": "sha256:peer",
+    "capabilities": ["file_transfer", "device_pairing", "encrypted_session"]
+  },
+  "key_agreement": "x25519",
+  "ephemeral_public_key": "base64-peer-public-key",
+  "cipher": "xchacha20poly1305",
+  "handshake_hash": "sha256:hex"
 }
 ```
 
