@@ -575,16 +575,45 @@ impl VerifiedSessionHandshake {
     }
 
     pub fn key_derivation_context(&self) -> SessionKeyDerivationContext {
+        self.build_key_derivation_context(&self.initiator.device_id, &self.responder.device_id)
+    }
+
+    pub fn key_derivation_context_for_local_device(
+        &self,
+        local_device_id: &str,
+    ) -> Result<SessionKeyDerivationContext, ProtocolError> {
+        if local_device_id == self.initiator.device_id {
+            return Ok(self.build_key_derivation_context(
+                &self.initiator.device_id,
+                &self.responder.device_id,
+            ));
+        }
+        if local_device_id == self.responder.device_id {
+            return Ok(self.build_key_derivation_context(
+                &self.responder.device_id,
+                &self.initiator.device_id,
+            ));
+        }
+
+        Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("device {local_device_id} is not part of verified session"),
+        ))
+    }
+
+    fn build_key_derivation_context(
+        &self,
+        local_device_id: &str,
+        peer_device_id: &str,
+    ) -> SessionKeyDerivationContext {
         SessionKeyDerivationContext {
             session_id: self.session_id.clone(),
             key_agreement: self.key_agreement.clone(),
             cipher: self.cipher.clone(),
             handshake_hash: self.handshake_hash.clone(),
             salt: self.handshake_hash.clone(),
-            send_info: self
-                .key_derivation_info(&self.initiator.device_id, &self.responder.device_id),
-            receive_info: self
-                .key_derivation_info(&self.responder.device_id, &self.initiator.device_id),
+            send_info: self.key_derivation_info(local_device_id, peer_device_id),
+            receive_info: self.key_derivation_info(peer_device_id, local_device_id),
         }
     }
 
@@ -1998,6 +2027,59 @@ mod tests {
             context.receive_info,
             "nekolink/session-1/x25519/xchacha20poly1305/neko-device-peer->neko-device-abc123"
         );
+    }
+
+    #[test]
+    fn builds_session_key_derivation_context_for_local_device_direction() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto("session-1", identity, "base64-local-key");
+        let ready = SessionReadyPayload::for_hello(
+            &hello,
+            peer,
+            "base64-peer-key",
+            SESSION_CIPHER_XCHACHA20POLY1305,
+        )
+        .unwrap();
+        let handshake = VerifiedSessionHandshake::from_ready(&hello, &ready).unwrap();
+
+        let initiator_context = handshake
+            .key_derivation_context_for_local_device("neko-device-abc123")
+            .unwrap();
+        let responder_context = handshake
+            .key_derivation_context_for_local_device("neko-device-peer")
+            .unwrap();
+
+        assert_eq!(initiator_context.send_info, responder_context.receive_info);
+        assert_eq!(initiator_context.receive_info, responder_context.send_info);
+
+        let error = handshake
+            .key_derivation_context_for_local_device("unknown-device")
+            .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("not part of verified session"));
     }
 
     #[test]
