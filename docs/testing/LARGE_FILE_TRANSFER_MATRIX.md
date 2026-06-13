@@ -50,7 +50,7 @@ Create fresh payloads for each release candidate.
 | --- | --- | --- |
 | `small-single` | One text file under 1 MB | Basic send / receive smoke test |
 | `small-folder` | Nested folder with 10-30 files | Folder manifest and structure preservation |
-| `unicode-path` | A file under a path like `I:\文件\asmr\z\合集\16音声.m4a` on Windows, or `~/Downloads/音声/合集/16音声.m4a` on macOS | Detect path mojibake such as `�` and unsafe path handling |
+| `unicode-path` | Unicode path format: `xxx\xxx\文件名.ext` on Windows, `xxx/xxx/文件名.ext` on macOS | Detect path mojibake such as `�` and unsafe path handling |
 | `spaces-symbols` | File and folder names containing spaces, parentheses, `+`, `-`, `_`, and `.` | Common filename compatibility |
 | `large-1g` | One 1 GiB file | Baseline large transfer |
 | `large-5g` | One 5 GiB file | Practical large transfer |
