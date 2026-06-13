@@ -3,6 +3,7 @@ export type PageId = "home" | "devices" | "transfers" | "settings";
 export interface AppSnapshot {
   device_name: string;
   receive_dir: string;
+  receive_port: number;
   receive_policy: string;
   discovery_enabled: boolean;
   tray_enabled: boolean;

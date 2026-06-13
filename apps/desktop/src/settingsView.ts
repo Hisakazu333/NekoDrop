@@ -11,6 +11,7 @@ export interface SettingsViewModel {
   discoveryLabel: string;
   trayLabel: string;
   canSaveReceiveDir: boolean;
+  canSaveReceivePort: boolean;
   receiveConfigLocked: boolean;
   receiveDir: string;
   receivePolicyLabel: string;
@@ -38,6 +39,7 @@ export function buildSettingsViewModel({
   const nextDeviceName = deviceNameInput?.trim() ?? deviceName;
   const savedReceiveDir = snapshot?.receive_dir?.trim() ?? "";
   const nextReceiveDir = receiveDir.trim();
+  const nextReceivePort = parseReceivePortValue(bindPort);
   const receiveConfigLocked = Boolean(receiveSession);
 
   return {
@@ -50,6 +52,7 @@ export function buildSettingsViewModel({
     discoveryLabel: discoveryRuntimeLabel(discoveryStatus ?? null),
     trayLabel: "基础窗口菜单",
     canSaveReceiveDir: Boolean(snapshot) && !receiveConfigLocked && nextReceiveDir.length > 0 && nextReceiveDir !== savedReceiveDir,
+    canSaveReceivePort: Boolean(snapshot) && !receiveConfigLocked && nextReceivePort !== null && nextReceivePort !== snapshot?.receive_port,
     receiveConfigLocked,
     receiveDir,
     receivePolicyLabel: receivePolicyDisplayLabel(receivePolicy),
@@ -68,4 +71,12 @@ export function discoveryRuntimeLabel(status: DiscoveryStatusDto | null) {
   if (status.advertised) return "已广播";
   if (status.phase === "active") return "扫描中";
   return "未广播";
+}
+
+export function parseReceivePortValue(value: string) {
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) return null;
+  const port = Number(trimmed);
+  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
+  return port;
 }

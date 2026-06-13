@@ -51,6 +51,7 @@ const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
 pub struct AppSnapshot {
     pub device_name: String,
     pub receive_dir: String,
+    pub receive_port: u16,
     pub receive_policy: String,
     pub discovery_enabled: bool,
     pub tray_enabled: bool,
@@ -275,6 +276,7 @@ pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, Strin
     Ok(AppSnapshot {
         device_name: config.device_name.clone(),
         receive_dir: config.receive_dir.clone(),
+        receive_port: config.receive_port,
         receive_policy: receive_policy_label(config.receive_policy).to_string(),
         discovery_enabled: config.discovery_enabled,
         tray_enabled: config.tray_enabled,
@@ -1073,6 +1075,11 @@ pub fn set_receive_dir(state: State<'_, AppState>, receive_dir: String) -> Resul
 }
 
 #[tauri::command]
+pub fn set_receive_port(state: State<'_, AppState>, receive_port: u16) -> Result<(), String> {
+    persist_receive_port(&state, receive_port)
+}
+
+#[tauri::command]
 pub fn set_receive_policy(
     state: State<'_, AppState>,
     receive_policy: String,
@@ -1106,7 +1113,14 @@ pub fn start_receive_once(
     let bind_host = bind_host
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(|| "0.0.0.0".to_string());
-    let port = port.unwrap_or(45821);
+    let port = match port {
+        Some(port) => port,
+        None => state
+            .config
+            .lock()
+            .map(|config| config.receive_port)
+            .unwrap_or(45821),
+    };
     if port == 0 {
         return Err("端口不能为 0".into());
     }
@@ -2372,6 +2386,23 @@ fn persist_receive_policy(state: &AppState, receive_policy: ReceivePolicy) -> Re
 
     let mut next_config = config.clone();
     next_config.receive_policy = receive_policy;
+    save_app_config(&next_config)?;
+    *config = next_config;
+    Ok(())
+}
+
+fn persist_receive_port(state: &AppState, receive_port: u16) -> Result<(), String> {
+    if receive_port == 0 {
+        return Err("端口必须是 1-65535".to_string());
+    }
+
+    let mut config = state.config.lock().map_err(|error| error.to_string())?;
+    if config.receive_port == receive_port {
+        return Ok(());
+    }
+
+    let mut next_config = config.clone();
+    next_config.receive_port = receive_port;
     save_app_config(&next_config)?;
     *config = next_config;
     Ok(())

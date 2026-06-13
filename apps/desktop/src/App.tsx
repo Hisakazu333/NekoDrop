@@ -27,7 +27,7 @@ import {
   transferFallbackActionLabel,
   transferPrimaryActionLabel
 } from "./transferHistoryDetails";
-import { buildSettingsViewModel } from "./settingsView";
+import { buildSettingsViewModel, parseReceivePortValue } from "./settingsView";
 import {
   buildTransferProgressViewModel,
   formatBytes
@@ -167,7 +167,11 @@ export function App() {
   useEffect(() => {
     if (!snapshot || receiveSession || autoReceiveStarted.current) return;
     autoReceiveStarted.current = true;
-    startReceive({ receiveDirOverride: snapshot.receive_dir, silent: true }).catch((nextError) =>
+    startReceive({
+      receiveDirOverride: snapshot.receive_dir,
+      receivePortOverride: snapshot.receive_port,
+      silent: true
+    }).catch((nextError) =>
       setError(errorMessage(nextError))
     );
   }, [snapshot, receiveSession]);
@@ -281,6 +285,7 @@ export function App() {
     setSnapshot(nextSnapshot);
     setDeviceNameInput(nextSnapshot.device_name);
     setReceiveDir(nextSnapshot.receive_dir);
+    setBindPort(String(nextSnapshot.receive_port));
     setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
 
@@ -403,6 +408,26 @@ export function App() {
     }
   }
 
+  async function saveReceivePort() {
+    if (receiveSession) return;
+    const nextReceivePort = parseReceivePortValue(bindPort);
+    if (nextReceivePort === null || nextReceivePort === snapshot?.receive_port) return;
+    setBusy("pick-receive");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_receive_port", { receivePort: nextReceivePort });
+      setBindPort(String(nextReceivePort));
+      setSnapshot((current) =>
+        current ? { ...current, receive_port: nextReceivePort } : current
+      );
+      setToast("默认端口已保存");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function updateReceivePolicy(nextPolicy: ReceivePolicyMode) {
     if (nextPolicy === receivePolicy) return;
     setBusy("receive-policy");
@@ -482,9 +507,9 @@ export function App() {
     }
   }
 
-  async function startReceive(options: { receiveDirOverride?: string; silent?: boolean } = {}) {
+  async function startReceive(options: { receiveDirOverride?: string; receivePortOverride?: number; silent?: boolean } = {}) {
     const silent = options.silent ?? false;
-    const requestedPort = parseReceivePort(bindPort);
+    const requestedPort = options.receivePortOverride ?? parseReceivePortValue(bindPort);
     if (requestedPort === null) {
       setError("端口必须是 1-65535");
       return;
@@ -1285,6 +1310,7 @@ export function App() {
                   onChooseReceiveDir={chooseReceiveDir}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onSaveReceiveDir={saveReceiveDir}
+                  onSaveReceivePort={saveReceivePort}
                   onSaveDeviceName={saveDeviceName}
                   onStartReceive={startReceive}
                   onStopReceive={stopReceive}
@@ -1959,6 +1985,7 @@ function SettingsPanel({
   onOpenReceiveDir,
   onSaveDeviceName,
   onSaveReceiveDir,
+  onSaveReceivePort,
   onStartReceive,
   onStopReceive,
   onUpdateReceivePolicy
@@ -1978,6 +2005,7 @@ function SettingsPanel({
   onOpenReceiveDir: () => void;
   onSaveDeviceName: () => void;
   onSaveReceiveDir: () => void;
+  onSaveReceivePort: () => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
   onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
@@ -2047,7 +2075,12 @@ function SettingsPanel({
         </label>
         <label className="port-field">
           端口
-          <input disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+          <div className="input-action receive-port-action">
+            <input disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
+              保存
+            </button>
+          </div>
         </label>
       </div>
 
@@ -2641,17 +2674,9 @@ function normalizeReceivePolicy(value: string): ReceivePolicyMode {
   return "always_ask";
 }
 
-function parseReceivePort(value: string): number | null {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  const port = Number(trimmed);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  return port;
-}
-
 function portFromBindAddr(bindAddr: string): number | null {
   const port = bindAddr.trim().split(":").pop();
-  return port ? parseReceivePort(port) : null;
+  return port ? parseReceivePortValue(port) : null;
 }
 
 function pendingOfferFilePreview(files: PendingReceiveOfferDto["files"]) {

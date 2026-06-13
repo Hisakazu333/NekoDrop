@@ -19,6 +19,7 @@ type CommandName =
   | "select_send_folders"
   | "select_receive_dir"
   | "set_receive_dir"
+  | "set_receive_port"
   | "set_receive_policy"
   | "set_device_name"
   | "open_path"

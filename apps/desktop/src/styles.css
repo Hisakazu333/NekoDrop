@@ -1535,7 +1535,7 @@ button:disabled {
 
 .control-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px;
+  grid-template-columns: minmax(0, 1fr) 160px;
   gap: 12px;
 }
 
@@ -1580,6 +1580,10 @@ input::placeholder {
 
 .receive-dir-action {
   grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.receive-port-action {
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 
 .port-field input {

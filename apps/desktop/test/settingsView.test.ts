@@ -12,6 +12,7 @@ function snapshot(overrides: Partial<AppSnapshot> = {}): AppSnapshot {
   return {
     device_name: "MacBook",
     receive_dir: "/Users/hisakazu/Downloads/NekoDrop",
+    receive_port: 45821,
     receive_policy: "always_ask",
     discovery_enabled: true,
     tray_enabled: true,
@@ -78,6 +79,7 @@ test("builds a restrained settings view model from real app state", () => {
     discoveryLabel: "已广播",
     trayLabel: "基础窗口菜单",
     canSaveReceiveDir: false,
+    canSaveReceivePort: false,
     receiveConfigLocked: true,
     receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
     receivePolicyLabel: "接收前询问",
@@ -104,6 +106,7 @@ test("keeps settings usable before the first snapshot arrives", () => {
   assert.equal(model.discoveryLabel, "未知");
   assert.equal(model.trayLabel, "基础窗口菜单");
   assert.equal(model.canSaveReceiveDir, false);
+  assert.equal(model.canSaveReceivePort, false);
   assert.equal(model.receiveConfigLocked, false);
   assert.equal(model.receivePolicyLabel, "阻止外部接收");
 });
@@ -200,4 +203,38 @@ test("locks receive directory edits while the receiver is running", () => {
     receivePolicy: "always_ask",
     bindPort: "45821"
   }).receiveConfigLocked, true);
+});
+
+test("only enables saving receive port when stopped and the port changed", () => {
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45999"
+  }).canSaveReceivePort, true);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45821"
+  }).canSaveReceivePort, false);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: null,
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "0"
+  }).canSaveReceivePort, false);
+
+  assert.equal(buildSettingsViewModel({
+    snapshot: snapshot(),
+    receiveSession: receiveSession(),
+    receiveDir: "/Users/hisakazu/Downloads/NekoDrop",
+    receivePolicy: "always_ask",
+    bindPort: "45999"
+  }).canSaveReceivePort, false);
 });

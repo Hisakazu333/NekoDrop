@@ -34,6 +34,7 @@ pub fn run() {
             commands::select_send_folders,
             commands::select_receive_dir,
             commands::set_receive_dir,
+            commands::set_receive_port,
             commands::set_receive_policy,
             commands::set_device_name,
             commands::open_path,
