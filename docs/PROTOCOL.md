@@ -194,7 +194,7 @@ Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305`
 
 ### session.ready
 
-Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator verifies that `handshake_hash` is `sha256:<64 hex chars>` and matches the original hello before deriving future session keys.
+Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator verifies that `handshake_hash` is `sha256:<64 hex chars>` and matches the original hello before deriving session key material.
 
 ```json
 {
@@ -213,6 +213,24 @@ Encrypted-session response payload. The responder selects a cipher offered by `s
   "handshake_hash": "sha256:hex"
 }
 ```
+
+### Session Key Material
+
+After `session.ready` is verified, the protocol crate can build a key derivation context from the transcript. This is still groundwork: current desktop transfers do not yet use these keys to encrypt control frames or file bytes.
+
+Current derivation inputs:
+
+```text
+key agreement: x25519
+shared secret length: 32 bytes
+traffic key length: 32 bytes
+KDF: HKDF-SHA256
+salt: handshake_hash decoded from sha256:<64 hex chars>
+send info: nekolink/<session_id>/<key_agreement>/<cipher>/<local_device_id>-><peer_device_id>
+receive info: nekolink/<session_id>/<key_agreement>/<cipher>/<peer_device_id>-><local_device_id>
+```
+
+The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` currently returns a send key and receive key; nonce derivation, frame counters, AEAD sealing, and encrypted file-stream integration are not implemented yet.
 
 ## Pairing Messages
 
