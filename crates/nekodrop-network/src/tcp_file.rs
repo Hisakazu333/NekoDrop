@@ -54,6 +54,7 @@ pub struct OutgoingFileFrame {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IncomingControlFrame {
     DeviceHello(DeviceHello),
+    SessionHello(SessionHelloPayload),
     FileOffer(TransferOffer),
     PairingRequest(PairingRequestPayload),
 }
@@ -590,6 +591,13 @@ pub fn read_incoming_control_frame(stream: &mut impl Read) -> NekoDropResult<Inc
             hello.validate().map_err(protocol_error_to_network)?;
             Ok(IncomingControlFrame::DeviceHello(hello))
         }
+        MessageKind::SessionHello => {
+            let hello = serde_json::from_value::<SessionHelloPayload>(envelope.payload).map_err(
+                |error| NekoDropError::Network(format!("failed to decode session hello: {error}")),
+            )?;
+            hello.validate().map_err(protocol_error_to_network)?;
+            Ok(IncomingControlFrame::SessionHello(hello))
+        }
         MessageKind::FileOffer => {
             let offer =
                 serde_json::from_value::<TransferOffer>(envelope.payload).map_err(|error| {
@@ -1107,6 +1115,33 @@ mod tests {
 
         assert_eq!(received_hello, hello);
         assert_eq!(received_ready, ready);
+    }
+
+    #[test]
+    fn incoming_control_frame_can_read_session_hello_first_frame() {
+        let identity = DeviceIdentity::new(
+            "neko-device-local",
+            "Local Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:local",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto(
+            "session-1",
+            identity,
+            "base64-local-ephemeral-public-key",
+        );
+        let mut buffer = Vec::new();
+
+        write_session_hello(&mut buffer, &hello).unwrap();
+        let received = read_incoming_control_frame(&mut Cursor::new(buffer)).unwrap();
+
+        assert_eq!(received, IncomingControlFrame::SessionHello(hello));
     }
 
     #[test]
