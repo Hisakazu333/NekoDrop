@@ -22,37 +22,30 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 这个阶段的目标不是继续堆 UI，而是把 NekoLink 的安全会话和后续上层数据传输能力接稳。
 
-## 下一阶段：Encrypted Session Desktop Wiring
+## 已完成：Encrypted Session Desktop Wiring
 
 目标：让桌面真实传输主线开始使用 NekoLink 加密控制消息。
 
-范围：
+已经接入：
 
 - 保持当前 TCP 文件传输主线可用。
 - 在发送端建立 `session.hello`。
 - 在接收端返回并校验 `session.ready`。
 - 基于 X25519 shared secret 和 HKDF 派生 session key material。
 - 让 `file.offer`、`file.accept`、`file.decline` 走 encrypted `session.control`。
-- 保留旧明文控制消息的兼容或明确迁移路径。
-- 增加端到端测试，证明加密控制帧能完成 offer / accept / decline 往返。
 
-不在这一阶段做：
+仍未完成：
 
 - 文件 payload 加密
+- replay window
+- 长期身份密钥认证
 - iroh runtime
 - relay server
 - Agent command
 - skills/session bundle
 - 手机端互通
 
-完成标准：
-
-- Mac / Windows 桌面主线仍可传文件。
-- 接收端仍能在文件 payload 前拒绝传输。
-- 加密控制消息有 replay / counter 的下一步接入位置。
-- 明文 offer 不再是可信设备主路径的唯一选择。
-
-## 随后：Encrypted File Stream
+## 下一阶段：Encrypted File Stream
 
 目标：把文件 payload 也放进 session 保护边界。
 

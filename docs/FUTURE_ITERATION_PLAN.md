@@ -17,6 +17,8 @@ OpenNeko  = 上层 AI 桌面伴侣 / Agent 运行时
 
 短期目标是把 Mac / Windows 文件互传做成真实可用的桌面软件。中期目标是把配对、加密、传输、状态事件抽象成稳定协议。长期目标是让 Mac、Windows、手机、平板、NAS、小主机和 OpenNeko Agent 都能进入同一个可信设备网络。
 
+当前更细的执行顺序看 [ROADMAP.md](ROADMAP.md) 和 [NEXT_PHASE_ANALYSIS.md](NEXT_PHASE_ANALYSIS.md)。这份文档保留长期方向，不作为当前分支的唯一排期。
+
 ## 2. 当前基线
 
 当前项目已经具备以下基础：
@@ -44,12 +46,15 @@ OpenNeko  = 上层 AI 桌面伴侣 / Agent 运行时
 - 网络/传输错误提示和目标地址预检
 - 传输历史持久化
 - NekoLink transport 抽象和 TCP 实现
+- encrypted `session.control` 桌面主线
 - macOS DMG 打包脚本
 - Win11 NSIS / MSI 打包脚本
 
 当前还不能假装已经完成的能力：
 
-- 加密会话
+- 加密文件 payload
+- replay window
+- 长期身份密钥认证
 - 断点续传完整产品流程
 - 手机端互通
 - iroh runtime
@@ -220,6 +225,8 @@ crates/
 - iroh / Relay 技术验证失败时，不影响现有局域网互传。
 
 ### V0.8 Encrypted Session
+
+状态：控制消息已经走 encrypted `session.control`，文件 payload、replay protection 和长期身份密钥认证还没完成。
 
 目标：把文件互传从明文 TCP 升级为可信加密会话。
 
@@ -702,19 +709,15 @@ logs/
 最推荐的下一步顺序：
 
 ```text
-1. V0.6 Desktop Transfer Polish
-2. V0.7 NekoLink Transport Abstraction
-3. V0.8 Encrypted Session
-4. V0.9 Transfer Reliability
-5. V0.10 Desktop Productization
-6. V1.0 Mac / Windows Stable
-7. V1.1 Mobile Companion
-8. V1.2 iroh / Relay / P2P
-9. V1.4 NekoState
-10. V1.5 OpenNeko Agent Integration
+1. Encrypted File Stream
+2. NekoLink Bundle
+3. CCS / OpenNeko Local Bridge
+4. iroh / Relay / P2P
+5. NekoState
+6. OpenNeko Agent Integration
 ```
 
-当前最不应该跳过的是加密会话和传输可靠性。设备身份和可信配对已经有基础，但还不能替代真正的加密 session；没有这层，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
+当前最不应该跳过的是加密文件流和 bundle。设备身份、可信配对和 encrypted control 已经有基础，但文件 payload 还没进 session 保护边界；没有这层，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
 
 ## 12. 一句话总结
 

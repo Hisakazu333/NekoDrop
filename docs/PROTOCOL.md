@@ -149,7 +149,7 @@ companion.state
 state.sync
 ```
 
-NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `file.offer`, `file.accept`, and `file.decline`. `session.hello`, `session.ready`, and `session.control` are implemented at the protocol level for encrypted-session groundwork, but the desktop transfer path does not yet encrypt control messages or file bytes with them.
+NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `session.hello`, `session.ready`, and `session.control`. Desktop file transfer now sends `file.offer`, `file.accept`, and `file.decline` inside encrypted `session.control` envelopes. File payload bytes still use the existing plaintext TCP stream.
 
 ### DEVICE_HELLO
 
@@ -172,7 +172,7 @@ Reserved NekoLink identity handshake payload:
 
 ### session.hello
 
-Encrypted-session offer payload. This is protocol groundwork only; current desktop transfers do not yet switch into encrypted file streams.
+Encrypted-session offer payload. Current desktop transfers use this handshake for encrypted control messages. File streams still use the existing plaintext TCP payload path.
 
 Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305` preferred over `aes256gcm` when both peers support them. Unknown key-agreement and cipher labels are rejected by protocol validation.
 
@@ -217,7 +217,7 @@ Encrypted-session response payload. The responder selects a cipher offered by `s
 
 ### Session Key Material
 
-After `session.ready` is verified, the protocol crate can build a key derivation context from the transcript. This is still groundwork: current desktop transfers do not yet use these keys to encrypt control frames or file bytes.
+After `session.ready` is verified, the protocol crate can build a key derivation context from the transcript. Desktop transfers use these keys for encrypted control frames. File bytes do not use them yet.
 
 Current derivation inputs:
 
@@ -238,7 +238,7 @@ The same verified handshake produces mirrored directions on both peers: one side
 
 ### Session Traffic Frames
 
-The protocol crate defines traffic-frame counters and nonce inputs for future encrypted control/file frames. This is not wired into desktop transfers yet.
+The protocol crate defines traffic-frame counters and nonce inputs for encrypted control frames and future encrypted file frames. Desktop transfers use this for control frames. Replay-window enforcement still needs a follow-up implementation.
 
 ```text
 frame kinds: control, file
@@ -260,7 +260,7 @@ aes256gcm: 32-byte traffic key, 12-byte nonce
 associated data: caller-provided session/frame context bytes
 ```
 
-Tampered ciphertext or mismatched associated data fails to open. This API is still not wired into the desktop TCP transfer path; encrypted control-frame envelopes, replay-window handling, and encrypted file streaming remain future work.
+Tampered ciphertext or mismatched associated data fails to open. The desktop TCP path uses this API for transfer control messages. Replay-window handling and encrypted file streaming remain future work.
 
 ### session.control
 
@@ -282,7 +282,7 @@ Encrypted control envelope. The outer message kind is `session.control`; the enc
 
 Associated data binds protocol name, version, session_id, message_id, outer kind, and inner kind. Moving the ciphertext to another envelope or changing the inner kind makes opening fail.
 
-`nekodrop-network` exposes helper functions to write/read this encrypted `session.control` envelope over the existing length-prefixed TCP JSON frame format. It also has typed helpers for encrypted `file.offer`, `file.accept`, and `file.decline` control messages, including inner-kind checks on read. Those helpers only prepare the network boundary; the desktop send/receive workflow still uses plaintext `file.offer` / `file.accept` / `file.decline` until the encrypted-control path is wired into the application layer.
+`nekodrop-network` exposes helper functions to write/read this encrypted `session.control` envelope over the existing length-prefixed TCP JSON frame format. It also has typed helpers for encrypted `file.offer`, `file.accept`, and `file.decline` control messages, including inner-kind checks on read. The desktop send/receive workflow uses this encrypted-control path before file bytes start.
 
 ## Pairing Messages
 
