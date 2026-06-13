@@ -870,8 +870,8 @@ mod tests {
 
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
     use nekolink_protocol::{
-        Capability, DeviceIdentity, DeviceKind, PlatformKind, SessionHelloPayload,
-        SessionReadyPayload,
+        default_session_cipher_preference, Capability, DeviceIdentity, DeviceKind, PlatformKind,
+        SessionHelloPayload, SessionReadyPayload, SESSION_KEY_AGREEMENT_X25519,
     };
 
     use super::*;
@@ -931,15 +931,15 @@ mod tests {
         let hello = SessionHelloPayload::new(
             "session-1",
             local_identity,
-            "x25519",
+            SESSION_KEY_AGREEMENT_X25519,
             "base64-local-ephemeral-public-key",
-            vec!["xchacha20poly1305".to_string()],
+            default_session_cipher_preference(),
         );
-        let ready = SessionReadyPayload::for_hello(
+        let ready = SessionReadyPayload::for_hello_with_cipher_preference(
             &hello,
             peer_identity,
             "base64-peer-ephemeral-public-key",
-            "xchacha20poly1305",
+            &default_session_cipher_preference(),
         )
         .unwrap();
 
@@ -991,15 +991,15 @@ mod tests {
         let hello = SessionHelloPayload::new(
             "session-1",
             local_identity,
-            "x25519",
+            SESSION_KEY_AGREEMENT_X25519,
             "base64-local-ephemeral-public-key",
-            vec!["xchacha20poly1305".to_string()],
+            default_session_cipher_preference(),
         );
-        let mut ready = SessionReadyPayload::for_hello(
+        let mut ready = SessionReadyPayload::for_hello_with_cipher_preference(
             &hello,
             peer_identity,
             "base64-peer-ephemeral-public-key",
-            "xchacha20poly1305",
+            &default_session_cipher_preference(),
         )
         .unwrap();
         ready.handshake_hash = "sha256:tampered".to_string();
