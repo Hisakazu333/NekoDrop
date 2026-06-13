@@ -231,7 +231,7 @@ send info: nekolink/<session_id>/<key_agreement>/<cipher>/<local_device_id>-><pe
 receive info: nekolink/<session_id>/<key_agreement>/<cipher>/<peer_device_id>-><local_device_id>
 ```
 
-The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` currently returns a send key and receive key; nonce derivation, frame counters, AEAD sealing, and encrypted file-stream integration are not implemented yet.
+The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` currently returns a send key and receive key; encrypted file-stream integration is not implemented yet.
 
 `SessionEphemeralKeyPair` can generate an X25519 ephemeral secret, expose the encoded public key for `session.hello` / `session.ready`, and derive the same 32-byte shared secret from the peer public key on both sides. The secret is not printed by the keypair Debug implementation.
 
@@ -247,7 +247,19 @@ nonce length: 24 bytes for xchacha20poly1305, 12 bytes for aes256gcm
 nonce layout today: reserved zero bytes followed by u64 counter in big-endian
 ```
 
-Send and receive counters are independent local state, but the nonce for a network frame is based on the frame counter and negotiated cipher, not the local send/receive label. The direction is carried in the header for bookkeeping; traffic keys already separate send from receive. Counter exhaustion is rejected before producing another frame header. AEAD sealing/opening and replay-window handling are still future work.
+Send and receive counters are independent local state, but the nonce for a network frame is based on the frame counter and negotiated cipher, not the local send/receive label. The direction is carried in the header for bookkeeping; traffic keys already separate send from receive. Counter exhaustion is rejected before producing another frame header.
+
+### Session Payload AEAD
+
+The protocol crate can seal and open in-memory payloads with the negotiated AEAD:
+
+```text
+xchacha20poly1305: 32-byte traffic key, 24-byte nonce
+aes256gcm: 32-byte traffic key, 12-byte nonce
+associated data: caller-provided session/frame context bytes
+```
+
+Tampered ciphertext or mismatched associated data fails to open. This API is still not wired into the desktop TCP transfer path; encrypted control-frame envelopes, replay-window handling, and encrypted file streaming remain future work.
 
 ## Pairing Messages
 
