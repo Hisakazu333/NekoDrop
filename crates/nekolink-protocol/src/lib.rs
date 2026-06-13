@@ -489,6 +489,20 @@ impl SessionHelloPayload {
         }
     }
 
+    pub fn default_crypto(
+        session_id: impl Into<String>,
+        identity: DeviceIdentity,
+        ephemeral_public_key: impl Into<String>,
+    ) -> Self {
+        Self::new(
+            session_id,
+            identity,
+            SESSION_KEY_AGREEMENT_X25519,
+            ephemeral_public_key,
+            default_session_cipher_preference(),
+        )
+    }
+
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_session_id(&self.session_id)?;
         self.identity.validate()?;
@@ -1406,6 +1420,28 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("encrypted_session"));
+    }
+
+    #[test]
+    fn builds_session_hello_with_default_crypto_labels() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+
+        let hello = SessionHelloPayload::default_crypto("session-1", identity, "base64-local-key");
+
+        hello.validate().unwrap();
+        assert_eq!(hello.key_agreement, SESSION_KEY_AGREEMENT_X25519);
+        assert_eq!(hello.supported_ciphers, default_session_cipher_preference());
     }
 
     #[test]

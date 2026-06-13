@@ -871,7 +871,7 @@ mod tests {
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
     use nekolink_protocol::{
         default_session_cipher_preference, Capability, DeviceIdentity, DeviceKind, PlatformKind,
-        SessionHelloPayload, SessionReadyPayload, SESSION_KEY_AGREEMENT_X25519,
+        SessionHelloPayload, SessionReadyPayload,
     };
 
     use super::*;
@@ -928,12 +928,10 @@ mod tests {
                 Capability::EncryptedSession,
             ],
         );
-        let hello = SessionHelloPayload::new(
+        let hello = SessionHelloPayload::default_crypto(
             "session-1",
             local_identity,
-            SESSION_KEY_AGREEMENT_X25519,
             "base64-local-ephemeral-public-key",
-            default_session_cipher_preference(),
         );
         let ready = SessionReadyPayload::for_hello_with_cipher_preference(
             &hello,
@@ -988,12 +986,10 @@ mod tests {
                 Capability::EncryptedSession,
             ],
         );
-        let hello = SessionHelloPayload::new(
+        let hello = SessionHelloPayload::default_crypto(
             "session-1",
             local_identity,
-            SESSION_KEY_AGREEMENT_X25519,
             "base64-local-ephemeral-public-key",
-            default_session_cipher_preference(),
         );
         let mut ready = SessionReadyPayload::for_hello_with_cipher_preference(
             &hello,
