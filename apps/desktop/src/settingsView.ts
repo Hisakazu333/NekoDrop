@@ -1,14 +1,31 @@
 import { platformLabel } from "./deviceDisplay.ts";
-import type { AppSnapshot, DiscoveryStatusDto, ReceiveSessionDto } from "./types.ts";
+import type {
+  AppSnapshot,
+  DiscoveryStatusDto,
+  ReceivePortDiagnosticsDto,
+  ReceiveSessionDto
+} from "./types.ts";
 
 export interface SettingsViewModel {
   deviceName: string;
   canSaveDeviceName: boolean;
   platformLabel: string;
+  deviceIdLabel: string | null;
+  deviceKindLabel: string | null;
   fingerprintLabel: string | null;
+  capabilitiesLabel: string | null;
   receiveStateLabel: string;
   receiveAddressLabel: string;
+  connectionCodeLabel: string | null;
+  defaultReceivePortLabel: string | null;
+  discoveryEnabledLabel: string;
   discoveryLabel: string;
+  discoveryDetailLabel: string | null;
+  lanIpLabel: string | null;
+  nearbyDeviceCountLabel: string | null;
+  serviceTypeLabel: string | null;
+  receiveDiagnosticsLabel: string | null;
+  lanIpsLabel: string | null;
   trayLabel: string;
   canSaveReceiveDir: boolean;
   canSaveReceivePort: boolean;
@@ -22,6 +39,7 @@ export function buildSettingsViewModel({
   snapshot,
   deviceNameInput,
   discoveryStatus,
+  receiveDiagnostics,
   receiveSession,
   receiveDir,
   receivePolicy,
@@ -30,6 +48,7 @@ export function buildSettingsViewModel({
   snapshot: AppSnapshot | null;
   deviceNameInput?: string;
   discoveryStatus?: DiscoveryStatusDto | null;
+  receiveDiagnostics?: ReceivePortDiagnosticsDto | null;
   receiveSession: ReceiveSessionDto | null;
   receiveDir: string;
   receivePolicy: string;
@@ -41,18 +60,44 @@ export function buildSettingsViewModel({
   const nextReceiveDir = receiveDir.trim();
   const nextReceivePort = parseReceivePortValue(bindPort);
   const receiveConfigLocked = Boolean(receiveSession);
+  const identity = snapshot?.device_identity;
 
   return {
     deviceName,
     canSaveDeviceName: nextDeviceName.length > 0 && nextDeviceName !== deviceName,
     platformLabel: snapshot ? platformLabel(snapshot.device_identity.platform) : "Unknown",
-    fingerprintLabel: snapshot?.device_identity.public_key_fingerprint ?? null,
+    deviceIdLabel: identity?.device_id ?? null,
+    deviceKindLabel: identity?.device_kind ?? null,
+    fingerprintLabel: identity?.public_key_fingerprint ?? null,
+    capabilitiesLabel: identity?.capabilities?.length
+      ? identity.capabilities.join(" · ")
+      : null,
     receiveStateLabel: receiveSession ? "收件开启" : "收件关闭",
-    receiveAddressLabel: receiveSession?.bind_addr ?? "未监听",
+    receiveAddressLabel: receiveSession?.bind_addr ?? receiveDiagnostics?.bind_addr ?? "未监听",
+    connectionCodeLabel: receiveSession?.connection_code ?? null,
+    defaultReceivePortLabel:
+      snapshot?.receive_port != null ? String(snapshot.receive_port) : null,
+    discoveryEnabledLabel: snapshot?.discovery_enabled ? "配置已启用" : "配置已关闭",
     discoveryLabel: discoveryRuntimeLabel(discoveryStatus ?? null),
-    trayLabel: "基础窗口菜单",
-    canSaveReceiveDir: Boolean(snapshot) && !receiveConfigLocked && nextReceiveDir.length > 0 && nextReceiveDir !== savedReceiveDir,
-    canSaveReceivePort: Boolean(snapshot) && !receiveConfigLocked && nextReceivePort !== null && nextReceivePort !== snapshot?.receive_port,
+    discoveryDetailLabel: discoveryStatus?.message ?? null,
+    lanIpLabel: discoveryStatus?.lan_ip ?? receiveDiagnostics?.advertised_host ?? null,
+    nearbyDeviceCountLabel:
+      discoveryStatus != null ? `${discoveryStatus.device_count} 台附近` : null,
+    serviceTypeLabel: discoveryStatus?.service_type ?? null,
+    receiveDiagnosticsLabel: receiveDiagnostics?.message ?? null,
+    lanIpsLabel:
+      receiveDiagnostics?.lan_ips?.length ? receiveDiagnostics.lan_ips.join(" · ") : null,
+    trayLabel: snapshot?.tray_enabled ? "窗口菜单已启用" : "仅窗口标题",
+    canSaveReceiveDir:
+      Boolean(snapshot) &&
+      !receiveConfigLocked &&
+      nextReceiveDir.length > 0 &&
+      nextReceiveDir !== savedReceiveDir,
+    canSaveReceivePort:
+      Boolean(snapshot) &&
+      !receiveConfigLocked &&
+      nextReceivePort !== null &&
+      nextReceivePort !== snapshot?.receive_port,
     receiveConfigLocked,
     receiveDir,
     receivePolicyLabel: receivePolicyDisplayLabel(receivePolicy),
