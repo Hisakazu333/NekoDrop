@@ -6,6 +6,9 @@ use sha2::{Digest, Sha256};
 
 pub const PROTOCOL_NAME: &str = "nekolink";
 pub const PROTOCOL_VERSION: u16 = 1;
+pub const SESSION_KEY_AGREEMENT_X25519: &str = "x25519";
+pub const SESSION_CIPHER_XCHACHA20POLY1305: &str = "xchacha20poly1305";
+pub const SESSION_CIPHER_AES256GCM: &str = "aes256gcm";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T = Value> {
@@ -565,6 +568,16 @@ impl SessionReadyPayload {
         Ok(ready)
     }
 
+    pub fn for_hello_with_cipher_preference(
+        hello: &SessionHelloPayload,
+        identity: DeviceIdentity,
+        ephemeral_public_key: impl Into<String>,
+        local_cipher_preference: &[String],
+    ) -> Result<Self, ProtocolError> {
+        let cipher = select_session_cipher(local_cipher_preference, &hello.supported_ciphers)?;
+        Self::for_hello(hello, identity, ephemeral_public_key, cipher)
+    }
+
     pub fn verify_for_hello(&self, hello: &SessionHelloPayload) -> Result<(), ProtocolError> {
         let expected_hash = session_handshake_hash(hello, self)?;
         if self.handshake_hash != expected_hash {
@@ -575,6 +588,13 @@ impl SessionReadyPayload {
         }
         Ok(())
     }
+}
+
+pub fn default_session_cipher_preference() -> Vec<String> {
+    vec![
+        SESSION_CIPHER_XCHACHA20POLY1305.to_string(),
+        SESSION_CIPHER_AES256GCM.to_string(),
+    ]
 }
 
 pub fn shared_capabilities(left: &[Capability], right: &[Capability]) -> Vec<Capability> {
@@ -1453,6 +1473,53 @@ mod tests {
         assert_eq!(ready.key_agreement, "x25519");
         assert_eq!(ready.cipher, "xchacha20poly1305");
         assert_eq!(ready.handshake_hash, expected_hash);
+    }
+
+    #[test]
+    fn builds_session_ready_with_local_cipher_preference() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            SESSION_KEY_AGREEMENT_X25519,
+            "base64-local-key",
+            vec![SESSION_CIPHER_AES256GCM.to_string()],
+        );
+
+        let ready = SessionReadyPayload::for_hello_with_cipher_preference(
+            &hello,
+            peer,
+            "base64-peer-key",
+            &default_session_cipher_preference(),
+        )
+        .unwrap();
+
+        assert_eq!(ready.key_agreement, SESSION_KEY_AGREEMENT_X25519);
+        assert_eq!(ready.cipher, SESSION_CIPHER_AES256GCM);
+        ready.verify_for_hello(&hello).unwrap();
     }
 
     #[test]
