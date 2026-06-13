@@ -5,8 +5,8 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
 pub use nekolink_protocol::{
-    DeviceHello, PairingDecisionPayload, PairingRequestPayload, TransferDecision, TransferOffer,
-    TransferOfferFile, TransferResumeFile,
+    DeviceHello, PairingDecisionPayload, PairingRequestPayload, SessionHelloPayload,
+    SessionReadyPayload, TransferDecision, TransferOffer, TransferOfferFile, TransferResumeFile,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
@@ -396,6 +396,56 @@ pub fn read_device_hello(stream: &mut impl Read) -> NekoDropResult<DeviceHello> 
     let hello = envelope.payload;
     hello.validate().map_err(protocol_error_to_network)?;
     Ok(hello)
+}
+
+pub fn write_session_hello(
+    stream: &mut impl Write,
+    hello: &SessionHelloPayload,
+) -> NekoDropResult<()> {
+    hello.validate().map_err(protocol_error_to_network)?;
+    let envelope = Envelope::new(
+        hello.session_id.clone(),
+        format!("{}:session-hello", hello.session_id),
+        MessageKind::SessionHello,
+        hello.clone(),
+    )
+    .with_capabilities([Capability::EncryptedSession]);
+    write_json_frame(stream, &envelope)
+}
+
+pub fn read_session_hello(stream: &mut impl Read) -> NekoDropResult<SessionHelloPayload> {
+    let envelope: Envelope<SessionHelloPayload> = read_json_frame(stream)?;
+    envelope
+        .validate_kind(MessageKind::SessionHello)
+        .map_err(protocol_error_to_network)?;
+    let hello = envelope.payload;
+    hello.validate().map_err(protocol_error_to_network)?;
+    Ok(hello)
+}
+
+pub fn write_session_ready(
+    stream: &mut impl Write,
+    ready: &SessionReadyPayload,
+) -> NekoDropResult<()> {
+    ready.validate().map_err(protocol_error_to_network)?;
+    let envelope = Envelope::new(
+        ready.session_id.clone(),
+        format!("{}:session-ready", ready.session_id),
+        MessageKind::SessionReady,
+        ready.clone(),
+    )
+    .with_capabilities([Capability::EncryptedSession]);
+    write_json_frame(stream, &envelope)
+}
+
+pub fn read_session_ready(stream: &mut impl Read) -> NekoDropResult<SessionReadyPayload> {
+    let envelope: Envelope<SessionReadyPayload> = read_json_frame(stream)?;
+    envelope
+        .validate_kind(MessageKind::SessionReady)
+        .map_err(protocol_error_to_network)?;
+    let ready = envelope.payload;
+    ready.validate().map_err(protocol_error_to_network)?;
+    Ok(ready)
 }
 
 pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
@@ -808,7 +858,10 @@ mod tests {
     use std::thread;
 
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
-    use nekolink_protocol::{Capability, DeviceIdentity, DeviceKind, PlatformKind};
+    use nekolink_protocol::{
+        Capability, DeviceIdentity, DeviceKind, PlatformKind, SessionHelloPayload,
+        SessionReadyPayload,
+    };
 
     use super::*;
 
@@ -836,6 +889,67 @@ mod tests {
         let received = read_device_hello(&mut Cursor::new(buffer)).unwrap();
 
         assert_eq!(received, hello);
+    }
+
+    #[test]
+    fn session_handshake_round_trips_through_nekolink_envelopes() {
+        let local_identity = DeviceIdentity::new(
+            "neko-device-local",
+            "Local Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:local",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer_identity = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            local_identity,
+            "x25519",
+            "base64-local-ephemeral-public-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+        let ready = SessionReadyPayload::new(
+            "session-1",
+            peer_identity,
+            "x25519",
+            "base64-peer-ephemeral-public-key",
+            "xchacha20poly1305",
+            "sha256:handshake-transcript",
+        );
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let ready_for_receiver = ready.clone();
+        let receiver = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let received = read_session_hello(&mut stream).unwrap();
+            write_session_ready(&mut stream, &ready_for_receiver).unwrap();
+            received
+        });
+
+        let mut stream = TcpStream::connect(address).unwrap();
+        write_session_hello(&mut stream, &hello).unwrap();
+        let received_ready = read_session_ready(&mut stream).unwrap();
+        let received_hello = receiver.join().unwrap();
+
+        assert_eq!(received_hello, hello);
+        assert_eq!(received_ready, ready);
     }
 
     #[test]
