@@ -554,6 +554,35 @@ pub fn shared_capabilities(left: &[Capability], right: &[Capability]) -> Vec<Cap
         .collect()
 }
 
+pub fn select_session_cipher(
+    local_preference: &[String],
+    peer_supported: &[String],
+) -> Result<String, ProtocolError> {
+    if local_preference.is_empty() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "local session cipher list cannot be empty",
+        ));
+    }
+    if peer_supported.is_empty() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "peer session cipher list cannot be empty",
+        ));
+    }
+
+    local_preference
+        .iter()
+        .find(|cipher| peer_supported.contains(*cipher))
+        .cloned()
+        .ok_or_else(|| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "no mutually supported session cipher",
+            )
+        })
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
@@ -1177,6 +1206,31 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("encrypted_session"));
+    }
+
+    #[test]
+    fn selects_first_mutual_session_cipher_by_local_preference() {
+        let selected = select_session_cipher(
+            &["xchacha20poly1305".to_string(), "aes256gcm".to_string()],
+            &["aes256gcm".to_string(), "xchacha20poly1305".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(selected, "xchacha20poly1305");
+    }
+
+    #[test]
+    fn rejects_session_cipher_negotiation_without_overlap() {
+        let error = select_session_cipher(
+            &["xchacha20poly1305".to_string()],
+            &["aes256gcm".to_string()],
+        )
+        .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error
+            .message
+            .contains("no mutually supported session cipher"));
     }
 
     #[test]
