@@ -15,6 +15,7 @@ pub const SESSION_CIPHER_AES256GCM: &str = "aes256gcm";
 pub const SESSION_SHARED_SECRET_LEN: usize = 32;
 pub const SESSION_TRAFFIC_KEY_LEN: usize = 32;
 pub const SESSION_PUBLIC_KEY_BASE64_LEN: usize = 43;
+pub const SESSION_NONCE_LEN: usize = 12;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T = Value> {
@@ -566,6 +567,78 @@ pub struct SessionKeyDerivationContext {
 pub struct SessionKeyMaterial {
     pub send_key: [u8; SESSION_TRAFFIC_KEY_LEN],
     pub receive_key: [u8; SESSION_TRAFFIC_KEY_LEN],
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionFrameKind {
+    Control,
+    File,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionFrameDirection {
+    Send,
+    Receive,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionTrafficFrameHeader {
+    pub kind: SessionFrameKind,
+    pub direction: SessionFrameDirection,
+    pub counter: u64,
+    pub nonce: [u8; SESSION_NONCE_LEN],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct SessionTrafficCounters {
+    send_counter: u64,
+    receive_counter: u64,
+}
+
+impl SessionTrafficCounters {
+    pub fn new(send_counter: u64, receive_counter: u64) -> Self {
+        Self {
+            send_counter,
+            receive_counter,
+        }
+    }
+
+    pub fn next_send_header(
+        &mut self,
+        kind: SessionFrameKind,
+    ) -> Result<SessionTrafficFrameHeader, ProtocolError> {
+        let counter = next_session_counter(&mut self.send_counter)?;
+        Ok(SessionTrafficFrameHeader::new(
+            kind,
+            SessionFrameDirection::Send,
+            counter,
+        ))
+    }
+
+    pub fn next_receive_header(
+        &mut self,
+        kind: SessionFrameKind,
+    ) -> Result<SessionTrafficFrameHeader, ProtocolError> {
+        let counter = next_session_counter(&mut self.receive_counter)?;
+        Ok(SessionTrafficFrameHeader::new(
+            kind,
+            SessionFrameDirection::Receive,
+            counter,
+        ))
+    }
+}
+
+impl SessionTrafficFrameHeader {
+    pub fn new(kind: SessionFrameKind, direction: SessionFrameDirection, counter: u64) -> Self {
+        Self {
+            kind,
+            direction,
+            counter,
+            nonce: session_frame_nonce(direction, counter),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -1299,6 +1372,28 @@ fn session_hash_bytes(name: &str, value: &str) -> Result<[u8; 32], ProtocolError
         )
     })?;
     Ok(bytes)
+}
+
+fn next_session_counter(counter: &mut u64) -> Result<u64, ProtocolError> {
+    if *counter == u64::MAX {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "session traffic counter exhausted",
+        ));
+    }
+    let current = *counter;
+    *counter += 1;
+    Ok(current)
+}
+
+fn session_frame_nonce(direction: SessionFrameDirection, counter: u64) -> [u8; SESSION_NONCE_LEN] {
+    let mut nonce = [0_u8; SESSION_NONCE_LEN];
+    nonce[0] = match direction {
+        SessionFrameDirection::Send => 1,
+        SessionFrameDirection::Receive => 2,
+    };
+    nonce[4..].copy_from_slice(&counter.to_be_bytes());
+    nonce
 }
 
 fn session_public_key_from_secret(secret: [u8; SESSION_SHARED_SECRET_LEN]) -> String {
@@ -2376,6 +2471,43 @@ mod tests {
         assert!(debug.contains("public_key"));
         assert!(!debug.contains("secret"));
         assert!(!debug.contains("[3, 3, 3"));
+    }
+
+    #[test]
+    fn allocates_directional_session_traffic_frame_headers() {
+        let mut counters = SessionTrafficCounters::default();
+
+        let first = counters
+            .next_send_header(SessionFrameKind::Control)
+            .unwrap();
+        let second = counters.next_send_header(SessionFrameKind::File).unwrap();
+        let receive = counters
+            .next_receive_header(SessionFrameKind::Control)
+            .unwrap();
+
+        assert_eq!(first.direction, SessionFrameDirection::Send);
+        assert_eq!(first.kind, SessionFrameKind::Control);
+        assert_eq!(first.counter, 0);
+        assert_eq!(first.nonce.len(), SESSION_NONCE_LEN);
+        assert_eq!(second.direction, SessionFrameDirection::Send);
+        assert_eq!(second.kind, SessionFrameKind::File);
+        assert_eq!(second.counter, 1);
+        assert_eq!(receive.direction, SessionFrameDirection::Receive);
+        assert_eq!(receive.counter, 0);
+        assert_ne!(first.nonce, second.nonce);
+        assert_ne!(first.nonce, receive.nonce);
+    }
+
+    #[test]
+    fn rejects_session_traffic_counter_overflow() {
+        let mut counters = SessionTrafficCounters::new(u64::MAX, 0);
+
+        let error = counters
+            .next_send_header(SessionFrameKind::Control)
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("counter exhausted"));
     }
 
     #[test]
