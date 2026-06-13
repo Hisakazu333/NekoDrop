@@ -1,24 +1,32 @@
 use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
-    connect_endpoint, read_incoming_control_frame, read_pairing_decision, read_transfer_decision,
-    read_transfer_offer, receive_file_frames_with_expected_count,
+    connect_endpoint, read_incoming_control_frame, read_pairing_decision,
+    read_session_transfer_decision, read_session_transfer_offer, read_transfer_decision,
+    read_verified_session_ready, receive_file_frames_with_expected_count,
     send_file_frames_with_resume_and_cancel, write_pairing_decision, write_pairing_request,
-    write_transfer_decision_for_transfer, write_transfer_offer, ConnectionTicket, Endpoint,
-    IncomingControlFrame, OutgoingFileFrame, PairingDecisionPayload, PairingRequestPayload,
-    SentFileFrame, TransferDecision, TransferOffer, TransferOfferFile, TransferProgress,
-    TransferResumeFile,
+    write_session_hello, write_session_ready, write_session_transfer_decision,
+    write_session_transfer_offer, write_transfer_decision_for_transfer, write_transfer_offer,
+    ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame, PairingDecisionPayload,
+    PairingRequestPayload, SentFileFrame, TransferDecision, TransferOffer, TransferOfferFile,
+    TransferProgress, TransferResumeFile,
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, check_receive_space, create_source_plan_from_paths,
     create_source_plan_from_paths_with_progress, write_received_file_with_resume_and_cancel,
     ReceivedFile, ResumeExpectedFile, ResumePlan,
 };
-use nekolink_protocol::DeviceIdentity;
+use nekolink_protocol::{
+    default_session_cipher_preference, Capability, DeviceIdentity, ProtocolError,
+    SessionEphemeralKeyPair, SessionFrameKind, SessionHelloPayload, SessionKeyMaterial,
+    SessionReadyPayload, SessionTrafficCounters, SessionTrafficFrameHeader,
+    VerifiedSessionHandshake,
+};
 
 pub use nekodrop_storage::{
     TransferPlanScanPhase, TransferPlanScanProgress, TransferSourceFile, TransferSourcePlan,
@@ -177,6 +185,62 @@ where
     Ok(TransferSendReport { plan, sent_files })
 }
 
+pub fn send_plan_with_encrypted_control_and_cancel<F, C>(
+    endpoint: &Endpoint,
+    plan: TransferSourcePlan,
+    sender_identity: &DeviceIdentity,
+    on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<TransferSendReport>
+where
+    F: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
+    let outgoing = outgoing_frames_from_plan(&plan);
+    let offer = offer_from_plan_with_sender_identity(&plan, Some(sender_identity));
+    let mut stream = connect_endpoint(endpoint)?;
+    let mut session = start_initiator_session(&mut stream, sender_identity, &offer.transfer_id)?;
+    let offer_message_id = session.next_message_id("offer");
+    let offer_header = session.next_send_control_header()?;
+    write_session_transfer_offer(
+        &mut stream,
+        session.session_id.clone(),
+        offer_message_id,
+        &session.keys,
+        offer_header,
+        &offer,
+    )?;
+    let mut on_progress = on_progress;
+    on_progress(TransferProgressEvent::AwaitingApproval {
+        root_name: plan.manifest.root_name.clone(),
+        file_count: plan.file_count(),
+        total_bytes: plan.total_bytes(),
+    });
+    let decision = read_session_transfer_decision(&mut stream, &session.keys)?;
+    if should_cancel() {
+        return Err(NekoDropError::Network("transfer cancelled".into()));
+    }
+    if !decision.accepted {
+        return Err(NekoDropError::Network(format!(
+            "receiver declined transfer: {}",
+            decision
+                .reason
+                .unwrap_or_else(|| "no reason provided".to_string())
+        )));
+    }
+
+    let sent_files = send_file_frames_with_resume_and_cancel(
+        &mut stream,
+        &outgoing,
+        plan.total_bytes(),
+        &decision.resume_files,
+        |progress| on_progress(TransferProgressEvent::Sending(progress)),
+        || should_cancel(),
+    )?;
+
+    Ok(TransferSendReport { plan, sent_files })
+}
+
 pub fn send_pairing_request(
     endpoint: &Endpoint,
     request: PairingRequestPayload,
@@ -219,8 +283,24 @@ where
     D: FnOnce(&TransferOffer) -> bool,
     P: FnMut(TransferProgressEvent),
 {
-    let offer = read_transfer_offer(stream)?;
-    accept_transfer_offer_stream_with_decision(stream, receive_dir, offer, decide, on_progress)
+    match read_incoming_control_frame(stream)? {
+        IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
+            stream,
+            receive_dir,
+            offer,
+            decide,
+            on_progress,
+        ),
+        IncomingControlFrame::SessionHello(_) => Err(NekoDropError::Network(
+            "session hello requires encrypted control receive entry".into(),
+        )),
+        IncomingControlFrame::DeviceHello(_) => Err(NekoDropError::Network(
+            "device hello is not a transfer offer".into(),
+        )),
+        IncomingControlFrame::PairingRequest(_) => Err(NekoDropError::Network(
+            "pairing request is not a transfer offer".into(),
+        )),
+    }
 }
 
 pub fn accept_incoming_stream<D, H, P>(
@@ -259,9 +339,81 @@ where
     P: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
+    let frame = read_incoming_control_frame(stream)?;
+    accept_plain_incoming_frame_with_cancel(
+        stream,
+        receive_dir,
+        frame,
+        decide,
+        handle_pairing,
+        on_progress,
+        || should_cancel(),
+    )
+}
+
+pub fn accept_incoming_stream_with_encrypted_control_and_cancel<D, H, P, C>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    receiver_identity: &DeviceIdentity,
+    decide: D,
+    handle_pairing: H,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<IncomingSessionReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
     match read_incoming_control_frame(stream)? {
+        IncomingControlFrame::SessionHello(hello) => {
+            let session = accept_responder_session(stream, receiver_identity, hello)?;
+            let offer = read_session_transfer_offer(stream, &session.keys)?;
+            accept_transfer_offer_stream_with_encrypted_decision_and_cancel(
+                stream,
+                receive_dir,
+                offer,
+                session,
+                decide,
+                on_progress,
+                || should_cancel(),
+            )
+            .map(IncomingSessionReport::Transfer)
+        }
+        frame => accept_plain_incoming_frame_with_cancel(
+            stream,
+            receive_dir,
+            frame,
+            decide,
+            handle_pairing,
+            on_progress,
+            || should_cancel(),
+        ),
+    }
+}
+
+fn accept_plain_incoming_frame_with_cancel<D, H, P, C>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    frame: IncomingControlFrame,
+    decide: D,
+    handle_pairing: H,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<IncomingSessionReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
+    match frame {
         IncomingControlFrame::DeviceHello(_) => Err(NekoDropError::Network(
             "device hello is not a transfer or pairing request".into(),
+        )),
+        IncomingControlFrame::SessionHello(_) => Err(NekoDropError::Network(
+            "session hello requires encrypted control handling".into(),
         )),
         IncomingControlFrame::FileOffer(offer) => {
             accept_transfer_offer_stream_with_decision_and_cancel(
@@ -316,10 +468,75 @@ where
     P: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
+    accept_transfer_offer_stream_with_decision_writer_and_cancel(
+        stream,
+        receive_dir,
+        offer,
+        decide,
+        on_progress,
+        || should_cancel(),
+        |stream, offer, decision| {
+            write_transfer_decision_for_transfer(stream, &offer.transfer_id, decision)
+        },
+    )
+}
+
+fn accept_transfer_offer_stream_with_encrypted_decision_and_cancel<D, P, C>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    offer: TransferOffer,
+    mut session: ActiveSessionControl,
+    decide: D,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
+    validate_offer_sender_identity_matches_session(&offer, &session.peer_identity)?;
+    accept_transfer_offer_stream_with_decision_writer_and_cancel(
+        stream,
+        receive_dir,
+        offer,
+        decide,
+        on_progress,
+        || should_cancel(),
+        |stream, _offer, decision| {
+            let message_id = session.next_message_id("decision");
+            let header = session.next_send_control_header()?;
+            write_session_transfer_decision(
+                stream,
+                session.session_id.clone(),
+                message_id,
+                &session.keys,
+                header,
+                decision,
+            )
+        },
+    )
+}
+
+fn accept_transfer_offer_stream_with_decision_writer_and_cancel<D, P, C, W>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    offer: TransferOffer,
+    decide: D,
+    on_progress: P,
+    mut should_cancel: C,
+    mut write_decision: W,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+    W: FnMut(&mut TcpStream, &TransferOffer, &TransferDecision) -> NekoDropResult<()>,
+{
     if !decide(&offer) {
-        write_transfer_decision_for_transfer(
+        write_decision(
             stream,
-            &offer.transfer_id,
+            &offer,
             &TransferDecision::decline("receiver declined this transfer"),
         )?;
         return Err(NekoDropError::Network(
@@ -329,24 +546,24 @@ where
     let resume_plan = match resume_plan_from_offer(receive_dir, &offer) {
         Ok(plan) => plan,
         Err(error) => {
-            let _ = write_transfer_decision_for_transfer(
+            let _ = write_decision(
                 stream,
-                &offer.transfer_id,
+                &offer,
                 &TransferDecision::decline("receiver resume state is not usable"),
             );
             return Err(error);
         }
     };
     if let Err(error) = check_receive_space(receive_dir, offer.total_bytes, &resume_plan) {
-        let _ = write_transfer_decision_for_transfer(
+        let _ = write_decision(
             stream,
-            &offer.transfer_id,
+            &offer,
             &TransferDecision::decline("insufficient receive space"),
         );
         return Err(error);
     }
     let decision = TransferDecision::accept_with_resume(resume_files_from_plan(&resume_plan)?);
-    write_transfer_decision_for_transfer(stream, &offer.transfer_id, &decision)?;
+    write_decision(stream, &offer, &decision)?;
     let resume_offsets = resume_offsets_by_path(&decision.resume_files)?;
 
     let mut bytes_transferred = resume_plan.total_received_bytes();
@@ -440,6 +657,142 @@ where
         sender_public_key_fingerprint: offer.sender_public_key_fingerprint,
         files,
     })
+}
+
+fn validate_offer_sender_identity_matches_session(
+    offer: &TransferOffer,
+    expected_identity: &DeviceIdentity,
+) -> NekoDropResult<()> {
+    let sender_device_id = offer.sender_device_id.as_deref();
+    let sender_device_name = offer.sender_device_name.as_deref();
+    let sender_public_key_fingerprint = offer.sender_public_key_fingerprint.as_deref();
+
+    if sender_device_id != Some(expected_identity.device_id.as_str())
+        || sender_device_name != Some(expected_identity.device_name.as_str())
+        || sender_public_key_fingerprint != Some(expected_identity.public_key_fingerprint.as_str())
+    {
+        return Err(NekoDropError::Network(
+            "offer sender identity does not match encrypted session".into(),
+        ));
+    }
+
+    Ok(())
+}
+
+#[derive(Debug)]
+struct ActiveSessionControl {
+    session_id: String,
+    cipher: String,
+    keys: SessionKeyMaterial,
+    counters: SessionTrafficCounters,
+    message_counter: u64,
+    peer_identity: DeviceIdentity,
+}
+
+impl ActiveSessionControl {
+    fn next_message_id(&mut self, label: &str) -> String {
+        let counter = self.message_counter;
+        self.message_counter = self.message_counter.saturating_add(1);
+        format!("{}:{label}-{counter}", self.session_id)
+    }
+
+    fn next_send_control_header(&mut self) -> NekoDropResult<SessionTrafficFrameHeader> {
+        self.counters
+            .next_send_header(&self.cipher, SessionFrameKind::Control)
+            .map_err(protocol_error_to_service)
+    }
+}
+
+fn start_initiator_session<S>(
+    stream: &mut S,
+    sender_identity: &DeviceIdentity,
+    transfer_id: &str,
+) -> NekoDropResult<ActiveSessionControl>
+where
+    S: Read + Write,
+{
+    require_encrypted_session_identity(sender_identity)?;
+    let key_pair = SessionEphemeralKeyPair::generate().map_err(protocol_error_to_service)?;
+    let hello = SessionHelloPayload::default_crypto(
+        format!("session-{transfer_id}"),
+        sender_identity.clone(),
+        key_pair.public_key.clone(),
+    );
+    write_session_hello(stream, &hello)?;
+    let ready = read_verified_session_ready(stream, &hello)?;
+    active_session_from_handshake(
+        &hello,
+        &ready,
+        sender_identity,
+        &key_pair,
+        &ready.ephemeral_public_key,
+        ready.identity.clone(),
+    )
+}
+
+fn accept_responder_session(
+    stream: &mut TcpStream,
+    receiver_identity: &DeviceIdentity,
+    hello: SessionHelloPayload,
+) -> NekoDropResult<ActiveSessionControl> {
+    require_encrypted_session_identity(receiver_identity)?;
+    let key_pair = SessionEphemeralKeyPair::generate().map_err(protocol_error_to_service)?;
+    let ready = SessionReadyPayload::for_hello_with_cipher_preference(
+        &hello,
+        receiver_identity.clone(),
+        key_pair.public_key.clone(),
+        &default_session_cipher_preference(),
+    )
+    .map_err(protocol_error_to_service)?;
+    write_session_ready(stream, &ready)?;
+    active_session_from_handshake(
+        &hello,
+        &ready,
+        receiver_identity,
+        &key_pair,
+        &hello.ephemeral_public_key,
+        hello.identity.clone(),
+    )
+}
+
+fn active_session_from_handshake(
+    hello: &SessionHelloPayload,
+    ready: &SessionReadyPayload,
+    local_identity: &DeviceIdentity,
+    key_pair: &SessionEphemeralKeyPair,
+    peer_ephemeral_public_key: &str,
+    peer_identity: DeviceIdentity,
+) -> NekoDropResult<ActiveSessionControl> {
+    let handshake =
+        VerifiedSessionHandshake::from_ready(hello, ready).map_err(protocol_error_to_service)?;
+    let shared_secret = key_pair
+        .shared_secret_from_peer_public_key(peer_ephemeral_public_key)
+        .map_err(protocol_error_to_service)?;
+    let key_context = handshake
+        .key_derivation_context_for_local_device(&local_identity.device_id)
+        .map_err(protocol_error_to_service)?;
+    let keys = key_context
+        .derive_key_material(&shared_secret)
+        .map_err(protocol_error_to_service)?;
+
+    Ok(ActiveSessionControl {
+        session_id: handshake.session_id,
+        cipher: handshake.cipher,
+        keys,
+        counters: SessionTrafficCounters::default(),
+        message_counter: 0,
+        peer_identity,
+    })
+}
+
+fn require_encrypted_session_identity(identity: &DeviceIdentity) -> NekoDropResult<()> {
+    identity
+        .require_capability(Capability::EncryptedSession)
+        .map_err(protocol_error_to_service)
+}
+
+fn protocol_error_to_service(error: ProtocolError) -> NekoDropError {
+    NekoDropError::Network(format!("{:?}: {}", error.code, error.message))
 }
 
 pub fn outgoing_frames_from_plan(plan: &TransferSourcePlan) -> Vec<OutgoingFileFrame> {
@@ -541,6 +894,8 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
+    use nekolink_protocol::{DeviceKind, PlatformKind};
+
     use super::*;
 
     #[test]
@@ -586,6 +941,238 @@ mod tests {
             fs::read_to_string(receive_dir.join("drop/two.txt")).unwrap(),
             "two"
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_control_transfer_sends_offer_and_decision_before_plain_file_payload() {
+        let dir = unique_temp_dir("service-encrypted-control-loopback");
+        let source_root = dir.join("source").join("drop");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&receive_dir).unwrap();
+        fs::write(source_root.join("sample.txt"), b"encrypted control only").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on encrypted transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        let send_report =
+            send_plan_with_encrypted_control_and_cancel(&endpoint, plan, &sender, |_| {}, || false)
+                .unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+
+        assert_eq!(send_report.sent_files.len(), 1);
+        assert_eq!(receive_report.files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
+            "encrypted control only"
+        );
+        assert_eq!(
+            receive_report.sender_device_id.as_deref(),
+            Some("neko-device-sender")
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_control_receiver_declines_before_files_are_sent() {
+        let dir = unique_temp_dir("service-encrypted-control-decline");
+        let source_root = dir.join("source").join("drop");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&receive_dir).unwrap();
+        fs::write(source_root.join("sample.txt"), b"declined").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &receiver_identity,
+                    |_| false,
+                    |_| panic!("pairing should not be handled on encrypted transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        let send_result =
+            send_plan_with_encrypted_control_and_cancel(&endpoint, plan, &sender, |_| {}, || false);
+        let receive_result = receiver.join().unwrap();
+
+        assert!(send_result.is_err());
+        assert!(receive_result.is_err());
+        assert!(!receive_dir.join("drop/sample.txt").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_control_receive_entry_accepts_plaintext_offer_for_compatibility() {
+        let dir = unique_temp_dir("service-encrypted-control-plaintext-compat");
+        let source_root = dir.join("source").join("drop");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(&receive_dir).unwrap();
+        fs::write(source_root.join("sample.txt"), b"plaintext compat").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let send_report = send_paths(&endpoint, &[source_root]).unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+
+        assert_eq!(send_report.sent_files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
+            "plaintext compat"
+        );
+        assert_eq!(receive_report.files.len(), 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_control_receiver_rejects_offer_sender_that_differs_from_session_initiator() {
+        let dir = unique_temp_dir("service-encrypted-control-sender-mismatch");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let impersonated = test_identity("neko-device-other", "Other Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on encrypted transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let mut stream = connect_endpoint(&endpoint).unwrap();
+        let mut session = start_initiator_session(&mut stream, &sender, "transfer-mismatch")
+            .expect("session should be established");
+        let offer = TransferOffer::new(
+            "transfer-mismatch",
+            "drop",
+            vec![TransferOfferFile {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 4,
+                sha256: "abc123".to_string(),
+            }],
+        )
+        .with_sender_identity(&impersonated);
+        let message_id = session.next_message_id("offer");
+        let header = session.next_send_control_header().unwrap();
+        write_session_transfer_offer(
+            &mut stream,
+            session.session_id.clone(),
+            message_id,
+            &session.keys,
+            header,
+            &offer,
+        )
+        .unwrap();
+        drop(stream);
+        let receive_result = receiver.join().unwrap();
+
+        assert!(receive_result.is_err());
+        assert!(receive_result
+            .unwrap_err()
+            .to_string()
+            .contains("offer sender identity does not match encrypted session"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plaintext_receive_entry_rejects_session_hello_first_frame() {
+        let dir = unique_temp_dir("service-plaintext-rejects-session");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            move || accept_transfer_with_decision(&listener, &receive_dir, |_| true, |_| {})
+        });
+
+        let mut stream = connect_endpoint(&endpoint).unwrap();
+        let key_pair = SessionEphemeralKeyPair::from_secret([7_u8; 32]).unwrap();
+        let hello =
+            SessionHelloPayload::default_crypto("session-rejected", sender, key_pair.public_key);
+        write_session_hello(&mut stream, &hello).unwrap();
+        drop(stream);
+        let receive_result = receiver.join().unwrap();
+
+        assert!(receive_result.is_err());
+        assert!(receive_result
+            .unwrap_err()
+            .to_string()
+            .contains("session hello"));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -698,5 +1285,22 @@ mod tests {
         ));
         fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    fn test_identity(device_id: &str, device_name: &str) -> DeviceIdentity {
+        DeviceIdentity::new(
+            device_id,
+            device_name,
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            format!("sha256:{:0>64}", device_id.len()),
+            [
+                Capability::FileTransfer,
+                Capability::FileSend,
+                Capability::FileReceive,
+                Capability::FileSha256,
+                Capability::EncryptedSession,
+            ],
+        )
     }
 }

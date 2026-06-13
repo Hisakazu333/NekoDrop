@@ -283,6 +283,7 @@ fn desktop_capabilities() -> Vec<Capability> {
         Capability::FileReceive,
         Capability::FileSha256,
         Capability::DevicePairing,
+        Capability::EncryptedSession,
     ]
 }
 
@@ -318,10 +319,10 @@ mod tests {
     }
 
     #[test]
-    fn desktop_identity_does_not_advertise_unimplemented_capabilities() {
+    fn desktop_identity_advertises_implemented_desktop_capabilities() {
         let capabilities = desktop_capabilities();
 
-        assert!(!capabilities.contains(&Capability::EncryptedSession));
+        assert!(capabilities.contains(&Capability::EncryptedSession));
         assert!(!capabilities.contains(&Capability::DesktopAgentHost));
     }
 

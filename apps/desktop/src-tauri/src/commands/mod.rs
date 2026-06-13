@@ -18,11 +18,11 @@ use nekodrop_network::{
     TransferProgress,
 };
 use nekodrop_service::{
-    accept_incoming_stream_with_cancel, create_transfer_plan as create_service_transfer_plan,
-    create_transfer_plan_with_scan_progress, send_pairing_request,
-    send_plan_with_sender_identity_and_cancel, IncomingSessionReport, TransferPlanScanProgress,
-    TransferProgressEvent, TransferReceiveReport, TransferSendReport, TransferSourceFile,
-    TransferSourcePlan,
+    accept_incoming_stream_with_encrypted_control_and_cancel,
+    create_transfer_plan as create_service_transfer_plan, create_transfer_plan_with_scan_progress,
+    send_pairing_request, send_plan_with_encrypted_control_and_cancel, IncomingSessionReport,
+    TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport, TransferSendReport,
+    TransferSourceFile, TransferSourcePlan,
 };
 use nekodrop_storage::{build_resume_plan_for_files, ResumeExpectedFile, ResumePlan};
 use nekolink_protocol::DeviceIdentity;
@@ -862,10 +862,10 @@ fn send_paths_to_endpoint_with_history_id(
         || {
             let transfer_status = transfer_status.clone();
             let cancel_for_attempt = cancel_for_send.clone();
-            send_plan_with_sender_identity_and_cancel(
+            send_plan_with_encrypted_control_and_cancel(
                 &endpoint,
                 plan.clone(),
-                Some(&sender_identity),
+                &sender_identity,
                 move |event| {
                     if let Some(status) = status_from_progress_event("send", None, event) {
                         set_transfer_status(&transfer_status, status);
@@ -1294,9 +1294,10 @@ pub fn start_receive_once(
                 if let Ok(mut active_cancel) = active_receive_cancel.lock() {
                     *active_cancel = Some(current_receive_cancel.clone());
                 }
-                let result = accept_incoming_stream_with_cancel(
+                let result = accept_incoming_stream_with_encrypted_control_and_cancel(
                     &mut stream,
                     &receive_dir_for_thread,
+                    &local_identity,
                     move |offer| {
                         let resume_summary =
                             pending_resume_summary_from_offer(&receive_dir_for_decision, offer);
