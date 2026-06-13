@@ -631,6 +631,12 @@ pub fn select_session_cipher(
             "peer session cipher list cannot be empty",
         ));
     }
+    for cipher in local_preference {
+        validate_session_cipher("local session cipher", cipher)?;
+    }
+    for cipher in peer_supported {
+        validate_session_cipher("peer session cipher", cipher)?;
+    }
 
     local_preference
         .iter()
@@ -1408,6 +1414,15 @@ mod tests {
         assert!(error
             .message
             .contains("no mutually supported session cipher"));
+    }
+
+    #[test]
+    fn rejects_session_cipher_negotiation_with_unknown_ciphers() {
+        let error =
+            select_session_cipher(&["rot13".to_string()], &["rot13".to_string()]).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("unsupported session cipher"));
     }
 
     #[test]
