@@ -242,12 +242,12 @@ The protocol crate defines traffic-frame counters and nonce inputs for future en
 ```text
 frame kinds: control, file
 directions: send, receive
-counter: u64, starts at 0 per direction
-nonce length: 12 bytes
-nonce layout today: 1 direction byte, reserved zero bytes, u64 counter in big-endian
+counter: u64, starts at 0 per local send/receive direction
+nonce length: 24 bytes for xchacha20poly1305, 12 bytes for aes256gcm
+nonce layout today: reserved zero bytes followed by u64 counter in big-endian
 ```
 
-Send and receive counters are independent. Counter exhaustion is rejected before producing another frame header. AEAD sealing/opening and replay-window handling are still future work.
+Send and receive counters are independent local state, but the nonce for a network frame is based on the frame counter and negotiated cipher, not the local send/receive label. The direction is carried in the header for bookkeeping; traffic keys already separate send from receive. Counter exhaustion is rejected before producing another frame header. AEAD sealing/opening and replay-window handling are still future work.
 
 ## Pairing Messages
 

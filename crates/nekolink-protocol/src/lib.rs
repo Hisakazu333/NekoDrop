@@ -15,7 +15,8 @@ pub const SESSION_CIPHER_AES256GCM: &str = "aes256gcm";
 pub const SESSION_SHARED_SECRET_LEN: usize = 32;
 pub const SESSION_TRAFFIC_KEY_LEN: usize = 32;
 pub const SESSION_PUBLIC_KEY_BASE64_LEN: usize = 43;
-pub const SESSION_NONCE_LEN: usize = 12;
+pub const SESSION_AES256GCM_NONCE_LEN: usize = 12;
+pub const SESSION_XCHACHA20POLY1305_NONCE_LEN: usize = 24;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T = Value> {
@@ -585,10 +586,11 @@ pub enum SessionFrameDirection {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionTrafficFrameHeader {
+    pub cipher: String,
     pub kind: SessionFrameKind,
     pub direction: SessionFrameDirection,
     pub counter: u64,
-    pub nonce: [u8; SESSION_NONCE_LEN],
+    pub nonce: Vec<u8>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -607,37 +609,38 @@ impl SessionTrafficCounters {
 
     pub fn next_send_header(
         &mut self,
+        cipher: &str,
         kind: SessionFrameKind,
     ) -> Result<SessionTrafficFrameHeader, ProtocolError> {
         let counter = next_session_counter(&mut self.send_counter)?;
-        Ok(SessionTrafficFrameHeader::new(
-            kind,
-            SessionFrameDirection::Send,
-            counter,
-        ))
+        SessionTrafficFrameHeader::new(cipher, kind, SessionFrameDirection::Send, counter)
     }
 
     pub fn next_receive_header(
         &mut self,
+        cipher: &str,
         kind: SessionFrameKind,
     ) -> Result<SessionTrafficFrameHeader, ProtocolError> {
         let counter = next_session_counter(&mut self.receive_counter)?;
-        Ok(SessionTrafficFrameHeader::new(
-            kind,
-            SessionFrameDirection::Receive,
-            counter,
-        ))
+        SessionTrafficFrameHeader::new(cipher, kind, SessionFrameDirection::Receive, counter)
     }
 }
 
 impl SessionTrafficFrameHeader {
-    pub fn new(kind: SessionFrameKind, direction: SessionFrameDirection, counter: u64) -> Self {
-        Self {
+    pub fn new(
+        cipher: &str,
+        kind: SessionFrameKind,
+        direction: SessionFrameDirection,
+        counter: u64,
+    ) -> Result<Self, ProtocolError> {
+        validate_session_cipher("cipher", cipher)?;
+        Ok(Self {
+            cipher: cipher.to_string(),
             kind,
             direction,
             counter,
-            nonce: session_frame_nonce(direction, counter),
-        }
+            nonce: session_frame_nonce(cipher, counter)?,
+        })
     }
 }
 
@@ -1386,14 +1389,17 @@ fn next_session_counter(counter: &mut u64) -> Result<u64, ProtocolError> {
     Ok(current)
 }
 
-fn session_frame_nonce(direction: SessionFrameDirection, counter: u64) -> [u8; SESSION_NONCE_LEN] {
-    let mut nonce = [0_u8; SESSION_NONCE_LEN];
-    nonce[0] = match direction {
-        SessionFrameDirection::Send => 1,
-        SessionFrameDirection::Receive => 2,
+fn session_frame_nonce(cipher: &str, counter: u64) -> Result<Vec<u8>, ProtocolError> {
+    validate_session_cipher("cipher", cipher)?;
+    let nonce_len = match cipher {
+        SESSION_CIPHER_XCHACHA20POLY1305 => SESSION_XCHACHA20POLY1305_NONCE_LEN,
+        SESSION_CIPHER_AES256GCM => SESSION_AES256GCM_NONCE_LEN,
+        _ => unreachable!("validate_session_cipher rejects unsupported ciphers"),
     };
-    nonce[4..].copy_from_slice(&counter.to_be_bytes());
-    nonce
+    let mut nonce = vec![0_u8; nonce_len];
+    let counter_offset = nonce_len - std::mem::size_of::<u64>();
+    nonce[counter_offset..].copy_from_slice(&counter.to_be_bytes());
+    Ok(nonce)
 }
 
 fn session_public_key_from_secret(secret: [u8; SESSION_SHARED_SECRET_LEN]) -> String {
@@ -2478,24 +2484,27 @@ mod tests {
         let mut counters = SessionTrafficCounters::default();
 
         let first = counters
-            .next_send_header(SessionFrameKind::Control)
+            .next_send_header(SESSION_CIPHER_XCHACHA20POLY1305, SessionFrameKind::Control)
             .unwrap();
-        let second = counters.next_send_header(SessionFrameKind::File).unwrap();
+        let second = counters
+            .next_send_header(SESSION_CIPHER_XCHACHA20POLY1305, SessionFrameKind::File)
+            .unwrap();
         let receive = counters
-            .next_receive_header(SessionFrameKind::Control)
+            .next_receive_header(SESSION_CIPHER_XCHACHA20POLY1305, SessionFrameKind::Control)
             .unwrap();
 
         assert_eq!(first.direction, SessionFrameDirection::Send);
         assert_eq!(first.kind, SessionFrameKind::Control);
         assert_eq!(first.counter, 0);
-        assert_eq!(first.nonce.len(), SESSION_NONCE_LEN);
+        assert_eq!(first.nonce.len(), SESSION_XCHACHA20POLY1305_NONCE_LEN);
         assert_eq!(second.direction, SessionFrameDirection::Send);
         assert_eq!(second.kind, SessionFrameKind::File);
         assert_eq!(second.counter, 1);
         assert_eq!(receive.direction, SessionFrameDirection::Receive);
         assert_eq!(receive.counter, 0);
+        assert_eq!(first.cipher, SESSION_CIPHER_XCHACHA20POLY1305);
         assert_ne!(first.nonce, second.nonce);
-        assert_ne!(first.nonce, receive.nonce);
+        assert_eq!(first.nonce, receive.nonce);
     }
 
     #[test]
@@ -2503,11 +2512,43 @@ mod tests {
         let mut counters = SessionTrafficCounters::new(u64::MAX, 0);
 
         let error = counters
-            .next_send_header(SessionFrameKind::Control)
+            .next_send_header(SESSION_CIPHER_XCHACHA20POLY1305, SessionFrameKind::Control)
             .unwrap_err();
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("counter exhausted"));
+    }
+
+    #[test]
+    fn builds_session_traffic_nonce_for_negotiated_cipher() {
+        let xchacha = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            7,
+        )
+        .unwrap();
+        let aes = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_AES256GCM,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            7,
+        )
+        .unwrap();
+
+        assert_eq!(xchacha.nonce.len(), SESSION_XCHACHA20POLY1305_NONCE_LEN);
+        assert_eq!(aes.nonce.len(), SESSION_AES256GCM_NONCE_LEN);
+        assert_ne!(xchacha.nonce, aes.nonce);
+
+        let error = SessionTrafficFrameHeader::new(
+            "rot13",
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            7,
+        )
+        .unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("unsupported session cipher"));
     }
 
     #[test]
