@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { hasReceiveDiagnosticsWarning } from "../src/receiveDiagnostics.ts";
+import {
+  hasReceiveDiagnosticsWarning,
+  receiveDiagnosticsAdvice
+} from "../src/receiveDiagnostics.ts";
 import type { ReceivePortDiagnosticsDto } from "../src/types.ts";
 
 function diagnostics(phase: ReceivePortDiagnosticsDto["phase"]): ReceivePortDiagnosticsDto {
@@ -26,4 +29,19 @@ test("does not flag normal or closed receive diagnostics", () => {
   assert.equal(hasReceiveDiagnosticsWarning(diagnostics("listening")), false);
   assert.equal(hasReceiveDiagnosticsWarning(diagnostics("closed")), false);
   assert.equal(hasReceiveDiagnosticsWarning(null), false);
+});
+
+test("suggests a short next step for receive diagnostics warnings", () => {
+  assert.equal(receiveDiagnosticsAdvice(diagnostics("no_lan_ip")), "没有局域网地址；检查 Wi-Fi/LAN、VPN 或热点隔离");
+  assert.equal(receiveDiagnosticsAdvice(diagnostics("invalid_bind_addr")), "监听地址异常；关闭收件后重新打开");
+});
+
+test("keeps normal receive diagnostics quiet", () => {
+  assert.equal(receiveDiagnosticsAdvice(diagnostics("listening")), null);
+  assert.equal(receiveDiagnosticsAdvice(null), null);
+});
+
+test("guides closed receive state without treating it as a warning", () => {
+  assert.equal(hasReceiveDiagnosticsWarning(diagnostics("closed")), false);
+  assert.equal(receiveDiagnosticsAdvice(diagnostics("closed")), "打开收件后会广播本机，也可复制连接码");
 });

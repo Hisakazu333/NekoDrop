@@ -484,6 +484,85 @@ button:disabled {
   background: var(--surface-app);
 }
 
+.active-transfer {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  width: min(100%, 1120px);
+  min-height: 58px;
+  margin: 0 auto 26px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: color-mix(in srgb, var(--surface-card) 92%, var(--accent-soft));
+}
+
+.active-transfer.is-error {
+  border-color: transparent;
+  background: var(--danger-soft);
+}
+
+.active-transfer-main {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  flex: 1;
+}
+
+.active-transfer-title,
+.active-transfer-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.active-transfer-title strong {
+  color: var(--text-1);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+
+.active-transfer-title span,
+.active-transfer-meta span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.active-transfer-title span {
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.active-transfer-meta {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.active-transfer-meter {
+  height: 6px;
+  overflow: hidden;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+}
+
+.active-transfer-meter span {
+  display: block;
+  height: 100%;
+  min-width: 4px;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width var(--t);
+}
+
+.active-transfer.is-error .active-transfer-meter span {
+  background: var(--danger);
+}
+
 .drop-home {
   display: grid;
   justify-items: stretch;
@@ -527,23 +606,34 @@ button:disabled {
 }
 
 .home-state-line {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: center;
-  justify-content: space-between;
   gap: 12px;
   min-height: 30px;
   color: var(--text-3);
   font-size: 13px;
 }
 
-.home-state-line strong {
+.home-state-line strong,
+.home-state-line small {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.home-state-line strong {
   color: var(--text-1);
   font-size: 13px;
   font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+.home-state-line small {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 400;
+  text-align: right;
 }
 
 .home-state-line span {
@@ -551,6 +641,10 @@ button:disabled {
 }
 
 .home-state-line.is-warning span {
+  color: var(--danger);
+}
+
+.home-state-line.is-warning small {
   color: var(--danger);
 }
 
@@ -1409,6 +1503,7 @@ button:disabled {
 }
 
 .panel-head span,
+.panel-head small,
 .result-line span,
 .offer-main span {
   min-width: 0;
@@ -1417,6 +1512,11 @@ button:disabled {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.panel-head small {
+  color: var(--danger);
+  font-size: 12px;
 }
 
 .offer-main small {
@@ -1435,8 +1535,12 @@ button:disabled {
 
 .control-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 96px;
+  grid-template-columns: minmax(0, 1fr) 160px;
   gap: 12px;
+}
+
+.control-row.is-name {
+  grid-template-columns: minmax(0, 1fr);
 }
 
 label {
@@ -1474,6 +1578,14 @@ input::placeholder {
   gap: 8px;
 }
 
+.receive-dir-action {
+  grid-template-columns: minmax(0, 1fr) auto auto;
+}
+
+.receive-port-action {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
 .port-field input {
   text-align: center;
 }
@@ -1490,7 +1602,7 @@ input::placeholder {
 
 .policy-segment {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 4px;
   padding: 3px;
   border-radius: var(--r-md);
@@ -1549,6 +1661,51 @@ input::placeholder {
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface-soft);
+}
+
+.settings-panel {
+  gap: 18px;
+}
+
+.settings-readout {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--border);
+}
+
+.settings-readout span {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  min-height: 38px;
+  padding: 0 12px;
+  color: var(--text-2);
+  background: var(--surface-card);
+  font-size: 13px;
+}
+
+.settings-readout strong {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.settings-readout span,
+.settings-readout strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-actions {
+  display: flex;
+  justify-content: flex-end;
 }
 
 /* =========================================================================
@@ -1685,11 +1842,18 @@ input::placeholder {
   font-size: 12px;
 }
 
+.recent-detail strong,
 .recent-detail span {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.recent-detail strong {
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 .recent-actions {
@@ -1778,6 +1942,22 @@ input::placeholder {
   color: var(--danger);
 }
 
+.history-progress {
+  height: 3px;
+  overflow: hidden;
+  margin: -3px 10px 2px 88px;
+  border-radius: var(--r-pill);
+  background: var(--surface-sunken);
+}
+
+.history-progress span {
+  display: block;
+  height: 100%;
+  min-width: 3px;
+  border-radius: inherit;
+  background: var(--accent);
+}
+
 .history-kind {
   color: var(--text-2);
   font-size: 12px;
@@ -1825,6 +2005,45 @@ input::placeholder {
   gap: 16px;
   min-width: 0;
   padding: 0 10px 8px 88px;
+}
+
+.history-detail-main {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.history-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
+  min-width: 0;
+}
+
+.history-detail-grid span {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.history-detail-grid strong {
+  color: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.history-detail-grid .is-error {
+  color: var(--danger);
+}
+
+.history-detail-grid .is-error strong {
+  color: var(--danger);
 }
 
 .history-paths {

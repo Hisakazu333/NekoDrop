@@ -3,12 +3,35 @@ import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 
 import { invokeCommand } from "./tauri";
-import { hasReceiveDiagnosticsWarning } from "./receiveDiagnostics";
 import {
-  broadcastTroubleshootingHint,
-  discoveryTroubleshootingHint,
-  unavailableDiscoveryHint
+  buildNearbyDeviceViewModel,
+  buildTrustedDeviceViewModel,
+  platformLabel as devicePlatformLabel,
+  selectedTrustedTargetCopy
+} from "./deviceDisplay";
+import {
+  currentTransferRecoveryActions,
+  findCurrentRecoverableTransfer
+} from "./currentTransferRecovery";
+import {
+  hasReceiveDiagnosticsWarning,
+  receiveDiagnosticsAdvice
+} from "./receiveDiagnostics";
+import {
+  buildDiscoveryCopy
 } from "./networkPermissionHints";
+import { pairingFailureAdvice } from "./pairingFailureAdvice";
+import {
+  buildRecentTransferDetailLine,
+  buildTransferHistoryDetailViewModel,
+  transferFallbackActionLabel,
+  transferPrimaryActionLabel
+} from "./transferHistoryDetails";
+import { buildSettingsViewModel, parseReceivePortValue } from "./settingsView";
+import {
+  buildTransferProgressViewModel,
+  formatBytes
+} from "./transferProgress";
 import type {
   AppSnapshot,
   DeviceDto,
@@ -35,6 +58,7 @@ type BusyMode =
   | "pick-receive"
   | "stop-receive"
   | "receive-policy"
+  | "device-name"
   | "cancel-transfer"
   | "pair"
   | "forget"
@@ -42,7 +66,7 @@ type BusyMode =
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "devices" | "receive" | "queue" | "history";
+type ComposerMode = "send" | "devices" | "receive" | "queue" | "history" | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
@@ -58,6 +82,7 @@ export function App() {
   const [receiveDir, setReceiveDir] = useState("~/Downloads/NekoDrop");
   const [receivePolicy, setReceivePolicy] = useState<ReceivePolicyMode>("always_ask");
   const [bindPort, setBindPort] = useState("45821");
+  const [deviceNameInput, setDeviceNameInput] = useState("这台电脑");
   const [plan, setPlan] = useState<TransferPlanDto | null>(null);
   const [scanStatus, setScanStatus] = useState<TransferScanProgressDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
@@ -103,6 +128,21 @@ export function App() {
       null,
     [selectedDeviceId, selectedDeviceSnapshot, trustedNearbyDevices]
   );
+  const currentFailedTransfer = useMemo(
+    () => findCurrentRecoverableTransfer(transferStatus, transfers),
+    [transferStatus, transfers]
+  );
+  const selectedTrustedRecord = useMemo(
+    () => trustedDevices.find((device) => device.device_id === selectedDeviceId) ?? null,
+    [selectedDeviceId, trustedDevices]
+  );
+  const selectedTrustedOnline = Boolean(
+    selectedDeviceId && trustedNearbyDevices.some((device) => device.id === selectedDeviceId)
+  );
+  const selectedTargetCopy = selectedTrustedRecord
+    ? selectedTrustedTargetCopy(selectedTrustedRecord, selectedTrustedOnline)
+    : null;
+  const localPlatform = snapshot?.device_identity.platform ?? null;
   const trimmedConnectionCode = connectionCode.trim();
   const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
   const receiveState = receiveSession
@@ -127,7 +167,11 @@ export function App() {
   useEffect(() => {
     if (!snapshot || receiveSession || autoReceiveStarted.current) return;
     autoReceiveStarted.current = true;
-    startReceive({ receiveDirOverride: snapshot.receive_dir, silent: true }).catch((nextError) =>
+    startReceive({
+      receiveDirOverride: snapshot.receive_dir,
+      receivePortOverride: snapshot.receive_port,
+      silent: true
+    }).catch((nextError) =>
       setError(errorMessage(nextError))
     );
   }, [snapshot, receiveSession]);
@@ -239,7 +283,9 @@ export function App() {
   async function refreshSnapshot() {
     const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
     setSnapshot(nextSnapshot);
+    setDeviceNameInput(nextSnapshot.device_name);
     setReceiveDir(nextSnapshot.receive_dir);
+    setBindPort(String(nextSnapshot.receive_port));
     setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
 
@@ -341,6 +387,47 @@ export function App() {
     }
   }
 
+  async function saveReceiveDir() {
+    if (receiveSession) return;
+    const nextReceiveDir = receiveDir.trim();
+    if (!nextReceiveDir || nextReceiveDir === snapshot?.receive_dir) return;
+    setBusy("pick-receive");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_receive_dir", { receiveDir: nextReceiveDir });
+      setReceiveDir(nextReceiveDir);
+      setSnapshot((current) =>
+        current ? { ...current, receive_dir: nextReceiveDir } : current
+      );
+      await refreshSnapshot();
+      setToast("接收目录已保存");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveReceivePort() {
+    if (receiveSession) return;
+    const nextReceivePort = parseReceivePortValue(bindPort);
+    if (nextReceivePort === null || nextReceivePort === snapshot?.receive_port) return;
+    setBusy("pick-receive");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_receive_port", { receivePort: nextReceivePort });
+      setBindPort(String(nextReceivePort));
+      setSnapshot((current) =>
+        current ? { ...current, receive_port: nextReceivePort } : current
+      );
+      setToast("默认端口已保存");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function updateReceivePolicy(nextPolicy: ReceivePolicyMode) {
     if (nextPolicy === receivePolicy) return;
     setBusy("receive-policy");
@@ -352,6 +439,34 @@ export function App() {
         current ? { ...current, receive_policy: nextPolicy } : current
       );
       setToast(receivePolicyLabel(nextPolicy));
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveDeviceName() {
+    const nextName = deviceNameInput.trim();
+    if (!nextName || nextName === snapshot?.device_name) return;
+    setBusy("device-name");
+    setError(null);
+    try {
+      const savedName = await invokeCommand<string>("set_device_name", { deviceName: nextName });
+      setSnapshot((current) =>
+        current
+          ? {
+              ...current,
+              device_name: savedName,
+              device_identity: {
+                ...current.device_identity,
+                device_name: savedName
+              }
+            }
+          : current
+      );
+      setDeviceNameInput(savedName);
+      setToast("设备名已保存");
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -392,9 +507,9 @@ export function App() {
     }
   }
 
-  async function startReceive(options: { receiveDirOverride?: string; silent?: boolean } = {}) {
+  async function startReceive(options: { receiveDirOverride?: string; receivePortOverride?: number; silent?: boolean } = {}) {
     const silent = options.silent ?? false;
-    const requestedPort = parseReceivePort(bindPort);
+    const requestedPort = options.receivePortOverride ?? parseReceivePortValue(bindPort);
     if (requestedPort === null) {
       setError("端口必须是 1-65535");
       return;
@@ -551,7 +666,7 @@ export function App() {
     setError(null);
     setSendReport(null);
     try {
-      const actionLabel = transferRetryActionLabel(transfer);
+      const actionLabel = transferPrimaryActionLabel(transfer) ?? "重发";
       const report = await invokeCommand<SendReportDto>("resend_transfer", {
         transferId: transfer.id
       });
@@ -602,6 +717,14 @@ export function App() {
     }
   }
 
+  function openFallbackCode() {
+    setMode("send");
+    setConnectionCodeOpen(true);
+    setSelectedDeviceId(null);
+    setSelectedDeviceSnapshot(null);
+    setError(null);
+  }
+
   async function clearTransferHistory() {
     if (transfers.length === 0) return;
     setBusy("history");
@@ -634,7 +757,8 @@ export function App() {
       setToast(`配对完成：${trusted.device_name} · ${trusted.pairing_code}`);
       await refreshReceiveState();
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      const message = errorMessage(nextError);
+      setError(pairingFailureAdvice(message) ?? message);
     } finally {
       setBusy(null);
     }
@@ -649,7 +773,8 @@ export function App() {
       setToast(accept ? "已接受配对" : "已拒绝配对");
       await refreshReceiveState();
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      const message = errorMessage(nextError);
+      setError(pairingFailureAdvice(message) ?? message);
     } finally {
       setBusy(null);
     }
@@ -717,9 +842,11 @@ export function App() {
     setSendReport(null);
   }
 
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, nearbyDevices.length);
-  const targetLabel = selectedDevice
-    ? selectedDevice.name
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length);
+  const targetLabel = selectedTargetCopy
+    ? selectedTargetCopy.targetLabel
+    : selectedDevice
+      ? selectedDevice.name
     : trimmedConnectionCode.length > 0
       ? "备用码"
       : "选择目标";
@@ -732,11 +859,15 @@ export function App() {
           ? "发送队列"
           : mode === "history"
             ? "传输历史"
-            : selectedDevice
-              ? `发给 ${selectedDevice.name}`
-              : trimmedConnectionCode.length > 0
-                ? "使用备用码发送"
-                : "把文件发到哪台设备？";
+            : mode === "settings"
+              ? "设置"
+              : selectedTargetCopy
+                ? `发给 ${selectedTargetCopy.targetLabel}`
+                : selectedDevice
+                  ? `发给 ${selectedDevice.name}`
+                  : trimmedConnectionCode.length > 0
+                    ? "使用备用码发送"
+                    : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -754,7 +885,11 @@ export function App() {
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
           ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
-          : composerSubtitle;
+          : mode === "settings"
+            ? snapshot?.device_name ?? "这台电脑"
+            : selectedTargetCopy
+              ? selectedTargetCopy.subtitle
+              : composerSubtitle;
 
   return (
     <main className="app-shell">
@@ -803,6 +938,14 @@ export function App() {
             type="button"
           >
             <Icon name="clock" />
+          </button>
+          <button
+            className={mode === "settings" ? "rail-item is-active" : "rail-item"}
+            onClick={() => setMode("settings")}
+            title="设置"
+            type="button"
+          >
+            <Icon name="settings" />
           </button>
         </nav>
 
@@ -871,6 +1014,18 @@ export function App() {
         ) : null}
 
         <section className={mode === "send" ? "work-surface" : "work-surface is-single"}>
+          {transferStatus && shouldShowActiveTransferBar(transferStatus) ? (
+            <ActiveTransferBar
+              busy={busy}
+              metrics={transferMetrics}
+              status={transferStatus}
+              recoveryTransfer={currentFailedTransfer}
+              onCancel={cancelCurrentTransfer}
+              onRecover={resendTransfer}
+              onUseFallbackCode={openFallbackCode}
+            />
+          ) : null}
+
           {mode === "send" ? (
             <div className="drop-home">
               <div className="brand-line">
@@ -941,6 +1096,7 @@ export function App() {
                     busy={busy}
                     discoveryStatus={discoveryStatus}
                     devices={nearbyDevices}
+                    localPlatform={localPlatform}
                     selectedDeviceId={selectedDeviceId}
                     onSelectDevice={(device) => {
                       setSelectedDeviceId(device.id);
@@ -974,12 +1130,16 @@ export function App() {
                       transferStatus={transferStatus}
                       transferCount={transferPaths.length}
                       busy={busy}
+                      recoveryTransfer={currentFailedTransfer}
                       onCancelTransfer={cancelCurrentTransfer}
+                      onRecoverTransfer={resendTransfer}
+                      onUseFallbackCode={openFallbackCode}
                     />
                   ) : (
                     <HomeStateLine
                       diagnostics={receiveDiagnostics}
                       discoveryStatus={discoveryStatus}
+                      localPlatform={localPlatform}
                       receiveState={receiveState}
                       transfers={transfers}
                     />
@@ -997,6 +1157,7 @@ export function App() {
                     onSelectTransfer={(transfer) =>
                       setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
                     }
+                    onUseFallbackCode={openFallbackCode}
                   />
                 </aside>
               </div>
@@ -1018,6 +1179,7 @@ export function App() {
                     connectionCodeOpen={connectionCodeOpen}
                     discoveryStatus={discoveryStatus}
                     devices={nearbyDevices}
+                    localPlatform={localPlatform}
                     receiveSession={receiveSession}
                     receiveState={receiveState}
                     selectedDeviceId={selectedDeviceId}
@@ -1043,6 +1205,7 @@ export function App() {
                   <ReceivePanel
                     bindPort={bindPort}
                     busy={busy}
+                    diagnostics={receiveDiagnostics}
                     receiveDir={receiveDir}
                     receivePolicy={receivePolicy}
                     pendingOffer={pendingReceiveOffer}
@@ -1067,6 +1230,7 @@ export function App() {
                 <DevicePanel
                   busy={busy}
                   discoveryStatus={discoveryStatus}
+                  localPlatform={localPlatform}
                   nearbyDevices={nearbyDevices}
                   selectedDeviceId={selectedDeviceId}
                   trustedDevices={trustedDevices}
@@ -1126,6 +1290,31 @@ export function App() {
                   onSelectTransfer={(transfer) =>
                     setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
                   }
+                  onUseFallbackCode={openFallbackCode}
+                />
+              ) : null}
+
+              {mode === "settings" ? (
+                <SettingsPanel
+                  bindPort={bindPort}
+                  busy={busy}
+                  deviceNameInput={deviceNameInput}
+                  discoveryStatus={discoveryStatus}
+                  receiveDir={receiveDir}
+                  receivePolicy={receivePolicy}
+                  receiveSession={receiveSession}
+                  setBindPort={setBindPort}
+                  setDeviceNameInput={setDeviceNameInput}
+                  setReceiveDir={setReceiveDir}
+                  snapshot={snapshot}
+                  onChooseReceiveDir={chooseReceiveDir}
+                  onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onSaveReceiveDir={saveReceiveDir}
+                  onSaveReceivePort={saveReceivePort}
+                  onSaveDeviceName={saveDeviceName}
+                  onStartReceive={startReceive}
+                  onStopReceive={stopReceive}
+                  onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
             </div>
@@ -1145,6 +1334,7 @@ type IconName =
   | "inbox"
   | "link"
   | "list"
+  | "settings"
   | "send"
   | "trash";
 
@@ -1159,6 +1349,7 @@ function Icon({ name }: { name: IconName }) {
       {name === "inbox" ? <path d="M4 4h16v11l-3 5H7l-3-5V4Zm0 11h5l2 2h2l2-2h5" /> : null}
       {name === "link" ? <path d="M10 13a5 5 0 0 0 7.07 0l2-2A5 5 0 0 0 12 4l-1.2 1.2M14 11a5 5 0 0 0-7.07 0l-2 2A5 5 0 0 0 12 20l1.2-1.2" /> : null}
       {name === "list" ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : null}
+      {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
     </svg>
@@ -1169,6 +1360,7 @@ function TargetStrip({
   busy,
   discoveryStatus,
   devices,
+  localPlatform,
   selectedDeviceId,
   onSelectDevice,
   onTrustDevice
@@ -1176,11 +1368,12 @@ function TargetStrip({
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
+  localPlatform: string | null;
   selectedDeviceId: string | null;
   onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length, localPlatform);
 
   return (
     <section className="target-strip" aria-label="附近设备">
@@ -1229,6 +1422,7 @@ function TargetPanel({
   connectionCodeOpen,
   discoveryStatus,
   devices,
+  localPlatform,
   receiveSession,
   receiveState,
   selectedDeviceId,
@@ -1246,6 +1440,7 @@ function TargetPanel({
   connectionCodeOpen: boolean;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
+  localPlatform: string | null;
   receiveSession: ReceiveSessionDto | null;
   receiveState: string;
   selectedDeviceId: string | null;
@@ -1264,6 +1459,7 @@ function TargetPanel({
         busy={busy}
         discoveryStatus={discoveryStatus}
         devices={devices}
+        localPlatform={localPlatform}
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={onSelectDevice}
         onTrustDevice={onTrustDevice}
@@ -1396,23 +1592,27 @@ function TransferScanStatus({ status }: { status: TransferScanProgressDto | null
 function HomeStateLine({
   diagnostics,
   discoveryStatus,
+  localPlatform,
   receiveState,
   transfers
 }: {
   diagnostics: ReceivePortDiagnosticsDto | null;
   discoveryStatus: DiscoveryStatusDto | null;
+  localPlatform: string | null;
   receiveState: string;
   transfers: TransferDto[];
 }) {
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, discoveryStatus?.device_count ?? 0);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, discoveryStatus?.device_count ?? 0, localPlatform);
   const latest = transfers[0];
   const receiveDetail = receiveDiagnosticsLabel(diagnostics);
+  const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
   const isWarning = hasReceiveDiagnosticsWarning(diagnostics);
 
   return (
     <div className={isWarning ? "home-state-line is-warning" : "home-state-line"}>
       <span>{receiveState}{receiveDetail ? ` · ${receiveDetail}` : ""}</span>
       <strong>{latest ? transferDirectionLabel(latest) : discoveryCopy.label}</strong>
+      {diagnosticsAdvice ? <small>{diagnosticsAdvice}</small> : null}
     </div>
   );
 }
@@ -1421,6 +1621,7 @@ function NearbyDevices({
   busy,
   discoveryStatus,
   devices,
+  localPlatform,
   selectedDeviceId,
   onSelectDevice,
   onTrustDevice
@@ -1428,11 +1629,12 @@ function NearbyDevices({
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
   devices: DeviceDto[];
+  localPlatform: string | null;
   selectedDeviceId: string | null;
   onSelectDevice: (device: DeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = discoveryStateCopy(discoveryStatus, devices.length);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, devices.length, localPlatform);
 
   return (
     <section className="nearby-strip">
@@ -1451,6 +1653,7 @@ function NearbyDevices({
           {devices.map((device) => {
             const trusted = device.trust_state === "Trusted";
             const selected = device.id === selectedDeviceId;
+            const model = buildNearbyDeviceViewModel(device, selected);
             return (
               <div
                 className={[
@@ -1466,23 +1669,23 @@ function NearbyDevices({
                 <span className="device-main">
                   <strong>{device.name}</strong>
                   <small>
-                    {devicePlatformLabel(device.platform)} · {trustStateLabel(device.trust_state)}
+                    {devicePlatformLabel(device.platform)} · {model.statusLabel}
                     {device.pairing_code ? ` · ${device.pairing_code}` : ""}
                   </small>
                 </span>
                 <span className="device-actions">
                   {trusted ? (
                     <button className="target-button" onClick={() => onSelectDevice(device)} type="button">
-                      {selected ? "已选" : "选择"}
+                      {model.actionLabel}
                     </button>
                   ) : (
                     <button
                       className="trust-button"
-                      disabled={busy === "pair" || !device.public_key_fingerprint}
+                      disabled={busy === "pair" || !model.canPair}
                       onClick={() => onTrustDevice(device)}
                       type="button"
                     >
-                      配对
+                      {model.actionLabel}
                     </button>
                   )}
                 </span>
@@ -1503,6 +1706,7 @@ function NearbyDevices({
 function DevicePanel({
   busy,
   discoveryStatus,
+  localPlatform,
   nearbyDevices,
   selectedDeviceId,
   trustedDevices,
@@ -1513,6 +1717,7 @@ function DevicePanel({
 }: {
   busy: BusyMode | null;
   discoveryStatus: DiscoveryStatusDto | null;
+  localPlatform: string | null;
   nearbyDevices: DeviceDto[];
   selectedDeviceId: string | null;
   trustedDevices: TrustedDeviceDto[];
@@ -1545,6 +1750,7 @@ function DevicePanel({
             {trustedDevices.map((device) => {
               const online = nearbyDevices.some((nearby) => nearby.id === device.device_id);
               const selected = selectedDeviceId === device.device_id;
+              const model = buildTrustedDeviceViewModel(device, Date.now(), online);
               return (
                 <div
                   className={selected ? "trusted-device is-selected" : "trusted-device"}
@@ -1553,16 +1759,12 @@ function DevicePanel({
                   <span className={online ? "device-dot is-online" : "device-dot"} />
                   <span className="trusted-main">
                     <strong>{device.device_name}</strong>
-                    <small>
-                      {devicePlatformLabel(device.platform)} · {shortDeviceId(device.device_id)}
-                    </small>
+                    <small>{model.detailLabel}</small>
                   </span>
-                  <span className="trusted-meta">
-                    {online ? "在线" : formatDeviceSeenTime(device.last_seen_at_ms)}
-                  </span>
+                  <span className="trusted-meta">{model.presenceLabel}</span>
                   <span className="trusted-actions">
                     <button className="target-button" onClick={() => onSelectTrustedDevice(device)} type="button">
-                      {selected ? "已选" : "选择"}
+                      {selected ? "已选" : model.actionLabel}
                     </button>
                     <button className="text-button" disabled={busy === "forget"} onClick={() => onForgetTrustedDevice(device)} type="button">
                       移除
@@ -1581,6 +1783,7 @@ function DevicePanel({
         busy={busy}
         discoveryStatus={discoveryStatus}
         devices={nearbyDevices}
+        localPlatform={localPlatform}
         selectedDeviceId={selectedDeviceId}
         onSelectDevice={onSelectNearbyDevice}
         onTrustDevice={onTrustDevice}
@@ -1592,6 +1795,7 @@ function DevicePanel({
 function ReceivePanel({
   bindPort,
   busy,
+  diagnostics,
   receiveDir,
   receivePolicy,
   pendingOffer,
@@ -1611,6 +1815,7 @@ function ReceivePanel({
 }: {
   bindPort: string;
   busy: BusyMode | null;
+  diagnostics: ReceivePortDiagnosticsDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   pendingOffer: PendingReceiveOfferDto | null;
@@ -1640,6 +1845,7 @@ function ReceivePanel({
     receiveReport?.sender_device_name?.trim() ||
     receiveReport?.sender_device_id ||
     null;
+  const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
 
   return (
     <section className="function-panel">
@@ -1647,6 +1853,7 @@ function ReceivePanel({
         <div>
           <strong>{receiveSession ? "收件开启" : "收件关闭"}</strong>
           <span>{receiveSession?.bind_addr ?? "未监听"}</span>
+          {diagnosticsAdvice ? <small>{diagnosticsAdvice}</small> : null}
         </div>
         <div className="panel-actions">
           {receiveSession ? (
@@ -1735,6 +1942,7 @@ function ReceivePanel({
               {pendingPairingRequest.device_name} · {devicePlatformLabel(pendingPairingRequest.platform)} · 配对码{" "}
               {pendingPairingRequest.pairing_code}
             </span>
+            <small>确认两端配对码一致</small>
           </div>
           <div className="offer-actions">
             <button className="tool-button" disabled={busy === "pair"} onClick={() => onRespondPairingRequest(false)} type="button">
@@ -1757,6 +1965,147 @@ function ReceivePanel({
           </span>
         </div>
       ) : null}
+    </section>
+  );
+}
+
+function SettingsPanel({
+  bindPort,
+  busy,
+  deviceNameInput,
+  discoveryStatus,
+  receiveDir,
+  receivePolicy,
+  receiveSession,
+  setBindPort,
+  setDeviceNameInput,
+  setReceiveDir,
+  snapshot,
+  onChooseReceiveDir,
+  onOpenReceiveDir,
+  onSaveDeviceName,
+  onSaveReceiveDir,
+  onSaveReceivePort,
+  onStartReceive,
+  onStopReceive,
+  onUpdateReceivePolicy
+}: {
+  bindPort: string;
+  busy: BusyMode | null;
+  deviceNameInput: string;
+  discoveryStatus: DiscoveryStatusDto | null;
+  receiveDir: string;
+  receivePolicy: ReceivePolicyMode;
+  receiveSession: ReceiveSessionDto | null;
+  setBindPort: (value: string) => void;
+  setDeviceNameInput: (value: string) => void;
+  setReceiveDir: (value: string) => void;
+  snapshot: AppSnapshot | null;
+  onChooseReceiveDir: () => void;
+  onOpenReceiveDir: () => void;
+  onSaveDeviceName: () => void;
+  onSaveReceiveDir: () => void;
+  onSaveReceivePort: () => void;
+  onStartReceive: () => void;
+  onStopReceive: () => void;
+  onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
+}) {
+  const model = buildSettingsViewModel({
+    snapshot,
+    deviceNameInput,
+    discoveryStatus,
+    receiveSession,
+    receiveDir,
+    receivePolicy,
+    bindPort
+  });
+
+  return (
+    <section className="function-panel settings-panel">
+      <div className="panel-head">
+        <div>
+          <strong>{model.deviceName}</strong>
+          <span>{model.platformLabel} · {model.receiveStateLabel}</span>
+          {model.fingerprintLabel ? <small>{model.fingerprintLabel}</small> : null}
+        </div>
+        <div className="panel-actions">
+          {receiveSession ? (
+            <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
+              关闭收件
+            </button>
+          ) : (
+            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+              打开收件
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="control-row is-name">
+        <label>
+          设备名
+          <div className="input-action">
+            <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
+            <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
+              保存
+            </button>
+          </div>
+        </label>
+      </div>
+
+      <div className="settings-readout">
+        <span><strong>监听</strong>{model.receiveAddressLabel}</span>
+        <span><strong>策略</strong>{model.receivePolicyLabel}</span>
+        <span><strong>发现</strong>{model.discoveryLabel}</span>
+        <span><strong>托盘</strong>{model.trayLabel}</span>
+      </div>
+
+      <div className="control-row">
+        <label>
+          接收目录
+          <div className="input-action receive-dir-action">
+            <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
+              选择
+            </button>
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
+              保存
+            </button>
+          </div>
+        </label>
+        <label className="port-field">
+          端口
+          <div className="input-action receive-port-action">
+            <input disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
+              保存
+            </button>
+          </div>
+        </label>
+      </div>
+
+      <div className="policy-row">
+        <span>接收策略</span>
+        <div className="policy-segment">
+          {RECEIVE_POLICY_OPTIONS.map((option) => (
+            <button
+              className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
+              disabled={busy === "receive-policy"}
+              key={option.value}
+              onClick={() => onUpdateReceivePolicy(option.value)}
+              type="button"
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="settings-actions">
+        <button className="tool-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+          打开接收目录
+        </button>
+      </div>
     </section>
   );
 }
@@ -1835,7 +2184,8 @@ function HistoryPanel({
   onDeleteTransfer,
   onOpenTransfer,
   onResendTransfer,
-  onSelectTransfer
+  onSelectTransfer,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   selectedTransferId: string | null;
@@ -1851,6 +2201,7 @@ function HistoryPanel({
   onOpenTransfer: (transfer: TransferDto) => void;
   onResendTransfer: (transfer: TransferDto) => void;
   onSelectTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
 }) {
   return (
     <section className="history-panel">
@@ -1870,6 +2221,7 @@ function HistoryPanel({
           metrics={transferMetrics}
           status={transferStatus}
           onCancel={onCancelTransfer}
+          onUseFallbackCode={onUseFallbackCode}
         />
       ) : null}
 
@@ -1878,6 +2230,8 @@ function HistoryPanel({
           {transfers.map((transfer) => {
             const selected = transfer.id === selectedTransferId;
             const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+            const detail = buildTransferHistoryDetailViewModel(transfer);
+            const fallbackActionLabel = transferFallbackActionLabel(transfer);
             return (
               <div
                 className={[
@@ -1902,21 +2256,53 @@ function HistoryPanel({
                   </span>
                   <time>{formatTransferTime(transfer.updated_at_ms)}</time>
                 </button>
+                {shouldShowHistoryProgress(transfer) ? (
+                  <div className="history-progress" aria-label="历史传输进度">
+                    <span style={{ width: `${Math.round(transfer.progress * 100)}%` }} />
+                  </div>
+                ) : null}
                 {selected ? (
                   <div className="history-detail">
-                    <div className="history-paths">
-                      {paths.slice(0, 6).map((path) => (
-                        <span key={path} title={path}>{path}</span>
-                      ))}
-                      {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+                    <div className="history-detail-main">
+                      <div className="history-detail-grid">
+                        {detail.progressLabel ? (
+                          <span><strong>进度</strong>{detail.progressLabel}</span>
+                        ) : null}
+                        {detail.peerLabel ? (
+                          <span><strong>对方</strong>{detail.peerLabel}</span>
+                        ) : null}
+                        {detail.locationLabel ? (
+                          <span><strong>位置</strong>{detail.locationLabel}</span>
+                        ) : null}
+                        {detail.recoveryLabel ? (
+                          <span><strong>恢复</strong>{detail.recoveryLabel}</span>
+                        ) : null}
+                        {detail.errorLabel ? (
+                          <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
+                        ) : null}
+                        {detail.adviceLabel ? (
+                          <span><strong>建议</strong>{detail.adviceLabel}</span>
+                        ) : null}
+                      </div>
+                      <div className="history-paths">
+                        {paths.slice(0, 6).map((path) => (
+                          <span key={path} title={path}>{path}</span>
+                        ))}
+                        {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+                      </div>
                     </div>
                     <div className="history-actions">
                       <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
                         打开
                       </button>
-                      {transfer.direction === "send" ? (
+                      {detail.primaryActionLabel ? (
                         <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                          {transferRetryActionLabel(transfer)}
+                          {detail.primaryActionLabel}
+                        </button>
+                      ) : null}
+                      {fallbackActionLabel ? (
+                        <button className="text-button" onClick={onUseFallbackCode} type="button">
+                          {fallbackActionLabel}
                         </button>
                       ) : null}
                       <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -1945,7 +2331,10 @@ function StatusLine({
   transferMetrics,
   transferStatus,
   transferCount,
-  onCancelTransfer
+  recoveryTransfer,
+  onCancelTransfer,
+  onRecoverTransfer,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   plan: TransferPlanDto | null;
@@ -1958,7 +2347,10 @@ function StatusLine({
   };
   transferStatus: TransferStatusDto | null;
   transferCount: number;
+  recoveryTransfer: TransferDto | null;
   onCancelTransfer: () => void;
+  onRecoverTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
 }) {
   if (transferStatus && transferStatus.phase !== "completed") {
     return (
@@ -1966,7 +2358,10 @@ function StatusLine({
         busy={busy}
         metrics={transferMetrics}
         status={transferStatus}
+        recoveryTransfer={recoveryTransfer}
         onCancel={onCancelTransfer}
+        onRecover={onRecoverTransfer}
+        onUseFallbackCode={onUseFallbackCode}
       />
     );
   }
@@ -2019,7 +2414,8 @@ function RecentActivity({
   onDeleteTransfer,
   onOpenTransfer,
   onResendTransfer,
-  onSelectTransfer
+  onSelectTransfer,
+  onUseFallbackCode
 }: {
   busy: BusyMode | null;
   compact?: boolean;
@@ -2030,6 +2426,7 @@ function RecentActivity({
   onOpenTransfer: (transfer: TransferDto) => void;
   onResendTransfer: (transfer: TransferDto) => void;
   onSelectTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
 }) {
   const recentTransfers = transfers.slice(0, compact ? 5 : 3);
   if (recentTransfers.length === 0) return null;
@@ -2046,6 +2443,9 @@ function RecentActivity({
         {recentTransfers.map((transfer) => {
           const selected = transfer.id === selectedTransferId;
           const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+          const actionLabel = transferPrimaryActionLabel(transfer);
+          const fallbackActionLabel = transferFallbackActionLabel(transfer);
+          const detailLine = buildRecentTransferDetailLine(transfer);
           return (
             <div
               className={[
@@ -2066,6 +2466,7 @@ function RecentActivity({
               </button>
               {selected ? (
                 <div className="recent-detail">
+                  {detailLine ? <strong>{detailLine}</strong> : null}
                   {paths.slice(0, 3).map((path) => (
                     <span key={path} title={path}>{path}</span>
                   ))}
@@ -2074,9 +2475,14 @@ function RecentActivity({
                     <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
                       打开
                     </button>
-                    {transfer.direction === "send" ? (
+                    {actionLabel ? (
                       <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                        {transferRetryActionLabel(transfer)}
+                        {actionLabel}
+                      </button>
+                    ) : null}
+                    {fallbackActionLabel ? (
+                      <button className="text-button" onClick={onUseFallbackCode} type="button">
+                        {fallbackActionLabel}
                       </button>
                     ) : null}
                     <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
@@ -2093,11 +2499,82 @@ function RecentActivity({
   );
 }
 
+function ActiveTransferBar({
+  busy,
+  metrics,
+  status,
+  recoveryTransfer,
+  onCancel,
+  onRecover,
+  onUseFallbackCode
+}: {
+  busy: BusyMode | null;
+  metrics: {
+    speedBytesPerSecond: number | null;
+    etaSeconds: number | null;
+  };
+  status: TransferStatusDto;
+  recoveryTransfer: TransferDto | null;
+  onCancel: () => void;
+  onRecover: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
+}) {
+  const model = buildTransferProgressViewModel(status, metrics);
+  const recoveryActions = currentTransferRecoveryActions(status, recoveryTransfer);
+  const canCancel =
+    !matchesTerminalTransferPhase(status.phase) &&
+    (status.direction === "send" ||
+      (status.direction === "receive" && isReceiveTransferActivePhase(status.phase)));
+
+  return (
+    <section className={isRecoverableCurrentStatus(status.phase) ? "active-transfer is-error" : "active-transfer"}>
+      <div className="active-transfer-main">
+        <div className="active-transfer-title">
+          <strong>{model.title}</strong>
+          <span title={model.rootName}>{model.rootName}</span>
+        </div>
+        <div className="active-transfer-meter" aria-label="当前传输进度">
+          <span style={{ width: `${model.progressPercent}%` }} />
+        </div>
+        <div className="active-transfer-meta">
+          <span>{model.percentLabel}</span>
+          <span>{model.bytesLabel}</span>
+          <span>{model.fileIndexLabel}</span>
+          {model.speedLabel ? <span>{model.speedLabel}</span> : null}
+          {model.etaLabel ? <span>{model.etaLabel}</span> : null}
+          {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
+        </div>
+      </div>
+      {canCancel ? (
+        <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
+          取消
+        </button>
+      ) : isRecoverableCurrentStatus(status.phase) ? (
+        <div className="transfer-status-actions">
+          {recoveryActions.primaryLabel && recoveryTransfer ? (
+            <button className="text-button" disabled={busy === "resend"} onClick={() => onRecover(recoveryTransfer)} type="button">
+              {recoveryActions.primaryLabel}
+            </button>
+          ) : null}
+          {recoveryActions.fallbackLabel ? (
+            <button className="text-button" onClick={onUseFallbackCode} type="button">
+              {recoveryActions.fallbackLabel}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 function TransferStatusView({
   busy,
   metrics,
   status,
-  onCancel
+  recoveryTransfer,
+  onCancel,
+  onRecover,
+  onUseFallbackCode
 }: {
   busy?: BusyMode | null;
   metrics?: {
@@ -2105,8 +2582,13 @@ function TransferStatusView({
     etaSeconds: number | null;
   };
   status: TransferStatusDto;
+  recoveryTransfer?: TransferDto | null;
   onCancel?: () => void;
+  onRecover?: (transfer: TransferDto) => void;
+  onUseFallbackCode?: () => void;
 }) {
+  const model = buildTransferProgressViewModel(status, metrics ?? { speedBytesPerSecond: null, etaSeconds: null });
+  const recoveryActions = currentTransferRecoveryActions(status, recoveryTransfer ?? null);
   const canCancel =
     onCancel &&
     !matchesTerminalTransferPhase(status.phase) &&
@@ -2114,34 +2596,42 @@ function TransferStatusView({
       (status.direction === "receive" && isReceiveTransferActivePhase(status.phase)));
 
   return (
-    <div className={status.phase === "failed" ? "transfer-status is-error" : "transfer-status"}>
+    <div className={isRecoverableCurrentStatus(status.phase) ? "transfer-status is-error" : "transfer-status"}>
       <div className="transfer-status-head">
-        <strong>{phaseLabel(status.phase)}</strong>
+        <strong>{model.title}</strong>
         {status.total_bytes > 0 ? (
-          <span>
-            {formatBytes(status.bytes_transferred)} / {formatBytes(status.total_bytes)}
-          </span>
+          <span>{model.percentLabel} · {model.bytesLabel}</span>
         ) : null}
         {canCancel ? (
           <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
             取消
           </button>
+        ) : isRecoverableCurrentStatus(status.phase) ? (
+          <span className="transfer-status-actions">
+            {recoveryActions.primaryLabel && recoveryTransfer && onRecover ? (
+              <button className="text-button" disabled={busy === "resend"} onClick={() => onRecover(recoveryTransfer)} type="button">
+                {recoveryActions.primaryLabel}
+              </button>
+            ) : null}
+            {recoveryActions.fallbackLabel && onUseFallbackCode ? (
+              <button className="text-button" onClick={onUseFallbackCode} type="button">
+                {recoveryActions.fallbackLabel}
+              </button>
+            ) : null}
+          </span>
         ) : null}
       </div>
       {status.total_bytes > 0 ? (
         <div className="progress-track" aria-label="传输进度">
-          <span style={{ width: `${Math.round(status.progress * 100)}%` }} />
+          <span style={{ width: `${model.progressPercent}%` }} />
         </div>
       ) : null}
       <div className="transfer-status-meta">
-        <span>{status.message}</span>
-        {metrics?.speedBytesPerSecond ? (
-          <span>
-            {formatBytes(metrics.speedBytesPerSecond)}/s
-            {metrics.etaSeconds ? ` · 剩余 ${formatDuration(metrics.etaSeconds)}` : ""}
-          </span>
-        ) : null}
-        {status.current_file ? <span>{status.current_file}</span> : null}
+        <span>{model.message}</span>
+        <span>{model.fileIndexLabel}</span>
+        {model.speedLabel ? <span>{model.speedLabel}{model.etaLabel ? ` · ${model.etaLabel}` : ""}</span> : null}
+        {model.adviceLabel ? <span>{model.adviceLabel}</span> : null}
+        {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
       </div>
     </div>
   );
@@ -2179,29 +2669,14 @@ function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
   };
 }
 
-function formatBytes(bytes: number) {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-  return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
-}
-
 function normalizeReceivePolicy(value: string): ReceivePolicyMode {
   if (value === "block_all") return value;
   return "always_ask";
 }
 
-function parseReceivePort(value: string): number | null {
-  const trimmed = value.trim();
-  if (!/^\d+$/.test(trimmed)) return null;
-  const port = Number(trimmed);
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return null;
-  return port;
-}
-
 function portFromBindAddr(bindAddr: string): number | null {
   const port = bindAddr.trim().split(":").pop();
-  return port ? parseReceivePort(port) : null;
+  return port ? parseReceivePortValue(port) : null;
 }
 
 function pendingOfferFilePreview(files: PendingReceiveOfferDto["files"]) {
@@ -2268,59 +2743,34 @@ function transferMetaLabel(transfer: TransferDto) {
   return peer ? `${count} · ${size} · ${peer}` : `${count} · ${size}`;
 }
 
-function transferRetryActionLabel(transfer: TransferDto) {
-  if (isRecoverableSendTransfer(transfer)) return "继续发送";
-  if (transfer.status === "failed" || transfer.status === "cancelled") return "重试";
-  return "重发";
-}
-
-function isRecoverableSendTransfer(transfer: TransferDto) {
-  return (
-    transfer.direction === "send" &&
-    (transfer.status === "failed" || transfer.status === "cancelled") &&
-    transfer.total_bytes > 0 &&
-    transfer.transferred_bytes > 0 &&
-    transfer.transferred_bytes < transfer.total_bytes
-  );
-}
-
 function transferRecoveryLabel(transfer: TransferDto) {
-  if (!isRecoverableSendTransfer(transfer)) return null;
+  if (transferPrimaryActionLabel(transfer) !== "继续发送") return null;
   return `已传 ${formatBytes(transfer.transferred_bytes)} / ${formatBytes(transfer.total_bytes)}`;
-}
-
-function phaseLabel(phase: string) {
-  if (phase === "cancelled") return "已取消";
-  if (phase === "connecting") return "连接中";
-  if (phase === "listening") return "收件开启";
-  if (phase === "awaiting_approval") return "等待确认";
-  if (phase === "accepted") return "已接受";
-  if (phase === "transferring") return "传输中";
-  if (phase === "verifying") return "校验中";
-  if (phase === "failed") return "传输失败";
-  if (phase === "declined") return "已拒绝";
-  if (phase === "expired") return "已超时";
-  if (phase === "closed") return "收件关闭";
-  if (phase === "completed") return "传输完成";
-  return phase;
 }
 
 function matchesTerminalTransferPhase(phase: string) {
   return ["completed", "failed", "cancelled", "declined", "expired", "closed", "blocked"].includes(phase);
 }
 
+function isRecoverableCurrentStatus(phase: string) {
+  return phase === "failed" || phase === "cancelled";
+}
+
 function isReceiveTransferActivePhase(phase: string) {
   return phase === "accepted" || phase === "transferring" || phase === "verifying";
 }
 
-function formatDuration(seconds: number) {
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const rest = seconds % 60;
-  if (minutes < 60) return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const minuteRest = minutes % 60;
-  return minuteRest > 0 ? `${hours}h ${minuteRest}m` : `${hours}h`;
+function shouldShowActiveTransferBar(status: TransferStatusDto) {
+  return status.phase !== "completed" && status.phase !== "closed";
+}
+
+function shouldShowHistoryProgress(transfer: TransferDto) {
+  return (
+    transfer.total_bytes > 0 &&
+    transfer.transferred_bytes > 0 &&
+    transfer.transferred_bytes < transfer.total_bytes &&
+    transfer.status !== "completed"
+  );
 }
 
 function formatTransferTime(timestampMs: number) {
@@ -2335,77 +2785,6 @@ function formatTransferTime(timestampMs: number) {
   }).format(date);
 }
 
-function formatDeviceSeenTime(timestampMs: number) {
-  if (timestampMs <= 0) return "未见";
-  const elapsedSeconds = Math.max(0, Math.floor((Date.now() - timestampMs) / 1000));
-  if (elapsedSeconds < 60) return "刚刚";
-  if (elapsedSeconds < 3600) return `${Math.floor(elapsedSeconds / 60)}m 前`;
-  if (elapsedSeconds < 86400) return `${Math.floor(elapsedSeconds / 3600)}h 前`;
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false
-  }).format(new Date(timestampMs));
-}
-
-function discoveryStateCopy(status: DiscoveryStatusDto | null, deviceCount: number) {
-  if (!status) {
-    return {
-      label: "启动中",
-      subtitle: "初始化",
-      emptyTitle: "启动中",
-      emptyBody: "正在准备自动发现",
-      targetLabel: "启动中",
-      isError: false
-    };
-  }
-
-  if (status.phase === "unavailable") {
-    return {
-      label: "发现异常",
-      subtitle: status.last_error ? "mDNS 异常" : "不可用",
-      emptyTitle: "发现异常",
-      emptyBody: unavailableDiscoveryHint(),
-      targetLabel: "发现异常 · 备用码",
-      isError: true
-    };
-  }
-
-  if (!status.advertised) {
-    const hasNetworkError = Boolean(status.last_error);
-    return {
-      label: hasNetworkError ? "广播异常" : "未广播",
-      subtitle: hasNetworkError ? "检查网络" : "收件关闭",
-      emptyTitle: hasNetworkError ? "广播异常" : "未广播",
-      emptyBody: hasNetworkError ? broadcastTroubleshootingHint() : "打开收件后会广播本机",
-      targetLabel: hasNetworkError ? "广播异常 · 权限/网络" : "未广播 · 打开收件",
-      isError: hasNetworkError
-    };
-  }
-
-  if (deviceCount > 0) {
-    return {
-      label: `${deviceCount} 台在线`,
-      subtitle: status.last_seen_seconds_ago == null ? "在线" : `${status.last_seen_seconds_ago}s 前`,
-      emptyTitle: "",
-      emptyBody: "",
-      targetLabel: `${deviceCount} 台在线`,
-      isError: false
-    };
-  }
-
-  return {
-    label: "扫描中",
-    subtitle: "搜索中",
-    emptyTitle: "无设备",
-    emptyBody: discoveryTroubleshootingHint(),
-    targetLabel: "扫描中 · 权限/同网段",
-    isError: false
-  };
-}
-
 function platformLabel(platform: string) {
   if (platform === "macos") return "macOS";
   if (platform === "windows") return "Windows";
@@ -2415,26 +2794,6 @@ function platformLabel(platform: string) {
   if (platform === "openharmony") return "OpenHarmony";
   if (platform === "web") return "Web";
   return "Unknown";
-}
-
-function devicePlatformLabel(platform: string) {
-  if (platform === "MacOS" || platform === "macos") return "macOS";
-  if (platform === "Windows" || platform === "windows") return "Windows";
-  if (platform === "Linux" || platform === "linux") return "Linux";
-  return platform || "Unknown";
-}
-
-function trustStateLabel(trustState: string) {
-  if (trustState === "Trusted") return "已信任";
-  if (trustState === "Pairing") return "配对中";
-  if (trustState === "Blocked") return "已阻止";
-  if (trustState === "Local") return "本机";
-  return "未配对";
-}
-
-function shortDeviceId(deviceId: string) {
-  if (deviceId.length <= 22) return deviceId;
-  return `${deviceId.slice(0, 17)}…${deviceId.slice(-4)}`;
 }
 
 function errorMessage(error: unknown) {
