@@ -1,6 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use aes_gcm::{Aes256Gcm, Nonce as AesGcmNonce};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use chacha20poly1305::{
+    aead::{Aead, Payload},
+    KeyInit, XChaCha20Poly1305, XNonce,
+};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -568,6 +573,38 @@ pub struct SessionKeyDerivationContext {
 pub struct SessionKeyMaterial {
     pub send_key: [u8; SESSION_TRAFFIC_KEY_LEN],
     pub receive_key: [u8; SESSION_TRAFFIC_KEY_LEN],
+}
+
+impl SessionKeyMaterial {
+    pub fn seal_send_payload(
+        &self,
+        header: &SessionTrafficFrameHeader,
+        associated_data: &[u8],
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, ProtocolError> {
+        seal_session_payload(
+            &header.cipher,
+            &self.send_key,
+            &header.nonce,
+            associated_data,
+            plaintext,
+        )
+    }
+
+    pub fn open_receive_payload(
+        &self,
+        header: &SessionTrafficFrameHeader,
+        associated_data: &[u8],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>, ProtocolError> {
+        open_session_payload(
+            &header.cipher,
+            &self.receive_key,
+            &header.nonce,
+            associated_data,
+            ciphertext,
+        )
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -1400,6 +1437,118 @@ fn session_frame_nonce(cipher: &str, counter: u64) -> Result<Vec<u8>, ProtocolEr
     let counter_offset = nonce_len - std::mem::size_of::<u64>();
     nonce[counter_offset..].copy_from_slice(&counter.to_be_bytes());
     Ok(nonce)
+}
+
+fn seal_session_payload(
+    cipher: &str,
+    key: &[u8; SESSION_TRAFFIC_KEY_LEN],
+    nonce: &[u8],
+    associated_data: &[u8],
+    plaintext: &[u8],
+) -> Result<Vec<u8>, ProtocolError> {
+    validate_session_cipher("cipher", cipher)?;
+    match cipher {
+        SESSION_CIPHER_XCHACHA20POLY1305 => {
+            let nonce = XNonce::from_slice(validate_session_nonce(
+                cipher,
+                nonce,
+                SESSION_XCHACHA20POLY1305_NONCE_LEN,
+            )?);
+            XChaCha20Poly1305::new(key.into())
+                .encrypt(
+                    nonce,
+                    Payload {
+                        msg: plaintext,
+                        aad: associated_data,
+                    },
+                )
+                .map_err(|_| session_payload_seal_error())
+        }
+        SESSION_CIPHER_AES256GCM => {
+            let nonce = AesGcmNonce::from_slice(validate_session_nonce(
+                cipher,
+                nonce,
+                SESSION_AES256GCM_NONCE_LEN,
+            )?);
+            Aes256Gcm::new(key.into())
+                .encrypt(
+                    nonce,
+                    Payload {
+                        msg: plaintext,
+                        aad: associated_data,
+                    },
+                )
+                .map_err(|_| session_payload_seal_error())
+        }
+        _ => unreachable!("validate_session_cipher rejects unsupported ciphers"),
+    }
+}
+
+fn open_session_payload(
+    cipher: &str,
+    key: &[u8; SESSION_TRAFFIC_KEY_LEN],
+    nonce: &[u8],
+    associated_data: &[u8],
+    ciphertext: &[u8],
+) -> Result<Vec<u8>, ProtocolError> {
+    validate_session_cipher("cipher", cipher)?;
+    match cipher {
+        SESSION_CIPHER_XCHACHA20POLY1305 => {
+            let nonce = XNonce::from_slice(validate_session_nonce(
+                cipher,
+                nonce,
+                SESSION_XCHACHA20POLY1305_NONCE_LEN,
+            )?);
+            XChaCha20Poly1305::new(key.into())
+                .decrypt(
+                    nonce,
+                    Payload {
+                        msg: ciphertext,
+                        aad: associated_data,
+                    },
+                )
+                .map_err(|_| session_payload_open_error())
+        }
+        SESSION_CIPHER_AES256GCM => {
+            let nonce = AesGcmNonce::from_slice(validate_session_nonce(
+                cipher,
+                nonce,
+                SESSION_AES256GCM_NONCE_LEN,
+            )?);
+            Aes256Gcm::new(key.into())
+                .decrypt(
+                    nonce,
+                    Payload {
+                        msg: ciphertext,
+                        aad: associated_data,
+                    },
+                )
+                .map_err(|_| session_payload_open_error())
+        }
+        _ => unreachable!("validate_session_cipher rejects unsupported ciphers"),
+    }
+}
+
+fn validate_session_nonce<'a>(
+    cipher: &str,
+    nonce: &'a [u8],
+    expected_len: usize,
+) -> Result<&'a [u8], ProtocolError> {
+    if nonce.len() != expected_len {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("{cipher} nonce must be {expected_len} bytes"),
+        ));
+    }
+    Ok(nonce)
+}
+
+fn session_payload_seal_error() -> ProtocolError {
+    ProtocolError::new(ErrorCode::InvalidPayload, "failed to seal session payload")
+}
+
+fn session_payload_open_error() -> ProtocolError {
+    ProtocolError::new(ErrorCode::InvalidPayload, "failed to open session payload")
 }
 
 fn session_public_key_from_secret(secret: [u8; SESSION_SHARED_SECRET_LEN]) -> String {
@@ -2549,6 +2698,81 @@ mod tests {
         .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("unsupported session cipher"));
+    }
+
+    #[test]
+    fn seals_and_opens_xchacha20poly1305_session_payloads() {
+        let keys = SessionKeyMaterial {
+            send_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            3,
+        )
+        .unwrap();
+        let plaintext = br#"{"kind":"file.offer"}"#;
+        let aad = b"session-1";
+
+        let sealed = keys.seal_send_payload(&header, aad, plaintext).unwrap();
+        let opened = keys.open_receive_payload(&header, aad, &sealed).unwrap();
+
+        assert_ne!(sealed, plaintext);
+        assert_eq!(opened, plaintext);
+    }
+
+    #[test]
+    fn rejects_tampered_session_payloads() {
+        let keys = SessionKeyMaterial {
+            send_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            3,
+        )
+        .unwrap();
+        let aad = b"session-1";
+        let mut sealed = keys
+            .seal_send_payload(&header, aad, b"control payload")
+            .unwrap();
+        sealed[0] ^= 0x80;
+
+        let error = keys
+            .open_receive_payload(&header, aad, &sealed)
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("failed to open session payload"));
+    }
+
+    #[test]
+    fn seals_and_opens_aes256gcm_session_payloads() {
+        let keys = SessionKeyMaterial {
+            send_key: [19_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [19_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_AES256GCM,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            5,
+        )
+        .unwrap();
+
+        let sealed = keys
+            .seal_send_payload(&header, b"session-1", b"aes payload")
+            .unwrap();
+        let opened = keys
+            .open_receive_payload(&header, b"session-1", &sealed)
+            .unwrap();
+
+        assert_ne!(sealed, b"aes payload");
+        assert_eq!(opened, b"aes payload");
     }
 
     #[test]
