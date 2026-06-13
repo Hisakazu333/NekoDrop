@@ -72,7 +72,7 @@
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
 | Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256 和配对能力，不声明未完成的加密文件流 / Agent host。 |
-| Encrypted session handshake | 部分接入 | 协议层已有 `session.hello` / `session.ready` / `session.control` payload、帧读写、cipher 协商 helper、算法标签白名单、transcript hash、`session.ready` 构造器、网络层 verified reader、X25519 ephemeral keypair / shared secret API、HKDF-SHA256 send/receive traffic key material 派生、traffic frame counter / nonce groundwork、XChaCha20-Poly1305 / AES-256-GCM payload seal/open API；还没有把控制消息加密接入桌面 TCP 主线，更没有文件流加密。 |
+| Encrypted session handshake | 部分接入 | 协议层已有 `session.hello` / `session.ready` / `session.control` payload、帧读写、cipher 协商 helper、算法标签白名单、transcript hash、`session.ready` 构造器、网络层 verified reader、X25519 ephemeral keypair / shared secret API、HKDF-SHA256 send/receive traffic key material 派生、traffic frame counter / nonce groundwork、XChaCha20-Poly1305 / AES-256-GCM payload seal/open API；网络层可以通过现有 TCP JSON frame 读写 encrypted `session.control` envelope 并解出内部 payload；还没有把控制消息加密接入桌面 TCP 主线，更没有文件流加密。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
 | File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path、Windows 不安全路径片段和半截 sender identity。 |
 | TCP transport | 已接入 | 当前真实传输主线；接收文件帧数量有上限，并会按已接受 offer 的 file_count 做早期校验。 |
