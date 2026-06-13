@@ -73,11 +73,23 @@ test("builds a restrained settings view model from real app state", () => {
     deviceName: "MacBook",
     canSaveDeviceName: false,
     platformLabel: "macOS",
+    deviceIdLabel: "device-1",
+    deviceKindLabel: "desktop",
     fingerprintLabel: "aa:bb:cc",
+    capabilitiesLabel: "file_transfer · sha256",
     receiveStateLabel: "收件开启",
     receiveAddressLabel: "0.0.0.0:45821",
+    connectionCodeLabel: "nekodrop:v1:tcp:192.168.1.10:45821",
+    defaultReceivePortLabel: "45821",
+    discoveryEnabledLabel: "配置已启用",
     discoveryLabel: "已广播",
-    trayLabel: "基础窗口菜单",
+    discoveryDetailLabel: "本机已广播，正在扫描附近设备",
+    lanIpLabel: "192.168.1.10",
+    nearbyDeviceCountLabel: "1 台附近",
+    serviceTypeLabel: "_nekodrop._tcp.local.",
+    receiveDiagnosticsLabel: null,
+    lanIpsLabel: null,
+    trayLabel: "窗口菜单已启用",
     canSaveReceiveDir: false,
     canSaveReceivePort: false,
     receiveConfigLocked: true,
@@ -100,11 +112,12 @@ test("keeps settings usable before the first snapshot arrives", () => {
   assert.equal(model.deviceName, "这台电脑");
   assert.equal(model.canSaveDeviceName, false);
   assert.equal(model.platformLabel, "Unknown");
+  assert.equal(model.deviceIdLabel, null);
   assert.equal(model.fingerprintLabel, null);
   assert.equal(model.receiveStateLabel, "收件关闭");
   assert.equal(model.receiveAddressLabel, "未监听");
   assert.equal(model.discoveryLabel, "未知");
-  assert.equal(model.trayLabel, "基础窗口菜单");
+  assert.equal(model.trayLabel, "仅窗口标题");
   assert.equal(model.canSaveReceiveDir, false);
   assert.equal(model.canSaveReceivePort, false);
   assert.equal(model.receiveConfigLocked, false);
