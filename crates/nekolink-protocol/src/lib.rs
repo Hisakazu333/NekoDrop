@@ -533,6 +533,33 @@ pub struct SessionReadyPayload {
     pub handshake_hash: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VerifiedSessionHandshake {
+    pub session_id: String,
+    pub key_agreement: String,
+    pub cipher: String,
+    pub handshake_hash: String,
+    pub initiator: DeviceIdentity,
+    pub responder: DeviceIdentity,
+}
+
+impl VerifiedSessionHandshake {
+    pub fn from_ready(
+        hello: &SessionHelloPayload,
+        ready: &SessionReadyPayload,
+    ) -> Result<Self, ProtocolError> {
+        ready.verify_for_hello(hello)?;
+        Ok(Self {
+            session_id: hello.session_id.clone(),
+            key_agreement: hello.key_agreement.clone(),
+            cipher: ready.cipher.clone(),
+            handshake_hash: ready.handshake_hash.clone(),
+            initiator: hello.identity.clone(),
+            responder: ready.identity.clone(),
+        })
+    }
+}
+
 impl SessionReadyPayload {
     pub fn new(
         session_id: impl Into<String>,
@@ -1824,6 +1851,51 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("handshake_hash must be sha256"));
+    }
+
+    #[test]
+    fn builds_verified_session_handshake_from_ready() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto("session-1", identity, "base64-local-key");
+        let ready = SessionReadyPayload::for_hello_with_cipher_preference(
+            &hello,
+            peer,
+            "base64-peer-key",
+            &default_session_cipher_preference(),
+        )
+        .unwrap();
+
+        let handshake = VerifiedSessionHandshake::from_ready(&hello, &ready).unwrap();
+
+        assert_eq!(handshake.session_id, "session-1");
+        assert_eq!(handshake.key_agreement, SESSION_KEY_AGREEMENT_X25519);
+        assert_eq!(handshake.cipher, SESSION_CIPHER_XCHACHA20POLY1305);
+        assert_eq!(handshake.handshake_hash, ready.handshake_hash);
+        assert_eq!(handshake.initiator.device_id, hello.identity.device_id);
+        assert_eq!(handshake.responder.device_id, ready.identity.device_id);
     }
 
     #[test]

@@ -7,6 +7,7 @@ use std::path::Path;
 pub use nekolink_protocol::{
     DeviceHello, PairingDecisionPayload, PairingRequestPayload, SessionHelloPayload,
     SessionReadyPayload, TransferDecision, TransferOffer, TransferOfferFile, TransferResumeFile,
+    VerifiedSessionHandshake,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
