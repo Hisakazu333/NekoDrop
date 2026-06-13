@@ -7,6 +7,7 @@ use std::path::Path;
 pub use nekolink_protocol::{
     DeviceHello, PairingDecisionPayload, PairingRequestPayload, SessionHelloPayload,
     SessionReadyPayload, TransferDecision, TransferOffer, TransferOfferFile, TransferResumeFile,
+    VerifiedSessionHandshake,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
@@ -870,8 +871,8 @@ mod tests {
 
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
     use nekolink_protocol::{
-        Capability, DeviceIdentity, DeviceKind, PlatformKind, SessionHelloPayload,
-        SessionReadyPayload,
+        default_session_cipher_preference, Capability, DeviceIdentity, DeviceKind, PlatformKind,
+        SessionHelloPayload, SessionReadyPayload,
     };
 
     use super::*;
@@ -928,18 +929,16 @@ mod tests {
                 Capability::EncryptedSession,
             ],
         );
-        let hello = SessionHelloPayload::new(
+        let hello = SessionHelloPayload::default_crypto(
             "session-1",
             local_identity,
-            "x25519",
             "base64-local-ephemeral-public-key",
-            vec!["xchacha20poly1305".to_string()],
         );
-        let ready = SessionReadyPayload::for_hello(
+        let ready = SessionReadyPayload::for_hello_with_cipher_preference(
             &hello,
             peer_identity,
             "base64-peer-ephemeral-public-key",
-            "xchacha20poly1305",
+            &default_session_cipher_preference(),
         )
         .unwrap();
 
@@ -988,21 +987,19 @@ mod tests {
                 Capability::EncryptedSession,
             ],
         );
-        let hello = SessionHelloPayload::new(
+        let hello = SessionHelloPayload::default_crypto(
             "session-1",
             local_identity,
-            "x25519",
             "base64-local-ephemeral-public-key",
-            vec!["xchacha20poly1305".to_string()],
         );
-        let mut ready = SessionReadyPayload::for_hello(
+        let mut ready = SessionReadyPayload::for_hello_with_cipher_preference(
             &hello,
             peer_identity,
             "base64-peer-ephemeral-public-key",
-            "xchacha20poly1305",
+            &default_session_cipher_preference(),
         )
         .unwrap();
-        ready.handshake_hash = "sha256:tampered".to_string();
+        ready.handshake_hash = format!("sha256:{}", "0".repeat(64));
 
         let mut buffer = Vec::new();
         write_session_ready(&mut buffer, &ready).unwrap();

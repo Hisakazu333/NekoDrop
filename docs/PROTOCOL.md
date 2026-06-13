@@ -173,6 +173,8 @@ Reserved NekoLink identity handshake payload:
 
 Encrypted-session offer payload. This is protocol groundwork only; current desktop transfers do not yet switch into encrypted file streams.
 
+Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305` preferred over `aes256gcm` when both peers support them. Unknown key-agreement and cipher labels are rejected by protocol validation.
+
 ```json
 {
   "session_id": "session-1781010000000",
@@ -192,7 +194,7 @@ Encrypted-session offer payload. This is protocol groundwork only; current deskt
 
 ### session.ready
 
-Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator can verify the ready payload with the original hello before deriving future session keys.
+Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator verifies that `handshake_hash` is `sha256:<64 hex chars>` and matches the original hello before deriving session key material.
 
 ```json
 {
@@ -211,6 +213,41 @@ Encrypted-session response payload. The responder selects a cipher offered by `s
   "handshake_hash": "sha256:hex"
 }
 ```
+
+### Session Key Material
+
+After `session.ready` is verified, the protocol crate can build a key derivation context from the transcript. This is still groundwork: current desktop transfers do not yet use these keys to encrypt control frames or file bytes.
+
+Current derivation inputs:
+
+```text
+key agreement: x25519
+ephemeral public key encoding: base64url without padding, 32 decoded bytes
+shared secret length: 32 bytes
+traffic key length: 32 bytes
+KDF: HKDF-SHA256
+salt: handshake_hash decoded from sha256:<64 hex chars>
+send info: nekolink/<session_id>/<key_agreement>/<cipher>/<local_device_id>-><peer_device_id>
+receive info: nekolink/<session_id>/<key_agreement>/<cipher>/<peer_device_id>-><local_device_id>
+```
+
+The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` currently returns a send key and receive key; nonce derivation, frame counters, AEAD sealing, and encrypted file-stream integration are not implemented yet.
+
+`SessionEphemeralKeyPair` can generate an X25519 ephemeral secret, expose the encoded public key for `session.hello` / `session.ready`, and derive the same 32-byte shared secret from the peer public key on both sides. The secret is not printed by the keypair Debug implementation.
+
+### Session Traffic Frames
+
+The protocol crate defines traffic-frame counters and nonce inputs for future encrypted control/file frames. This is not wired into desktop transfers yet.
+
+```text
+frame kinds: control, file
+directions: send, receive
+counter: u64, starts at 0 per local send/receive direction
+nonce length: 24 bytes for xchacha20poly1305, 12 bytes for aes256gcm
+nonce layout today: reserved zero bytes followed by u64 counter in big-endian
+```
+
+Send and receive counters are independent local state, but the nonce for a network frame is based on the frame counter and negotiated cipher, not the local send/receive label. The direction is carried in the header for bookkeeping; traffic keys already separate send from receive. Counter exhaustion is rejected before producing another frame header. AEAD sealing/opening and replay-window handling are still future work.
 
 ## Pairing Messages
 
