@@ -5,9 +5,9 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
 pub use nekolink_protocol::{
-    DeviceHello, PairingDecisionPayload, PairingRequestPayload, SessionHelloPayload,
-    SessionReadyPayload, TransferDecision, TransferOffer, TransferOfferFile, TransferResumeFile,
-    VerifiedSessionHandshake,
+    DeviceHello, EncryptedSessionPayload, PairingDecisionPayload, PairingRequestPayload,
+    SessionHelloPayload, SessionReadyPayload, TransferDecision, TransferOffer, TransferOfferFile,
+    TransferResumeFile, VerifiedSessionHandshake,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
@@ -460,6 +460,34 @@ pub fn read_verified_session_ready(
     Ok(ready)
 }
 
+pub fn write_session_control_envelope(
+    stream: &mut impl Write,
+    envelope: &Envelope<EncryptedSessionPayload>,
+) -> NekoDropResult<()> {
+    envelope
+        .validate_kind(MessageKind::SessionControl)
+        .map_err(protocol_error_to_network)?;
+    write_json_frame(stream, envelope)
+}
+
+pub fn read_session_control_envelope(
+    stream: &mut impl Read,
+) -> NekoDropResult<Envelope<EncryptedSessionPayload>> {
+    let envelope: Envelope<EncryptedSessionPayload> = read_json_frame(stream)?;
+    envelope
+        .validate_kind(MessageKind::SessionControl)
+        .map_err(protocol_error_to_network)?;
+    Ok(envelope)
+}
+
+pub fn read_session_control_payload<T: for<'de> Deserialize<'de>>(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+) -> NekoDropResult<T> {
+    let envelope = read_session_control_envelope(stream)?;
+    EncryptedSessionPayload::open_control(&envelope, keys).map_err(protocol_error_to_network)
+}
+
 pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
     let envelope: Envelope<TransferOffer> = read_json_frame(stream)?;
     envelope
@@ -871,8 +899,10 @@ mod tests {
 
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
     use nekolink_protocol::{
-        default_session_cipher_preference, Capability, DeviceIdentity, DeviceKind, PlatformKind,
-        SessionHelloPayload, SessionReadyPayload,
+        default_session_cipher_preference, Capability, DeviceIdentity, DeviceKind, MessageKind,
+        PlatformKind, SessionFrameDirection, SessionFrameKind, SessionHelloPayload,
+        SessionKeyMaterial, SessionReadyPayload, SessionTrafficFrameHeader,
+        SESSION_CIPHER_XCHACHA20POLY1305, SESSION_TRAFFIC_KEY_LEN,
     };
 
     use super::*;
@@ -1222,6 +1252,134 @@ mod tests {
         let received = receiver.join().unwrap();
 
         assert_eq!(received, TransferDecision::decline("no"));
+    }
+
+    #[test]
+    fn encrypted_session_control_envelope_round_trips_through_json_frame() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            7,
+        )
+        .unwrap();
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:control-1",
+            &keys,
+            header,
+            MessageKind::FileDecline,
+            &TransferDecision::decline("no"),
+        )
+        .unwrap();
+        let mut buffer = Vec::new();
+
+        write_session_control_envelope(&mut buffer, &envelope).unwrap();
+        let received = read_session_control_envelope(&mut Cursor::new(buffer)).unwrap();
+        let opened: TransferDecision =
+            EncryptedSessionPayload::open_control(&received, &keys).unwrap();
+
+        assert_eq!(received.kind, MessageKind::SessionControl);
+        assert_eq!(opened, TransferDecision::decline("no"));
+    }
+
+    #[test]
+    fn session_control_reader_rejects_unexpected_outer_kind() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            7,
+        )
+        .unwrap();
+        let mut envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:control-1",
+            &keys,
+            header,
+            MessageKind::FileDecline,
+            &TransferDecision::decline("no"),
+        )
+        .unwrap();
+        envelope.kind = MessageKind::FileOffer;
+        let mut buffer = Vec::new();
+        write_json_frame(&mut buffer, &envelope).unwrap();
+
+        let error = read_session_control_envelope(&mut Cursor::new(buffer)).unwrap_err();
+
+        assert!(error.to_string().contains("unexpected message kind"));
+    }
+
+    #[test]
+    fn encrypted_session_control_payload_reader_opens_inner_payload() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            9,
+        )
+        .unwrap();
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:control-2",
+            &keys,
+            header,
+            MessageKind::FileDecline,
+            &TransferDecision::decline("busy"),
+        )
+        .unwrap();
+        let mut buffer = Vec::new();
+        write_session_control_envelope(&mut buffer, &envelope).unwrap();
+
+        let opened: TransferDecision =
+            read_session_control_payload(&mut Cursor::new(buffer), &keys).unwrap();
+
+        assert_eq!(opened, TransferDecision::decline("busy"));
+    }
+
+    #[test]
+    fn encrypted_session_control_payload_reader_rejects_tampered_envelope_aad() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            9,
+        )
+        .unwrap();
+        let mut envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:control-2",
+            &keys,
+            header,
+            MessageKind::FileDecline,
+            &TransferDecision::decline("busy"),
+        )
+        .unwrap();
+        envelope.message_id = "session-1:control-tampered".to_string();
+        let mut buffer = Vec::new();
+        write_json_frame(&mut buffer, &envelope).unwrap();
+
+        let error =
+            read_session_control_payload::<TransferDecision>(&mut Cursor::new(buffer), &keys)
+                .unwrap_err();
+
+        assert!(error.to_string().contains("failed to open session payload"));
     }
 
     #[test]
