@@ -67,6 +67,8 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
+规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前只定义包格式和安全边界，还没有接入桌面发送、接收检测或导入流程。
+
 候选包类型：
 
 - `skill`
