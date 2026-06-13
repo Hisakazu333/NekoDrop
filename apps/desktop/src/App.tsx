@@ -970,7 +970,7 @@ export function App() {
       </aside>
 
       <section className="workspace">
-        <div className={mode === "history" ? "page-frame is-wide" : "page-frame"}>
+        <div className="page-frame">
         <header className="topbar">
           {mode !== "send" ? (
             <div className="page-heading">
@@ -1217,7 +1217,7 @@ export function App() {
               />
             </div>
           ) : (
-            <div className={mode === "history" ? "page-stack is-wide" : "page-stack"}>
+            <div className="page-stack">
               {mode === "receive" ? (
                 <ReceivePanel
                   bindPort={bindPort}

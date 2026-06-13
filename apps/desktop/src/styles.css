@@ -38,8 +38,6 @@
   --r-pill: 999px;
 
   --sidebar-width: 184px;
-  --content-max: 680px;
-  --content-wide: 960px;
 
   --t-fast: 120ms cubic-bezier(0.25, 0.1, 0.25, 1);
   --t: 180ms cubic-bezier(0.25, 0.1, 0.25, 1);
@@ -277,7 +275,7 @@ button:disabled {
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  padding: 0 40px;
+  padding: 0 28px;
   background: var(--surface-app);
 }
 
@@ -285,14 +283,8 @@ button:disabled {
   display: grid;
   grid-template-rows: auto auto minmax(0, 1fr);
   width: 100%;
-  max-width: var(--content-max);
-  margin: 0 auto;
   min-height: 0;
   flex: 1;
-}
-
-.page-frame.is-wide {
-  max-width: var(--content-wide);
 }
 
 .topbar {
