@@ -173,7 +173,7 @@ Reserved NekoLink identity handshake payload:
 
 Encrypted-session offer payload. This is protocol groundwork only; current desktop transfers do not yet switch into encrypted file streams.
 
-Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305` preferred over `aes256gcm` when both peers support them.
+Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305` preferred over `aes256gcm` when both peers support them. Unknown key-agreement and cipher labels are rejected by protocol validation.
 
 ```json
 {
