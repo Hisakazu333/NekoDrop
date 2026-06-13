@@ -92,6 +92,10 @@ pub enum MessageKind {
     DeviceHello,
     #[serde(rename = "device.heartbeat")]
     DeviceHeartbeat,
+    #[serde(rename = "session.hello")]
+    SessionHello,
+    #[serde(rename = "session.ready")]
+    SessionReady,
     #[serde(rename = "pairing.request")]
     PairingRequest,
     #[serde(rename = "pairing.accept")]
@@ -127,6 +131,8 @@ impl MessageKind {
         match self {
             Self::DeviceHello => "device.hello",
             Self::DeviceHeartbeat => "device.heartbeat",
+            Self::SessionHello => "session.hello",
+            Self::SessionReady => "session.ready",
             Self::PairingRequest => "pairing.request",
             Self::PairingAccept => "pairing.accept",
             Self::PairingReject => "pairing.reject",
@@ -450,6 +456,94 @@ impl DeviceHello {
 
     pub fn supports(&self, capability: Capability) -> bool {
         self.identity.supports(capability)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionHelloPayload {
+    pub session_id: String,
+    pub identity: DeviceIdentity,
+    pub key_agreement: String,
+    pub ephemeral_public_key: String,
+    pub supported_ciphers: Vec<String>,
+}
+
+impl SessionHelloPayload {
+    pub fn new(
+        session_id: impl Into<String>,
+        identity: DeviceIdentity,
+        key_agreement: impl Into<String>,
+        ephemeral_public_key: impl Into<String>,
+        supported_ciphers: Vec<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            identity,
+            key_agreement: key_agreement.into(),
+            ephemeral_public_key: ephemeral_public_key.into(),
+            supported_ciphers,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_session_id(&self.session_id)?;
+        self.identity.validate()?;
+        self.identity
+            .require_capability(Capability::EncryptedSession)?;
+        validate_session_crypto_label("key_agreement", &self.key_agreement)?;
+        validate_session_crypto_label("ephemeral_public_key", &self.ephemeral_public_key)?;
+        if self.supported_ciphers.is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "supported_ciphers cannot be empty",
+            ));
+        }
+        for cipher in &self.supported_ciphers {
+            validate_session_crypto_label("supported_ciphers", cipher)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionReadyPayload {
+    pub session_id: String,
+    pub identity: DeviceIdentity,
+    pub key_agreement: String,
+    pub ephemeral_public_key: String,
+    pub cipher: String,
+    pub handshake_hash: String,
+}
+
+impl SessionReadyPayload {
+    pub fn new(
+        session_id: impl Into<String>,
+        identity: DeviceIdentity,
+        key_agreement: impl Into<String>,
+        ephemeral_public_key: impl Into<String>,
+        cipher: impl Into<String>,
+        handshake_hash: impl Into<String>,
+    ) -> Self {
+        Self {
+            session_id: session_id.into(),
+            identity,
+            key_agreement: key_agreement.into(),
+            ephemeral_public_key: ephemeral_public_key.into(),
+            cipher: cipher.into(),
+            handshake_hash: handshake_hash.into(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_session_id(&self.session_id)?;
+        self.identity.validate()?;
+        self.identity
+            .require_capability(Capability::EncryptedSession)?;
+        validate_session_crypto_label("key_agreement", &self.key_agreement)?;
+        validate_session_crypto_label("ephemeral_public_key", &self.ephemeral_public_key)?;
+        validate_session_crypto_label("cipher", &self.cipher)?;
+        validate_session_crypto_label("handshake_hash", &self.handshake_hash)?;
+        Ok(())
     }
 }
 
@@ -791,6 +885,40 @@ fn now_ms() -> u128 {
         .unwrap_or_default()
 }
 
+fn validate_session_id(session_id: &str) -> Result<(), ProtocolError> {
+    let trimmed = session_id.trim();
+    if trimmed.is_empty() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "session_id cannot be empty",
+        ));
+    }
+    if trimmed.len() > 128 {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "session_id cannot exceed 128 bytes",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_session_crypto_label(name: &str, value: &str) -> Result<(), ProtocolError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("{name} cannot be empty"),
+        ));
+    }
+    if trimmed.len() > 512 {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("{name} cannot exceed 512 bytes"),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -985,6 +1113,70 @@ mod tests {
             ),
             vec![Capability::FileTransfer]
         );
+    }
+
+    #[test]
+    fn validates_session_handshake_payloads() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity.clone(),
+            "x25519",
+            "base64-x25519-public-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+        let ready = SessionReadyPayload::new(
+            "session-1",
+            identity,
+            "x25519",
+            "base64-peer-public-key",
+            "xchacha20poly1305",
+            "sha256:handshake-transcript",
+        );
+
+        hello.validate().unwrap();
+        ready.validate().unwrap();
+        assert!(hello
+            .identity
+            .require_capability(Capability::EncryptedSession)
+            .is_ok());
+        assert_eq!(hello.session_id, ready.session_id);
+        assert_eq!(ready.cipher, "xchacha20poly1305");
+    }
+
+    #[test]
+    fn rejects_session_handshake_without_encrypted_session_capability() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [Capability::FileTransfer],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            "x25519",
+            "base64-x25519-public-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+
+        let error = hello.validate().unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("encrypted_session"));
     }
 
     #[test]
