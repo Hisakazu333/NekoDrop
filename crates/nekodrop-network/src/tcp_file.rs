@@ -470,6 +470,22 @@ pub fn write_session_control_envelope(
     write_json_frame(stream, envelope)
 }
 
+pub fn write_session_control_payload<T: Serialize>(
+    stream: &mut impl Write,
+    session_id: impl Into<String>,
+    message_id: impl Into<String>,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    header: nekolink_protocol::SessionTrafficFrameHeader,
+    inner_kind: MessageKind,
+    payload: &T,
+) -> NekoDropResult<()> {
+    let envelope = EncryptedSessionPayload::seal_control(
+        session_id, message_id, keys, header, inner_kind, payload,
+    )
+    .map_err(protocol_error_to_network)?;
+    write_session_control_envelope(stream, &envelope)
+}
+
 pub fn read_session_control_envelope(
     stream: &mut impl Read,
 ) -> NekoDropResult<Envelope<EncryptedSessionPayload>> {
@@ -486,6 +502,55 @@ pub fn read_session_control_payload<T: for<'de> Deserialize<'de>>(
 ) -> NekoDropResult<T> {
     let envelope = read_session_control_envelope(stream)?;
     EncryptedSessionPayload::open_control(&envelope, keys).map_err(protocol_error_to_network)
+}
+
+pub fn read_session_control_payload_kind<T: for<'de> Deserialize<'de>>(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    expected_inner_kind: MessageKind,
+) -> NekoDropResult<T> {
+    let envelope = read_session_control_envelope(stream)?;
+    if envelope.payload.inner_kind != expected_inner_kind {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!(
+                "unexpected encrypted control kind: expected {}, got {}",
+                expected_inner_kind.as_str(),
+                envelope.payload.inner_kind.as_str()
+            ),
+        )));
+    }
+    EncryptedSessionPayload::open_control(&envelope, keys).map_err(protocol_error_to_network)
+}
+
+pub fn write_session_transfer_offer(
+    stream: &mut impl Write,
+    session_id: impl Into<String>,
+    message_id: impl Into<String>,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    header: nekolink_protocol::SessionTrafficFrameHeader,
+    offer: &TransferOffer,
+) -> NekoDropResult<()> {
+    offer.validate().map_err(protocol_error_to_network)?;
+    write_session_control_payload(
+        stream,
+        session_id,
+        message_id,
+        keys,
+        header,
+        MessageKind::FileOffer,
+        offer,
+    )
+}
+
+pub fn read_session_transfer_offer(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+) -> NekoDropResult<TransferOffer> {
+    let offer: TransferOffer =
+        read_session_control_payload_kind(stream, keys, MessageKind::FileOffer)?;
+    offer.validate().map_err(protocol_error_to_network)?;
+    Ok(offer)
 }
 
 pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
@@ -651,6 +716,58 @@ pub fn read_transfer_decision(stream: &mut impl Read) -> NekoDropResult<Transfer
         return Err(protocol_error_to_network(ProtocolError::new(
             ErrorCode::InvalidPayload,
             "declined decision must use file.decline",
+        )));
+    }
+    Ok(decision)
+}
+
+pub fn write_session_transfer_decision(
+    stream: &mut impl Write,
+    session_id: impl Into<String>,
+    message_id: impl Into<String>,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    header: nekolink_protocol::SessionTrafficFrameHeader,
+    decision: &TransferDecision,
+) -> NekoDropResult<()> {
+    decision.validate().map_err(protocol_error_to_network)?;
+    let kind = if decision.accepted {
+        MessageKind::FileAccept
+    } else {
+        MessageKind::FileDecline
+    };
+    write_session_control_payload(stream, session_id, message_id, keys, header, kind, decision)
+}
+
+pub fn read_session_transfer_decision(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+) -> NekoDropResult<TransferDecision> {
+    let envelope = read_session_control_envelope(stream)?;
+    if !matches!(
+        envelope.payload.inner_kind,
+        MessageKind::FileAccept | MessageKind::FileDecline
+    ) {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!(
+                "unexpected encrypted transfer decision kind: {}",
+                envelope.payload.inner_kind.as_str()
+            ),
+        )));
+    }
+    let decision: TransferDecision = EncryptedSessionPayload::open_control(&envelope, keys)
+        .map_err(protocol_error_to_network)?;
+    decision.validate().map_err(protocol_error_to_network)?;
+    if decision.accepted && envelope.payload.inner_kind != MessageKind::FileAccept {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "accepted encrypted transfer decision must use file.accept",
+        )));
+    }
+    if !decision.accepted && envelope.payload.inner_kind != MessageKind::FileDecline {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "declined encrypted transfer decision must use file.decline",
         )));
     }
     Ok(decision)
@@ -1347,6 +1464,173 @@ mod tests {
             read_session_control_payload(&mut Cursor::new(buffer), &keys).unwrap();
 
         assert_eq!(opened, TransferDecision::decline("busy"));
+    }
+
+    #[test]
+    fn encrypted_session_control_payload_writer_seals_transfer_offer() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            11,
+        )
+        .unwrap();
+        let offer = TransferOffer::new(
+            "transfer-1",
+            "drop",
+            vec![TransferOfferFile {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 11,
+                sha256: "abc123".to_string(),
+            }],
+        );
+        let mut buffer = Vec::new();
+
+        write_session_control_payload(
+            &mut buffer,
+            "session-1",
+            "session-1:control-3",
+            &keys,
+            header,
+            MessageKind::FileOffer,
+            &offer,
+        )
+        .unwrap();
+        let opened: TransferOffer =
+            read_session_control_payload(&mut Cursor::new(buffer), &keys).unwrap();
+
+        assert_eq!(opened, offer);
+    }
+
+    #[test]
+    fn encrypted_session_control_payload_reader_checks_inner_kind() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            12,
+        )
+        .unwrap();
+        let mut buffer = Vec::new();
+        write_session_control_payload(
+            &mut buffer,
+            "session-1",
+            "session-1:control-4",
+            &keys,
+            header,
+            MessageKind::FileDecline,
+            &TransferDecision::decline("busy"),
+        )
+        .unwrap();
+
+        let error = read_session_control_payload_kind::<TransferOffer>(
+            &mut Cursor::new(buffer),
+            &keys,
+            MessageKind::FileOffer,
+        )
+        .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("unexpected encrypted control kind"));
+    }
+
+    #[test]
+    fn session_transfer_offer_helpers_use_encrypted_control_frames() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            13,
+        )
+        .unwrap();
+        let offer = TransferOffer::new(
+            "transfer-1",
+            "drop",
+            vec![TransferOfferFile {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 11,
+                sha256: "abc123".to_string(),
+            }],
+        );
+        let mut buffer = Vec::new();
+
+        write_session_transfer_offer(
+            &mut buffer,
+            "session-1",
+            "session-1:offer-1",
+            &keys,
+            header,
+            &offer,
+        )
+        .unwrap();
+        let received = read_session_transfer_offer(&mut Cursor::new(buffer), &keys).unwrap();
+
+        assert_eq!(received, offer);
+    }
+
+    #[test]
+    fn session_transfer_decision_helpers_use_encrypted_control_frames() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let accept_header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            14,
+        )
+        .unwrap();
+        let decline_header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            15,
+        )
+        .unwrap();
+        let mut accepted_buffer = Vec::new();
+        let mut declined_buffer = Vec::new();
+
+        write_session_transfer_decision(
+            &mut accepted_buffer,
+            "session-1",
+            "session-1:accept-1",
+            &keys,
+            accept_header,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        write_session_transfer_decision(
+            &mut declined_buffer,
+            "session-1",
+            "session-1:decline-1",
+            &keys,
+            decline_header,
+            &TransferDecision::decline("busy"),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_session_transfer_decision(&mut Cursor::new(accepted_buffer), &keys).unwrap(),
+            TransferDecision::accept()
+        );
+        assert_eq!(
+            read_session_transfer_decision(&mut Cursor::new(declined_buffer), &keys).unwrap(),
+            TransferDecision::decline("busy")
+        );
     }
 
     #[test]

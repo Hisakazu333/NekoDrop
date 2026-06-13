@@ -282,7 +282,7 @@ Encrypted control envelope. The outer message kind is `session.control`; the enc
 
 Associated data binds protocol name, version, session_id, message_id, outer kind, and inner kind. Moving the ciphertext to another envelope or changing the inner kind makes opening fail.
 
-`nekodrop-network` exposes helper functions to write/read this encrypted `session.control` envelope over the existing length-prefixed TCP JSON frame format. Those helpers only prepare the network boundary; the desktop send/receive workflow still uses plaintext `file.offer` / `file.accept` / `file.decline` until the encrypted-control path is wired into the application layer.
+`nekodrop-network` exposes helper functions to write/read this encrypted `session.control` envelope over the existing length-prefixed TCP JSON frame format. It also has typed helpers for encrypted `file.offer`, `file.accept`, and `file.decline` control messages, including inner-kind checks on read. Those helpers only prepare the network boundary; the desktop send/receive workflow still uses plaintext `file.offer` / `file.accept` / `file.decline` until the encrypted-control path is wired into the application layer.
 
 ## Pairing Messages
 
