@@ -546,6 +546,24 @@ impl SessionReadyPayload {
         validate_session_crypto_label("handshake_hash", &self.handshake_hash)?;
         Ok(())
     }
+
+    pub fn for_hello(
+        hello: &SessionHelloPayload,
+        identity: DeviceIdentity,
+        ephemeral_public_key: impl Into<String>,
+        cipher: impl Into<String>,
+    ) -> Result<Self, ProtocolError> {
+        let mut ready = Self::new(
+            hello.session_id.clone(),
+            identity,
+            hello.key_agreement.clone(),
+            ephemeral_public_key,
+            cipher,
+            "sha256:pending",
+        );
+        ready.handshake_hash = session_handshake_hash(hello, &ready)?;
+        Ok(ready)
+    }
 }
 
 pub fn shared_capabilities(left: &[Capability], right: &[Capability]) -> Vec<Capability> {
@@ -1379,6 +1397,92 @@ mod tests {
         assert!(first.starts_with("sha256:"));
         assert_eq!(first, second);
         assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn builds_session_ready_with_transcript_hash() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            "x25519",
+            "base64-local-key",
+            vec!["xchacha20poly1305".to_string(), "aes256gcm".to_string()],
+        );
+
+        let ready =
+            SessionReadyPayload::for_hello(&hello, peer, "base64-peer-key", "xchacha20poly1305")
+                .unwrap();
+        let expected_hash = session_handshake_hash(&hello, &ready).unwrap();
+
+        assert_eq!(ready.session_id, "session-1");
+        assert_eq!(ready.key_agreement, "x25519");
+        assert_eq!(ready.cipher, "xchacha20poly1305");
+        assert_eq!(ready.handshake_hash, expected_hash);
+    }
+
+    #[test]
+    fn rejects_session_ready_builder_with_unoffered_cipher() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            "x25519",
+            "base64-local-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+
+        let error = SessionReadyPayload::for_hello(&hello, peer, "base64-peer-key", "aes256gcm")
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("must be offered"));
     }
 
     #[test]
