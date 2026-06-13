@@ -539,6 +539,8 @@ pub struct VerifiedSessionHandshake {
     pub key_agreement: String,
     pub cipher: String,
     pub handshake_hash: String,
+    pub initiator_ephemeral_public_key: String,
+    pub responder_ephemeral_public_key: String,
     pub initiator: DeviceIdentity,
     pub responder: DeviceIdentity,
 }
@@ -554,6 +556,8 @@ impl VerifiedSessionHandshake {
             key_agreement: hello.key_agreement.clone(),
             cipher: ready.cipher.clone(),
             handshake_hash: ready.handshake_hash.clone(),
+            initiator_ephemeral_public_key: hello.ephemeral_public_key.clone(),
+            responder_ephemeral_public_key: ready.ephemeral_public_key.clone(),
             initiator: hello.identity.clone(),
             responder: ready.identity.clone(),
         })
@@ -1894,6 +1898,14 @@ mod tests {
         assert_eq!(handshake.key_agreement, SESSION_KEY_AGREEMENT_X25519);
         assert_eq!(handshake.cipher, SESSION_CIPHER_XCHACHA20POLY1305);
         assert_eq!(handshake.handshake_hash, ready.handshake_hash);
+        assert_eq!(
+            handshake.initiator_ephemeral_public_key,
+            hello.ephemeral_public_key
+        );
+        assert_eq!(
+            handshake.responder_ephemeral_public_key,
+            ready.ephemeral_public_key
+        );
         assert_eq!(handshake.initiator.device_id, hello.identity.device_id);
         assert_eq!(handshake.responder.device_id, ready.identity.device_id);
     }
