@@ -3,13 +3,13 @@
 [![CI](https://github.com/Hisakazu333/NekoDrop/actions/workflows/ci.yml/badge.svg)](https://github.com/Hisakazu333/NekoDrop/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
-NekoDrop 是一个给 macOS 和 Windows 用的本地文件互传工具。
+NekoDrop 是 NekoLink 的桌面落地项目。当前版本先做一件事：让 macOS 和 Windows 在同一个局域网里直接互传文件和文件夹。
 
-两台电脑在同一个网络里打开应用，选择文件或文件夹，点一下附近设备，对方确认后开始传输。文件不经过云盘，也不需要先发到聊天软件里。
+两台电脑打开应用，选择文件或文件夹，点附近设备，对方确认后开始传。文件不经过云盘，也不需要先发到聊天软件里。自动发现失败时，可以改用连接码或 `IP:端口`。
 
-它也是 NekoLink 的第一个桌面实现：今天先用 TCP 把同网段传输跑稳，后面把 iroh、Relay 和 P2P 接到同一套设备身份、配对、会话加密和传输抽象里。NekoDrop 是用户能直接使用的产品，NekoLink 是它下面那层跨设备连接能力。
+NekoLink 是下面的连接层：设备身份、可信配对、会话加密、消息信封和 transport 抽象都放在这里。当前桌面主线已经把 `file.offer`、`file.accept`、`file.decline` 放进 encrypted `session.control`；文件内容仍走 TCP 明文流，下一阶段才做加密文件流。
 
-长期看，NekoLink 要解决的不是“再做一个传文件按钮”，而是让不同设备、不同网络里的应用节点可以安全互通。文件互传只是第一个闭环；同一套底座后面可以承载应用多端协同、Agent 节点调用、跨设备状态同步、远程任务执行，甚至游戏联机这类需要稳定点对点连接的上层场景。
+后续的 bundle、CCS/OpenNeko 本地桥、iroh / relay / P2P 都会复用这套 NekoLink 边界。应用节点互通、Agent 跨设备调用、跨设备状态同步、游戏联机属于上层能力，不是当前 beta 的承诺。
 
 ## 现在能做什么
 
@@ -21,6 +21,7 @@ NekoDrop 是一个给 macOS 和 Windows 用的本地文件互传工具。
 - 记录传输历史，支持重发和继续发送
 - 自动发现失败时，用连接码或 `IP:端口` 兜底
 - 支持可信设备配对和基础设备管理
+- 传输 offer / accept / decline 控制消息已走 encrypted `session.control`
 - 支持 macOS DMG、Windows NSIS / MSI 打包
 
 完整状态看 [docs/STATUS.md](docs/STATUS.md)。
@@ -81,7 +82,7 @@ Get-FileHash .\NekoDrop_0.1.0_x64-setup.exe -Algorithm SHA256
 
 不支持。当前真实主线是同局域网 TCP 传输。
 
-NekoLink 里已经有 transport 抽象和 iroh / Relay / P2P 的位置，但还没有接入真实运行时。等这层打通后，NekoDrop 才能从“同网段传文件”继续走向“不同网络、不同设备之间的连接”；游戏联机、跨网络应用节点互通、Agent 跨设备调用都属于这层能力之上的场景。
+NekoLink 里已经有 transport 抽象和 iroh / relay / P2P 的位置，但还没有接入真实运行时。跨网络能力会排在 bundle 和 CCS/OpenNeko 本地桥之后，不能抢在加密文件流之前做。
 
 ## 本地开发
 
@@ -172,21 +173,14 @@ scripts/                macOS / Windows 打包和审计脚本
 
 ## 路线图
 
-当前重点：
+当前顺序：
 
-- 把桌面端 LAN TCP 传输继续做稳
-- 收紧失败后的重试、继续发送和连接码兜底路径
-- 改进附近设备、可信设备和历史地址发送体验
-- 补齐发布记录、测试矩阵和安装包校验信息
+- 加密文件流：让文件 payload 进入 session 保护边界
+- NekoLink bundle：给 skills、session、workspace、agent profile 这类上层数据定义统一包格式
+- CCS/OpenNeko 本地桥：让插件和 OpenNeko 通过本机受控 API 调用 NekoLink
+- iroh / relay / P2P：把跨网络 transport 接到同一套 session 和 bundle 上
 
-接下来会压的底层能力：
-
-- 加密 session 接入桌面主线
-- replay 保护和加密文件流
-- iroh / Relay / P2P transport 验证
-- 为手机端、OpenHarmony、应用节点互通、Agent 调用和游戏联机这类上层场景留出稳定接口
-
-路线图看 [docs/ROADMAP.md](docs/ROADMAP.md)，真实完成状态以 [docs/STATUS.md](docs/STATUS.md) 为准。
+为什么按这个顺序走，看 [docs/NEXT_PHASE_ANALYSIS.md](docs/NEXT_PHASE_ANALYSIS.md)。路线图看 [docs/ROADMAP.md](docs/ROADMAP.md)，真实完成状态以 [docs/STATUS.md](docs/STATUS.md) 为准。
 
 ## 文档
 
@@ -196,6 +190,7 @@ scripts/                macOS / Windows 打包和审计脚本
 - [架构](docs/ARCHITECTURE.md)
 - [协议](docs/PROTOCOL.md)
 - [Roadmap](docs/ROADMAP.md)
+- [下一阶段分析](docs/NEXT_PHASE_ANALYSIS.md)
 - [模块边界](docs/MODULES.md)
 - [测试矩阵](docs/testing/LARGE_FILE_TRANSFER_MATRIX.md)
 
