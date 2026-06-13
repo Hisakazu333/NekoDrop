@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 
 import { bindWindowDragDrop } from "./dragDrop";
@@ -1316,7 +1316,6 @@ export function App() {
                   busy={busy}
                   deviceNameInput={deviceNameInput}
                   discoveryStatus={discoveryStatus}
-                  receiveDiagnostics={receiveDiagnostics}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
@@ -1325,13 +1324,10 @@ export function App() {
                   setReceiveDir={setReceiveDir}
                   snapshot={snapshot}
                   onChooseReceiveDir={chooseReceiveDir}
-                  onCopyConnectionCode={copyConnectionCode}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onSaveReceiveDir={saveReceiveDir}
                   onSaveReceivePort={saveReceivePort}
                   onSaveDeviceName={saveDeviceName}
-                  onStartReceive={startReceive}
-                  onStopReceive={stopReceive}
                   onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
@@ -1625,6 +1621,62 @@ function DevicePanel({
   );
 }
 
+function SettingsGroup({
+  title,
+  note,
+  children
+}: {
+  title: string;
+  note?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="settings-group">
+      <header className="settings-group-head">
+        <h2>{title}</h2>
+        {note ? <p>{note}</p> : null}
+      </header>
+      <div className="settings-rows">{children}</div>
+    </section>
+  );
+}
+
+function SettingsRow({
+  label,
+  hint,
+  children
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-row">
+      <div className="settings-row-label">
+        <span>{label}</span>
+        {hint ? <small>{hint}</small> : null}
+      </div>
+      <div className="settings-row-control">{children}</div>
+    </div>
+  );
+}
+
+function SettingsValue({
+  children,
+  mono,
+  title
+}: {
+  children: ReactNode;
+  mono?: boolean;
+  title?: string;
+}) {
+  return (
+    <span className={mono ? "settings-value is-mono" : "settings-value"} title={title}>
+      {children}
+    </span>
+  );
+}
+
 function SettingsFacts({
   items
 }: {
@@ -1705,8 +1757,8 @@ function ReceivePanel({
   return (
     <section className="receive-page">
       {!receiveSession ? (
-        <section className="settings-section receive-empty">
-          <p className="settings-section-note">
+        <section className="receive-section receive-empty">
+          <p className="receive-section-note">
             开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
           </p>
           <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
@@ -1716,9 +1768,9 @@ function ReceivePanel({
       ) : null}
 
       {receiveSession ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">连接码</h2>
-          <p className="settings-section-note">
+        <section className="receive-section">
+          <h2 className="receive-section-title">连接码</h2>
+          <p className="receive-section-note">
             {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
           </p>
           <div className="code-highlight">
@@ -1736,8 +1788,8 @@ function ReceivePanel({
       ) : null}
 
       {diagnostics ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">网络状态</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">网络状态</h2>
           <SettingsFacts
             items={[
               { label: "诊断", value: diagnostics.message },
@@ -1757,8 +1809,8 @@ function ReceivePanel({
       ) : null}
 
       {pendingOffer ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">待确认传输</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">待确认传输</h2>
           <div className="incoming-offer">
             <div className="offer-main">
               <strong>{pendingOfferSender ? `来自 ${pendingOfferSender}` : "传输请求"}</strong>
@@ -1781,8 +1833,8 @@ function ReceivePanel({
       ) : null}
 
       {pendingPairingRequest ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">配对请求</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">配对请求</h2>
           <div className="incoming-offer">
             <div className="offer-main">
               <strong>{pendingPairingRequest.device_name}</strong>
@@ -1803,8 +1855,8 @@ function ReceivePanel({
         </section>
       ) : null}
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">接收配置</h2>
+      <section className="receive-section">
+        <h2 className="receive-section-title">接收配置</h2>
         <div className="settings-form-grid">
           <label>
             接收目录
@@ -1848,8 +1900,8 @@ function ReceivePanel({
       </section>
 
       {receiveReport ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">最近完成</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">最近完成</h2>
           <div className="result-line">
             <strong title={receiveReport.root_name}>
               {receiveReportSender ? `来自 ${receiveReportSender}` : receiveReport.root_name}
@@ -1869,7 +1921,6 @@ function SettingsPanel({
   busy,
   deviceNameInput,
   discoveryStatus,
-  receiveDiagnostics,
   receiveDir,
   receivePolicy,
   receiveSession,
@@ -1878,20 +1929,16 @@ function SettingsPanel({
   setReceiveDir,
   snapshot,
   onChooseReceiveDir,
-  onCopyConnectionCode,
   onOpenReceiveDir,
   onSaveDeviceName,
   onSaveReceiveDir,
   onSaveReceivePort,
-  onStartReceive,
-  onStopReceive,
   onUpdateReceivePolicy
 }: {
   bindPort: string;
   busy: BusyMode | null;
   deviceNameInput: string;
   discoveryStatus: DiscoveryStatusDto | null;
-  receiveDiagnostics: ReceivePortDiagnosticsDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
@@ -1900,20 +1947,16 @@ function SettingsPanel({
   setReceiveDir: (value: string) => void;
   snapshot: AppSnapshot | null;
   onChooseReceiveDir: () => void;
-  onCopyConnectionCode: () => void;
   onOpenReceiveDir: () => void;
   onSaveDeviceName: () => void;
   onSaveReceiveDir: () => void;
   onSaveReceivePort: () => void;
-  onStartReceive: () => void;
-  onStopReceive: () => void;
   onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
 }) {
   const model = buildSettingsViewModel({
     snapshot,
     deviceNameInput,
     discoveryStatus,
-    receiveDiagnostics,
     receiveSession,
     receiveDir,
     receivePolicy,
@@ -1922,127 +1965,45 @@ function SettingsPanel({
 
   return (
     <section className="settings-page">
-      <header className="page-intro">
-        <div className="page-intro-copy">
-          <p className="page-intro-eyebrow">设置</p>
-          <strong>{model.deviceName}</strong>
-          <span>
-            {model.platformLabel} · {model.receiveStateLabel} · {model.discoveryLabel}
-          </span>
-        </div>
-        <div className="page-intro-actions">
-          {receiveSession ? (
-            <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
-              关闭收件
-            </button>
-          ) : (
-            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-              开启收件
-            </button>
-          )}
-        </div>
-      </header>
-
-      <section className="settings-section">
-        <h2 className="settings-section-title">本机身份</h2>
-        <p className="settings-section-note">附近设备会看到此名称；指纹用于确认配对对象</p>
-        <label className="settings-field">
-          设备名
-          <div className="input-action">
+      <SettingsGroup title="通用" note="附近设备会看到这里的名称">
+        <SettingsRow label="设备名称">
+          <div className="settings-inline-field">
             <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
             <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
               保存
             </button>
           </div>
-        </label>
-        <SettingsFacts
-          items={[
-            { label: "平台", value: model.platformLabel },
-            { label: "设备 ID", value: model.deviceIdLabel, mono: true },
-            { label: "类型", value: model.deviceKindLabel },
-            { label: "指纹", value: model.fingerprintLabel, mono: true },
-            { label: "能力", value: model.capabilitiesLabel }
-          ]}
-        />
-      </section>
+        </SettingsRow>
+        <SettingsRow label="平台">
+          <SettingsValue>{model.platformLabel}</SettingsValue>
+        </SettingsRow>
+      </SettingsGroup>
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">发现与网络</h2>
-        <p className="settings-section-note">局域网 mDNS 广播与扫描状态（配置项只读）</p>
-        <SettingsFacts
-          items={[
-            { label: "发现配置", value: model.discoveryEnabledLabel },
-            { label: "运行状态", value: model.discoveryLabel },
-            { label: "详情", value: model.discoveryDetailLabel },
-            { label: "本机 IP", value: model.lanIpLabel, mono: true },
-            { label: "附近设备", value: model.nearbyDeviceCountLabel },
-            { label: "服务类型", value: model.serviceTypeLabel, mono: true }
-          ]}
-        />
-        {receiveDiagnostics ? (
-          <>
-            <SettingsFacts
-              items={[
-                { label: "收件诊断", value: model.receiveDiagnosticsLabel },
-                { label: "局域网地址", value: model.lanIpsLabel, mono: true },
-                { label: "默认端口", value: model.defaultReceivePortLabel }
-              ]}
-            />
-            {receiveDiagnostics.checks.length > 0 ? (
-              <ul className="settings-checks">
-                {receiveDiagnostics.checks.map((check) => (
-                  <li key={check}>{check}</li>
-                ))}
-              </ul>
-            ) : null}
-          </>
-        ) : null}
-      </section>
-
-      <section className="settings-section">
-        <h2 className="settings-section-title">收件</h2>
-        <SettingsFacts
-          items={[
-            { label: "监听地址", value: model.receiveAddressLabel, mono: true },
-            { label: "接收策略", value: model.receivePolicyLabel }
-          ]}
-        />
-        {model.connectionCodeLabel ? (
-          <div className="code-highlight">
-            <code title={model.connectionCodeLabel}>{model.connectionCodeLabel}</code>
-            <div className="code-highlight-actions">
-              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
-                复制连接码
-              </button>
-            </div>
+      <SettingsGroup
+        title="接收"
+        note={model.receiveConfigLocked ? "收件开启时，目录和端口需先关闭收件再改" : "默认保存位置和连接端口"}
+      >
+        <SettingsRow label="保存位置">
+          <div className="settings-inline-field is-wide">
+            <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
+              选择
+            </button>
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
+              保存
+            </button>
           </div>
-        ) : null}
-        <div className="settings-form-grid">
-          <label className="settings-field">
-            接收目录
-            <div className="input-action receive-dir-action">
-              <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
-              <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
-                选择
-              </button>
-              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
-                保存
-              </button>
-            </div>
-          </label>
-          <label className="settings-field port-field">
-            默认端口
-            <div className="input-action receive-port-action">
-              <input disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
-              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
-                保存
-              </button>
-            </div>
-          </label>
-        </div>
-        <div className="policy-row">
-          <span>接收策略</span>
-          <div className="policy-segment">
+        </SettingsRow>
+        <SettingsRow label="默认端口">
+          <div className="settings-inline-field">
+            <input className="is-port" disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
+              保存
+            </button>
+          </div>
+        </SettingsRow>
+        <SettingsRow label="收到文件时">
+          <div className="policy-segment is-settings">
             {RECEIVE_POLICY_OPTIONS.map((option) => (
               <button
                 className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
@@ -2055,18 +2016,48 @@ function SettingsPanel({
               </button>
             ))}
           </div>
-        </div>
-        <div className="settings-inline-actions">
-          <button className="tool-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
-            打开接收目录
+        </SettingsRow>
+        <SettingsRow label="文件夹">
+          <button className="text-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+            打开接收文件夹
           </button>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsGroup>
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">应用</h2>
-        <SettingsFacts items={[{ label: "托盘菜单", value: model.trayLabel }]} />
-      </section>
+      <SettingsGroup title="网络" note="发现与连接状态为只读">
+        <SettingsRow label="局域网发现">
+          <SettingsValue>{model.discoveryLabel}</SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="本机地址">
+          <SettingsValue mono title={model.lanIpLabel ?? undefined}>
+            {model.lanIpLabel ?? "—"}
+          </SettingsValue>
+        </SettingsRow>
+        {receiveSession ? (
+          <SettingsRow label="收件状态" hint="连接码请在收件页查看">
+            <SettingsValue>{model.receiveAddressLabel}</SettingsValue>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
+
+      <SettingsGroup title="关于本机" note="用于配对与排查">
+        <SettingsRow label="设备 ID">
+          <SettingsValue mono title={model.deviceIdLabel ?? undefined}>
+            {model.deviceIdLabel ?? "—"}
+          </SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="指纹">
+          <SettingsValue mono title={model.fingerprintLabel ?? undefined}>
+            {model.fingerprintLabel ?? "—"}
+          </SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="能力">
+          <SettingsValue>{model.capabilitiesLabel ?? "—"}</SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="托盘菜单">
+          <SettingsValue>{model.trayLabel}</SettingsValue>
+        </SettingsRow>
+      </SettingsGroup>
     </section>
   );
 }
