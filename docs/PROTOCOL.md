@@ -222,6 +222,7 @@ Current derivation inputs:
 
 ```text
 key agreement: x25519
+ephemeral public key encoding: base64url without padding, 32 decoded bytes
 shared secret length: 32 bytes
 traffic key length: 32 bytes
 KDF: HKDF-SHA256
@@ -231,6 +232,8 @@ receive info: nekolink/<session_id>/<key_agreement>/<cipher>/<peer_device_id>-><
 ```
 
 The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` currently returns a send key and receive key; nonce derivation, frame counters, AEAD sealing, and encrypted file-stream integration are not implemented yet.
+
+`SessionEphemeralKeyPair` can generate an X25519 ephemeral secret, expose the encoded public key for `session.hello` / `session.ready`, and derive the same 32-byte shared secret from the peer public key on both sides. The secret is not printed by the keypair Debug implementation.
 
 ## Pairing Messages
 
