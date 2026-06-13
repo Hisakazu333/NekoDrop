@@ -46,6 +46,7 @@ use crate::trusted_devices::{
 };
 
 const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
+const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSnapshot {
@@ -198,6 +199,7 @@ pub struct ReceiveReportDto {
     pub sender_device_id: Option<String>,
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
+    pub file_count: usize,
     pub files: Vec<ReceivedFileDto>,
 }
 
@@ -225,6 +227,7 @@ pub struct PendingReceiveOfferDto {
     pub sender_device_id: Option<String>,
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
+    pub preview_file_count: usize,
     pub files: Vec<PendingReceiveFileDto>,
     pub resume_summary: Option<ReceiveResumeSummaryDto>,
 }
@@ -1955,9 +1958,11 @@ fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
         sender_device_id: report.sender_device_id.clone(),
         sender_device_name: report.sender_device_name.clone(),
         sender_public_key_fingerprint: report.sender_public_key_fingerprint.clone(),
+        file_count: report.files.len(),
         files: report
             .files
             .iter()
+            .take(RECEIVE_FILE_PREVIEW_LIMIT)
             .map(|file| ReceivedFileDto {
                 path: file.path.display().to_string(),
                 manifest_path: file.manifest_path.clone(),
@@ -2034,9 +2039,11 @@ fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
         sender_device_id: offer.sender_device_id.clone(),
         sender_device_name: offer.sender_device_name.clone(),
         sender_public_key_fingerprint: offer.sender_public_key_fingerprint.clone(),
+        preview_file_count: offer.files.len().min(RECEIVE_FILE_PREVIEW_LIMIT),
         files: offer
             .files
             .iter()
+            .take(RECEIVE_FILE_PREVIEW_LIMIT)
             .map(|file| PendingReceiveFileDto {
                 manifest_path: file.manifest_path.clone(),
                 size: file.size,
@@ -3190,6 +3197,61 @@ mod tests {
         assert_eq!(summary.completed_file_count, 1);
         assert_eq!(summary.partial_file_count, 1);
         assert_eq!(summary.received_bytes, 1536);
+    }
+
+    #[test]
+    fn pending_receive_offer_dto_limits_file_preview_for_large_folders() {
+        let offer = PendingReceiveOffer {
+            transfer_id: "transfer-a".to_string(),
+            root_name: "drop".to_string(),
+            file_count: 100,
+            total_bytes: 4096,
+            sender_device_id: None,
+            sender_device_name: None,
+            sender_public_key_fingerprint: None,
+            files: (0..100)
+                .map(|index| PendingReceiveFile {
+                    manifest_path: format!("drop/file-{index:03}.txt"),
+                    size: 1,
+                    sha256: "a".repeat(64),
+                })
+                .collect(),
+            resume_summary: None,
+            decision: Arc::new((Mutex::new(None), Condvar::new())),
+        };
+
+        let dto = pending_offer_to_dto(&offer);
+
+        assert_eq!(dto.file_count, 100);
+        assert_eq!(dto.preview_file_count, RECEIVE_FILE_PREVIEW_LIMIT);
+        assert_eq!(dto.files.len(), RECEIVE_FILE_PREVIEW_LIMIT);
+        assert_eq!(dto.files[0].manifest_path, "drop/file-000.txt");
+    }
+
+    #[test]
+    fn receive_report_dto_limits_file_preview_for_large_folders() {
+        let report = TransferReceiveReport {
+            transfer_id: "transfer-a".to_string(),
+            root_name: "drop".to_string(),
+            sender_device_id: None,
+            sender_device_name: None,
+            sender_public_key_fingerprint: None,
+            files: (0..100)
+                .map(|index| nekodrop_storage::ReceivedFile {
+                    path: PathBuf::from(format!("/tmp/drop/file-{index:03}.txt")),
+                    manifest_path: format!("drop/file-{index:03}.txt"),
+                    bytes_written: 1,
+                    sha256: "a".repeat(64),
+                    verified: true,
+                })
+                .collect(),
+        };
+
+        let dto = receive_report_to_dto(&report);
+
+        assert_eq!(dto.file_count, 100);
+        assert_eq!(dto.files.len(), RECEIVE_FILE_PREVIEW_LIMIT);
+        assert_eq!(dto.files[0].manifest_path, "drop/file-000.txt");
     }
 
     #[test]

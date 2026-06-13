@@ -148,6 +148,7 @@ export interface ReceiveReportDto {
   sender_device_id: string | null;
   sender_device_name: string | null;
   sender_public_key_fingerprint: string | null;
+  file_count: number;
   files: ReceivedFileDto[];
 }
 
@@ -172,6 +173,7 @@ export interface PendingReceiveOfferDto {
   sender_device_id: string | null;
   sender_device_name: string | null;
   sender_public_key_fingerprint: string | null;
+  preview_file_count: number;
   files: PendingReceiveFileDto[];
   resume_summary: ReceiveResumeSummaryDto | null;
 }
