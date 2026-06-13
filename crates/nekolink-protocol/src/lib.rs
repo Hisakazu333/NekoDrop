@@ -579,6 +579,7 @@ impl SessionReadyPayload {
     }
 
     pub fn verify_for_hello(&self, hello: &SessionHelloPayload) -> Result<(), ProtocolError> {
+        validate_sha256_digest_label("handshake_hash", &self.handshake_hash)?;
         let expected_hash = session_handshake_hash(hello, self)?;
         if self.handshake_hash != expected_hash {
             return Err(ProtocolError::new(
@@ -1070,6 +1071,22 @@ fn validate_session_crypto_label(name: &str, value: &str) -> Result<(), Protocol
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             format!("{name} cannot exceed 512 bytes"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_sha256_digest_label(name: &str, value: &str) -> Result<(), ProtocolError> {
+    let Some(hex) = value.strip_prefix("sha256:") else {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("{name} must be sha256:<64 hex chars>"),
+        ));
+    };
+    if hex.len() != 64 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("{name} must be sha256:<64 hex chars>"),
         ));
     }
     Ok(())
@@ -1718,11 +1735,59 @@ mod tests {
         ready.verify_for_hello(&hello).unwrap();
 
         let mut tampered = ready.clone();
-        tampered.handshake_hash = "sha256:tampered".to_string();
+        tampered.handshake_hash = format!("sha256:{}", "0".repeat(64));
         let error = tampered.verify_for_hello(&hello).unwrap_err();
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("handshake_hash mismatch"));
+    }
+
+    #[test]
+    fn rejects_malformed_session_ready_handshake_hash_before_verifying_transcript() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            SESSION_KEY_AGREEMENT_X25519,
+            "base64-local-key",
+            vec![SESSION_CIPHER_XCHACHA20POLY1305.to_string()],
+        );
+        let mut ready = SessionReadyPayload::for_hello(
+            &hello,
+            peer,
+            "base64-peer-key",
+            SESSION_CIPHER_XCHACHA20POLY1305,
+        )
+        .unwrap();
+        ready.handshake_hash = "sha256:not-hex".to_string();
+
+        let error = ready.verify_for_hello(&hello).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("handshake_hash must be sha256"));
     }
 
     #[test]

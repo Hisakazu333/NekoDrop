@@ -1002,7 +1002,7 @@ mod tests {
             &default_session_cipher_preference(),
         )
         .unwrap();
-        ready.handshake_hash = "sha256:tampered".to_string();
+        ready.handshake_hash = format!("sha256:{}", "0".repeat(64));
 
         let mut buffer = Vec::new();
         write_session_ready(&mut buffer, &ready).unwrap();

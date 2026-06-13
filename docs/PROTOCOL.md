@@ -194,7 +194,7 @@ Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305`
 
 ### session.ready
 
-Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator can verify the ready payload with the original hello before deriving future session keys.
+Encrypted-session response payload. The responder selects a cipher offered by `session.hello` and includes a `handshake_hash` over the hello/ready transcript. The initiator verifies that `handshake_hash` is `sha256:<64 hex chars>` and matches the original hello before deriving future session keys.
 
 ```json
 {
