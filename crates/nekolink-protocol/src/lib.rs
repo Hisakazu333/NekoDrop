@@ -494,7 +494,7 @@ impl SessionHelloPayload {
         self.identity.validate()?;
         self.identity
             .require_capability(Capability::EncryptedSession)?;
-        validate_session_crypto_label("key_agreement", &self.key_agreement)?;
+        validate_session_key_agreement(&self.key_agreement)?;
         validate_session_crypto_label("ephemeral_public_key", &self.ephemeral_public_key)?;
         if self.supported_ciphers.is_empty() {
             return Err(ProtocolError::new(
@@ -503,7 +503,7 @@ impl SessionHelloPayload {
             ));
         }
         for cipher in &self.supported_ciphers {
-            validate_session_crypto_label("supported_ciphers", cipher)?;
+            validate_session_cipher("supported_ciphers", cipher)?;
         }
         Ok(())
     }
@@ -543,9 +543,9 @@ impl SessionReadyPayload {
         self.identity.validate()?;
         self.identity
             .require_capability(Capability::EncryptedSession)?;
-        validate_session_crypto_label("key_agreement", &self.key_agreement)?;
+        validate_session_key_agreement(&self.key_agreement)?;
         validate_session_crypto_label("ephemeral_public_key", &self.ephemeral_public_key)?;
-        validate_session_crypto_label("cipher", &self.cipher)?;
+        validate_session_cipher("cipher", &self.cipher)?;
         validate_session_crypto_label("handshake_hash", &self.handshake_hash)?;
         Ok(())
     }
@@ -595,6 +595,17 @@ pub fn default_session_cipher_preference() -> Vec<String> {
         SESSION_CIPHER_XCHACHA20POLY1305.to_string(),
         SESSION_CIPHER_AES256GCM.to_string(),
     ]
+}
+
+pub fn is_supported_session_key_agreement(value: &str) -> bool {
+    value == SESSION_KEY_AGREEMENT_X25519
+}
+
+pub fn is_supported_session_cipher(value: &str) -> bool {
+    matches!(
+        value,
+        SESSION_CIPHER_XCHACHA20POLY1305 | SESSION_CIPHER_AES256GCM
+    )
 }
 
 pub fn shared_capabilities(left: &[Capability], right: &[Capability]) -> Vec<Capability> {
@@ -1058,6 +1069,28 @@ fn validate_session_crypto_label(name: &str, value: &str) -> Result<(), Protocol
     Ok(())
 }
 
+fn validate_session_key_agreement(value: &str) -> Result<(), ProtocolError> {
+    validate_session_crypto_label("key_agreement", value)?;
+    if !is_supported_session_key_agreement(value) {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("unsupported session key_agreement: {value}"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_session_cipher(name: &str, value: &str) -> Result<(), ProtocolError> {
+    validate_session_crypto_label(name, value)?;
+    if !is_supported_session_cipher(value) {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("unsupported session cipher: {value}"),
+        ));
+    }
+    Ok(())
+}
+
 fn hash_identity(hasher: &mut Sha256, prefix: &str, identity: &DeviceIdentity) {
     hash_field(hasher, &format!("{prefix}.device_id"), &identity.device_id);
     hash_field(
@@ -1375,6 +1408,73 @@ mod tests {
         assert!(error
             .message
             .contains("no mutually supported session cipher"));
+    }
+
+    #[test]
+    fn rejects_unknown_session_key_agreement() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            "p256",
+            "base64-local-key",
+            default_session_cipher_preference(),
+        );
+
+        let error = hello.validate().unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("unsupported session key_agreement"));
+    }
+
+    #[test]
+    fn rejects_unknown_session_ciphers() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity.clone(),
+            SESSION_KEY_AGREEMENT_X25519,
+            "base64-local-key",
+            vec!["rot13".to_string()],
+        );
+        let ready = SessionReadyPayload::new(
+            "session-1",
+            identity,
+            SESSION_KEY_AGREEMENT_X25519,
+            "base64-peer-key",
+            "rot13",
+            "sha256:placeholder",
+        );
+
+        let hello_error = hello.validate().unwrap_err();
+        let ready_error = ready.validate().unwrap_err();
+
+        assert_eq!(hello_error.code, ErrorCode::InvalidPayload);
+        assert!(hello_error.message.contains("unsupported session cipher"));
+        assert_eq!(ready_error.code, ErrorCode::InvalidPayload);
+        assert!(ready_error.message.contains("unsupported session cipher"));
     }
 
     #[test]
