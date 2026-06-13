@@ -1,11 +1,11 @@
 use std::fs;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 #[cfg(any(
     target_os = "macos",
     all(not(target_os = "macos"), not(target_os = "windows"))
 ))]
 use std::process::Command;
+use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekolink_protocol::{Capability, DeviceIdentity, DeviceKind, PlatformKind};
@@ -22,7 +22,10 @@ pub struct LocalDeviceIdentity {
 
 impl LocalDeviceIdentity {
     pub fn public_identity(&self) -> DeviceIdentity {
-        let persisted = self.persisted.lock().expect("device identity lock poisoned");
+        let persisted = self
+            .persisted
+            .lock()
+            .expect("device identity lock poisoned");
         DeviceIdentity::new(
             persisted.device_id.clone(),
             persisted.device_name.clone(),
@@ -43,10 +46,7 @@ impl LocalDeviceIdentity {
 
     pub fn set_device_name(&self, device_name: &str) -> Result<String, String> {
         let device_name = normalize_device_name(device_name)?;
-        let mut persisted = self
-            .persisted
-            .lock()
-            .map_err(|error| error.to_string())?;
+        let mut persisted = self.persisted.lock().map_err(|error| error.to_string())?;
         persisted.device_name = device_name.clone();
         Ok(device_name)
     }
@@ -54,10 +54,7 @@ impl LocalDeviceIdentity {
     pub fn save_device_name(&self, device_name: &str) -> Result<String, String> {
         let device_name = normalize_device_name(device_name)?;
         let next_identity = {
-            let persisted = self
-                .persisted
-                .lock()
-                .map_err(|error| error.to_string())?;
+            let persisted = self.persisted.lock().map_err(|error| error.to_string())?;
             if persisted.device_name == device_name {
                 return Ok(device_name);
             }
@@ -68,10 +65,7 @@ impl LocalDeviceIdentity {
         };
 
         save_persisted_identity(&next_identity)?;
-        let mut persisted = self
-            .persisted
-            .lock()
-            .map_err(|error| error.to_string())?;
+        let mut persisted = self.persisted.lock().map_err(|error| error.to_string())?;
         *persisted = next_identity;
         Ok(device_name)
     }

@@ -34,8 +34,8 @@ pub fn load_app_config(device_name: &str) -> Result<AppConfig, String> {
 }
 
 fn app_config_from_json(device_name: &str, content: &str) -> Result<AppConfig, String> {
-    let persisted = serde_json::from_str::<PersistedAppConfig>(content)
-        .map_err(|error| error.to_string())?;
+    let persisted =
+        serde_json::from_str::<PersistedAppConfig>(content).map_err(|error| error.to_string())?;
     if persisted.schema_version != APP_CONFIG_SCHEMA_VERSION {
         return Err(format!(
             "不支持的应用配置版本: {}",
@@ -82,8 +82,7 @@ fn app_config_to_json(config: &AppConfig) -> Result<String, String> {
         discovery_enabled: config.discovery_enabled,
         receive_policy: receive_policy_label(config.receive_policy).to_string(),
     };
-    serde_json::to_string_pretty(&persisted)
-        .map_err(|error| format!("无法序列化应用配置: {error}"))
+    serde_json::to_string_pretty(&persisted).map_err(|error| format!("无法序列化应用配置: {error}"))
 }
 
 fn app_config_file_path() -> Result<PathBuf, String> {
