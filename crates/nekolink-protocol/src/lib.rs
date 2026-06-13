@@ -1,9 +1,11 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 
 pub const PROTOCOL_NAME: &str = "nekolink";
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -12,6 +14,7 @@ pub const SESSION_CIPHER_XCHACHA20POLY1305: &str = "xchacha20poly1305";
 pub const SESSION_CIPHER_AES256GCM: &str = "aes256gcm";
 pub const SESSION_SHARED_SECRET_LEN: usize = 32;
 pub const SESSION_TRAFFIC_KEY_LEN: usize = 32;
+pub const SESSION_PUBLIC_KEY_BASE64_LEN: usize = 43;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T = Value> {
@@ -563,6 +566,59 @@ pub struct SessionKeyDerivationContext {
 pub struct SessionKeyMaterial {
     pub send_key: [u8; SESSION_TRAFFIC_KEY_LEN],
     pub receive_key: [u8; SESSION_TRAFFIC_KEY_LEN],
+}
+
+#[derive(Clone)]
+pub struct SessionEphemeralKeyPair {
+    secret: [u8; SESSION_SHARED_SECRET_LEN],
+    pub public_key: String,
+}
+
+impl std::fmt::Debug for SessionEphemeralKeyPair {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("SessionEphemeralKeyPair")
+            .field("public_key", &self.public_key)
+            .finish_non_exhaustive()
+    }
+}
+
+impl SessionEphemeralKeyPair {
+    pub fn generate() -> Result<Self, ProtocolError> {
+        let mut secret = [0_u8; SESSION_SHARED_SECRET_LEN];
+        getrandom::fill(&mut secret).map_err(|_| {
+            ProtocolError::new(ErrorCode::InternalError, "failed to generate session key")
+        })?;
+        Self::from_secret(secret)
+    }
+
+    pub fn from_secret(secret: [u8; SESSION_SHARED_SECRET_LEN]) -> Result<Self, ProtocolError> {
+        if secret == [0_u8; SESSION_SHARED_SECRET_LEN] {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "session secret cannot be all zero",
+            ));
+        }
+        let public_key = session_public_key_from_secret(secret);
+        Ok(Self { secret, public_key })
+    }
+
+    pub fn shared_secret_from_peer_public_key(
+        &self,
+        peer_public_key: &str,
+    ) -> Result<[u8; SESSION_SHARED_SECRET_LEN], ProtocolError> {
+        let peer_public_key = decode_session_public_key(peer_public_key)?;
+        let secret = X25519StaticSecret::from(self.secret);
+        let shared_secret = secret.diffie_hellman(&X25519PublicKey::from(peer_public_key));
+        let shared_secret = shared_secret.to_bytes();
+        if shared_secret == [0_u8; SESSION_SHARED_SECRET_LEN] {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "x25519 shared secret cannot be all zero",
+            ));
+        }
+        Ok(shared_secret)
+    }
 }
 
 impl SessionKeyDerivationContext {
@@ -1243,6 +1299,33 @@ fn session_hash_bytes(name: &str, value: &str) -> Result<[u8; 32], ProtocolError
         )
     })?;
     Ok(bytes)
+}
+
+fn session_public_key_from_secret(secret: [u8; SESSION_SHARED_SECRET_LEN]) -> String {
+    let secret = X25519StaticSecret::from(secret);
+    let public_key = X25519PublicKey::from(&secret);
+    URL_SAFE_NO_PAD.encode(public_key.as_bytes())
+}
+
+fn decode_session_public_key(
+    value: &str,
+) -> Result<[u8; SESSION_SHARED_SECRET_LEN], ProtocolError> {
+    validate_session_crypto_label("ephemeral_public_key", value)?;
+    let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "ephemeral_public_key must be base64url without padding",
+        )
+    })?;
+    if decoded.len() != SESSION_SHARED_SECRET_LEN {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("ephemeral_public_key must decode to {SESSION_SHARED_SECRET_LEN} bytes"),
+        ));
+    }
+    let mut public_key = [0_u8; SESSION_SHARED_SECRET_LEN];
+    public_key.copy_from_slice(&decoded);
+    Ok(public_key)
 }
 
 fn session_key_derivation_error(direction: &str) -> ProtocolError {
@@ -2235,6 +2318,64 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("salt must be sha256"));
+    }
+
+    #[test]
+    fn derives_same_x25519_shared_secret_from_peer_public_keys() {
+        let initiator = SessionEphemeralKeyPair::generate().unwrap();
+        let responder = SessionEphemeralKeyPair::generate().unwrap();
+
+        let initiator_secret = initiator
+            .shared_secret_from_peer_public_key(&responder.public_key)
+            .unwrap();
+        let responder_secret = responder
+            .shared_secret_from_peer_public_key(&initiator.public_key)
+            .unwrap();
+
+        assert_eq!(initiator.public_key.len(), SESSION_PUBLIC_KEY_BASE64_LEN);
+        assert_eq!(responder.public_key.len(), SESSION_PUBLIC_KEY_BASE64_LEN);
+        assert_eq!(initiator_secret, responder_secret);
+        assert_ne!(initiator_secret, [0_u8; SESSION_SHARED_SECRET_LEN]);
+    }
+
+    #[test]
+    fn rejects_malformed_x25519_peer_public_key() {
+        let keypair = SessionEphemeralKeyPair::generate().unwrap();
+
+        let error = keypair
+            .shared_secret_from_peer_public_key("not-valid-base64")
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("ephemeral_public_key"));
+    }
+
+    #[test]
+    fn builds_stable_x25519_public_key_from_secret() {
+        let first =
+            SessionEphemeralKeyPair::from_secret([3_u8; SESSION_SHARED_SECRET_LEN]).unwrap();
+        let second =
+            SessionEphemeralKeyPair::from_secret([3_u8; SESSION_SHARED_SECRET_LEN]).unwrap();
+
+        assert_eq!(first.public_key, second.public_key);
+        assert_eq!(first.public_key.len(), SESSION_PUBLIC_KEY_BASE64_LEN);
+
+        let error =
+            SessionEphemeralKeyPair::from_secret([0_u8; SESSION_SHARED_SECRET_LEN]).unwrap_err();
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("all zero"));
+    }
+
+    #[test]
+    fn session_ephemeral_keypair_debug_omits_secret_material() {
+        let keypair =
+            SessionEphemeralKeyPair::from_secret([3_u8; SESSION_SHARED_SECRET_LEN]).unwrap();
+
+        let debug = format!("{keypair:?}");
+
+        assert!(debug.contains("public_key"));
+        assert!(!debug.contains("secret"));
+        assert!(!debug.contains("[3, 3, 3"));
     }
 
     #[test]
