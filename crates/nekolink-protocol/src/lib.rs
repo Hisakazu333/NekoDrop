@@ -564,6 +564,17 @@ impl SessionReadyPayload {
         ready.handshake_hash = session_handshake_hash(hello, &ready)?;
         Ok(ready)
     }
+
+    pub fn verify_for_hello(&self, hello: &SessionHelloPayload) -> Result<(), ProtocolError> {
+        let expected_hash = session_handshake_hash(hello, self)?;
+        if self.handshake_hash != expected_hash {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "session ready handshake_hash mismatch",
+            ));
+        }
+        Ok(())
+    }
 }
 
 pub fn shared_capabilities(left: &[Capability], right: &[Capability]) -> Vec<Capability> {
@@ -1483,6 +1494,53 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("must be offered"));
+    }
+
+    #[test]
+    fn verifies_session_ready_against_hello_transcript_hash() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            "x25519",
+            "base64-local-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+        let ready =
+            SessionReadyPayload::for_hello(&hello, peer, "base64-peer-key", "xchacha20poly1305")
+                .unwrap();
+
+        ready.verify_for_hello(&hello).unwrap();
+
+        let mut tampered = ready.clone();
+        tampered.handshake_hash = "sha256:tampered".to_string();
+        let error = tampered.verify_for_hello(&hello).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("handshake_hash mismatch"));
     }
 
     #[test]

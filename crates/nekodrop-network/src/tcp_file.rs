@@ -448,6 +448,17 @@ pub fn read_session_ready(stream: &mut impl Read) -> NekoDropResult<SessionReady
     Ok(ready)
 }
 
+pub fn read_verified_session_ready(
+    stream: &mut impl Read,
+    hello: &SessionHelloPayload,
+) -> NekoDropResult<SessionReadyPayload> {
+    let ready = read_session_ready(stream)?;
+    ready
+        .verify_for_hello(hello)
+        .map_err(protocol_error_to_network)?;
+    Ok(ready)
+}
+
 pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
     let envelope: Envelope<TransferOffer> = read_json_frame(stream)?;
     envelope
@@ -924,14 +935,13 @@ mod tests {
             "base64-local-ephemeral-public-key",
             vec!["xchacha20poly1305".to_string()],
         );
-        let ready = SessionReadyPayload::new(
-            "session-1",
+        let ready = SessionReadyPayload::for_hello(
+            &hello,
             peer_identity,
-            "x25519",
             "base64-peer-ephemeral-public-key",
             "xchacha20poly1305",
-            "sha256:handshake-transcript",
-        );
+        )
+        .unwrap();
 
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -945,11 +955,61 @@ mod tests {
 
         let mut stream = TcpStream::connect(address).unwrap();
         write_session_hello(&mut stream, &hello).unwrap();
-        let received_ready = read_session_ready(&mut stream).unwrap();
+        let received_ready = read_verified_session_ready(&mut stream, &hello).unwrap();
         let received_hello = receiver.join().unwrap();
 
         assert_eq!(received_hello, hello);
         assert_eq!(received_ready, ready);
+    }
+
+    #[test]
+    fn verified_session_ready_rejects_mismatched_transcript_hash() {
+        let local_identity = DeviceIdentity::new(
+            "neko-device-local",
+            "Local Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:local",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer_identity = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            local_identity,
+            "x25519",
+            "base64-local-ephemeral-public-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+        let mut ready = SessionReadyPayload::for_hello(
+            &hello,
+            peer_identity,
+            "base64-peer-ephemeral-public-key",
+            "xchacha20poly1305",
+        )
+        .unwrap();
+        ready.handshake_hash = "sha256:tampered".to_string();
+
+        let mut buffer = Vec::new();
+        write_session_ready(&mut buffer, &ready).unwrap();
+
+        let error = read_verified_session_ready(&mut Cursor::new(buffer), &hello).unwrap_err();
+
+        assert!(error.to_string().contains("handshake_hash mismatch"));
     }
 
     #[test]
