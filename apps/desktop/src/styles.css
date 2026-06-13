@@ -257,11 +257,26 @@ button:disabled {
    ========================================================================= */
 
 .workspace {
-  display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+  padding: 0 32px;
+}
+
+.page-frame {
+  display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
+  width: 100%;
+  max-width: var(--content-max);
+  margin: 0 auto;
+  min-height: 0;
+  flex: 1;
+}
+
+.page-frame.is-wide {
+  max-width: var(--content-wide);
 }
 
 .topbar {
@@ -270,7 +285,7 @@ button:disabled {
   justify-content: space-between;
   gap: 16px;
   min-height: 52px;
-  padding: 12px 32px 0;
+  padding: 12px 0 0;
   background: var(--surface-app);
 }
 
@@ -432,7 +447,7 @@ button:disabled {
 .notice-stack {
   display: grid;
   gap: 8px;
-  padding: 8px 32px 0;
+  padding: 8px 0 0;
 }
 
 .notice {
@@ -477,28 +492,33 @@ button:disabled {
 .work-surface {
   min-height: 0;
   overflow: auto;
-  padding: 24px 32px 48px;
+  padding: 20px 0 40px;
 }
 
 .work-surface.is-single {
-  padding-top: 16px;
+  padding-top: 12px;
 }
 
 .page-stack {
   display: grid;
-  gap: 32px;
-  width: min(100%, var(--content-max));
-  margin: 0 auto;
+  gap: 24px;
+  width: 100%;
 }
 
 .page-stack.is-wide {
-  width: min(100%, var(--content-wide));
+  width: 100%;
 }
 
 .receive-page,
 .settings-page {
   display: grid;
-  gap: 32px;
+  gap: 24px;
+}
+
+.receive-empty {
+  display: grid;
+  gap: 12px;
+  justify-items: start;
 }
 
 .page-intro {
@@ -545,7 +565,7 @@ button:disabled {
 
 .settings-section {
   display: grid;
-  gap: 14px;
+  gap: 12px;
 }
 
 .settings-section-title {
@@ -635,9 +655,9 @@ button:disabled {
   flex: 1 1 240px;
   min-width: 0;
   padding: 10px 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
   border-radius: var(--r-sm);
   color: var(--text-1);
   background: var(--surface-input);
@@ -682,8 +702,7 @@ button:disabled {
 .drop-home {
   display: grid;
   gap: 28px;
-  width: min(100%, var(--content-max));
-  margin: 0 auto;
+  width: 100%;
 }
 
 .send-hero {
@@ -727,14 +746,27 @@ button:disabled {
 .composer-dropzone {
   display: grid;
   place-items: center;
+  width: 100%;
   min-height: 160px;
   padding: 32px 24px;
   border: 1.5px dashed #d4d4d8;
   border-radius: var(--r-md);
   text-align: center;
+  color: inherit;
+  background: transparent;
   transition:
     border-color var(--t),
     background var(--t);
+}
+
+.composer-dropzone:not(:disabled):hover {
+  border-color: #a1a1aa;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.composer-dropzone:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .composer.is-dragging .composer-dropzone {
@@ -842,9 +874,8 @@ button:disabled {
 .active-transfer {
   display: grid;
   gap: 10px;
-  width: min(100%, var(--content-max));
-  margin: 0 auto;
-  padding: 0 0 4px;
+  width: 100%;
+  padding: 0 0 8px;
 }
 
 .active-transfer.is-error .active-transfer-meter span {
@@ -885,10 +916,15 @@ button:disabled {
 .active-transfer-meter span {
   display: block;
   height: 100%;
-  min-width: 4px;
+  min-width: 0;
   border-radius: inherit;
   background: var(--accent);
   transition: width var(--t);
+}
+
+.active-transfer-meter span[style*="width: 0%"],
+.active-transfer-meter span[style*="width:0%"] {
+  min-width: 0;
 }
 
 /* =========================================================================

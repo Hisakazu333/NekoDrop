@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import { invokeCommand } from "./tauri";
+import { bindWindowDragDrop } from "./dragDrop";
+import { invokeCommand, isTauriRuntime } from "./tauri";
 import {
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
@@ -29,7 +29,10 @@ import {
 import { buildSettingsViewModel, parseReceivePortValue } from "./settingsView";
 import {
   buildTransferProgressViewModel,
-  formatBytes
+  formatBytes,
+  shouldShowActiveTransferBar,
+  shouldShowSendPageStatusLine,
+  shouldShowTransferProgressMeter
 } from "./transferProgress";
 import type {
   AppSnapshot,
@@ -111,6 +114,8 @@ export function App() {
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
+  const [dragDropReady, setDragDropReady] = useState(false);
+  const desktopRuntime = useMemo(() => isTauriRuntime(), []);
   const [busy, setBusy] = useState<BusyMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -258,35 +263,38 @@ export function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "enter" || event.payload.type === "over") {
-          setDragActive(true);
-          return;
-        }
+    if (!desktopRuntime) {
+      setDragDropReady(false);
+      return;
+    }
 
-        if (event.payload.type === "leave") {
-          setDragActive(false);
-          return;
-        }
-
-        if (event.payload.type === "drop") {
-          setDragActive(false);
-          applyPickedPaths(event.payload.paths).catch((nextError) =>
-            setError(errorMessage(nextError))
-          );
-        }
-      })
-      .then((nextUnlisten) => {
-        unlisten = nextUnlisten;
-      })
-      .catch(() => undefined);
+    void bindWindowDragDrop({
+      onActiveChange: setDragActive,
+      onDrop: (paths) => {
+        void applyPickedPathsRef.current(paths).catch((nextError) =>
+          setError(errorMessage(nextError))
+        );
+      },
+      onError: (message) => {
+        setDragDropReady(false);
+        setError(`拖放初始化失败：${message}`);
+      }
+    }).then((nextUnlisten) => {
+      if (cancelled) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+      setDragDropReady(true);
+    });
 
     return () => {
+      cancelled = true;
       unlisten?.();
     };
-  }, [manualPaths, selectedPaths]);
+  }, [desktopRuntime]);
 
   async function refreshSnapshot() {
     const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
@@ -374,8 +382,12 @@ export function App() {
     setSelectedPaths(mergedPaths);
     setSendReport(null);
     setMode("send");
+    setToast(`已加入 ${paths.length} 个路径`);
     await scanPaths(mergedPaths, manualPaths);
   }
+
+  const applyPickedPathsRef = useRef(applyPickedPaths);
+  applyPickedPathsRef.current = applyPickedPaths;
 
   async function chooseReceiveDir() {
     setBusy("pick-receive");
@@ -888,7 +900,7 @@ export function App() {
       : "文件 / 文件夹";
   const pageSubtitle =
     mode === "receive"
-      ? receiveState
+      ? receiveSession?.bind_addr ?? receiveState
       : mode === "devices"
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
@@ -958,6 +970,7 @@ export function App() {
       </aside>
 
       <section className="workspace">
+        <div className={mode === "history" ? "page-frame is-wide" : "page-frame"}>
         <header className="topbar">
           {mode !== "send" ? (
             <div className="page-heading">
@@ -969,20 +982,31 @@ export function App() {
           )}
 
           <div className="topbar-actions">
-            <button
-              className={receiveSession ? "primary-button is-muted" : "primary-button"}
-              disabled={busy === "receive"}
-              onClick={() => {
-                if (receiveSession) {
-                  setMode("receive");
-                  return;
-                }
-                startReceive();
-              }}
-              type="button"
-            >
-              {receiveSession ? "查看收件" : "开启收件"}
-            </button>
+            {mode === "receive" && receiveSession ? (
+              <button
+                className="danger-button"
+                disabled={busy === "stop-receive" || busy === "receive"}
+                onClick={stopReceive}
+                type="button"
+              >
+                关闭收件
+              </button>
+            ) : (
+              <button
+                className={receiveSession ? "primary-button is-muted" : "primary-button"}
+                disabled={busy === "receive"}
+                onClick={() => {
+                  if (receiveSession) {
+                    setMode("receive");
+                    return;
+                  }
+                  startReceive();
+                }}
+                type="button"
+              >
+                {receiveSession ? "查看收件" : "开启收件"}
+              </button>
+            )}
           </div>
         </header>
 
@@ -1024,12 +1048,23 @@ export function App() {
                 <p className="send-hero-subtitle">
                   {transferPaths.length > 0
                     ? composerSubtitle
-                    : "拖入文件或文件夹，或选择下方设备发送"}
+                    : desktopRuntime
+                      ? dragDropReady
+                        ? "拖入文件或文件夹，或点击投放区 / 下方按钮选择"
+                        : "正在初始化拖放，请先用下方按钮选择文件"
+                      : "当前是浏览器预览，拖放和系统文件选择不可用，请用 npm --workspace apps/desktop run tauri:dev 启动桌面端"}
                 </p>
               </header>
 
               <section className={dragActive ? "composer is-dragging" : "composer"}>
-                <div className="composer-dropzone">
+                <button
+                  className="composer-dropzone"
+                  disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
+                  onClick={() => {
+                    void pickFiles();
+                  }}
+                  type="button"
+                >
                   <div className="composer-copy">
                     <strong>{composerTitle}</strong>
                     <span>
@@ -1037,10 +1072,14 @@ export function App() {
                         ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
                         : transferPaths.length > 0
                           ? composerSubtitle
-                          : "文件 / 文件夹"}
+                          : busy === "scan"
+                            ? "正在扫描文件…"
+                            : desktopRuntime
+                              ? "点击选择，或拖入文件 / 文件夹"
+                              : "浏览器预览不支持拖放"}
                     </span>
                   </div>
-                </div>
+                </button>
                 {connectionCodeOpen ? (
                   <textarea
                     className="composer-code"
@@ -1109,7 +1148,13 @@ export function App() {
                 </button>
               </div>
 
-              {(transferStatus || sendReport || receiveReport || plan) ? (
+              {shouldShowSendPageStatusLine(
+                transferStatus,
+                sendReport,
+                receiveReport,
+                plan,
+                transferPaths.length
+              ) ? (
                 <StatusLine
                   plan={plan}
                   receiveReport={receiveReport}
@@ -1120,6 +1165,7 @@ export function App() {
                   transferCount={transferPaths.length}
                   busy={busy}
                   recoveryTransfer={currentFailedTransfer}
+                  showActiveTransfer={false}
                   onCancelTransfer={cancelCurrentTransfer}
                   onRecoverTransfer={resendTransfer}
                   onUseFallbackCode={openFallbackCode}
@@ -1289,6 +1335,7 @@ export function App() {
             </div>
           )}
         </section>
+        </div>
       </section>
     </main>
   );
@@ -1652,30 +1699,23 @@ function ReceivePanel({
 
   return (
     <section className="receive-page">
-      <header className="page-intro">
-        <div className="page-intro-copy">
-          <p className="page-intro-eyebrow">本机收件</p>
-          <strong>{receiveSession ? "等待附近设备连接" : "收件未开启"}</strong>
-          <span>{receiveSession?.bind_addr ?? "打开收件后会显示监听地址和连接码"}</span>
-          {diagnosticsAdvice ? <small>{diagnosticsAdvice}</small> : null}
-        </div>
-        <div className="page-intro-actions">
-          {receiveSession ? (
-            <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
-              关闭收件
-            </button>
-          ) : (
-            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-              开启收件
-            </button>
-          )}
-        </div>
-      </header>
+      {!receiveSession ? (
+        <section className="settings-section receive-empty">
+          <p className="settings-section-note">
+            开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
+          </p>
+          <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+            开启收件
+          </button>
+        </section>
+      ) : null}
 
       {receiveSession ? (
         <section className="settings-section">
           <h2 className="settings-section-title">连接码</h2>
-          <p className="settings-section-note">发送端可粘贴此连接码，或输入你的局域网 IP:端口</p>
+          <p className="settings-section-note">
+            {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
+          </p>
           <div className="connection-code-row">
             <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
             <button className="tool-button" onClick={onCopyConnectionCode} type="button">
@@ -2127,7 +2167,7 @@ function HistoryPanel({
         </button>
       </div>
 
-      {transferStatus && transferStatus.phase !== "completed" ? (
+      {transferStatus && shouldShowActiveTransferBar(transferStatus) ? (
         <TransferStatusView
           busy={busy}
           metrics={transferMetrics}
@@ -2244,6 +2284,7 @@ function StatusLine({
   transferStatus,
   transferCount,
   recoveryTransfer,
+  showActiveTransfer = true,
   onCancelTransfer,
   onRecoverTransfer,
   onUseFallbackCode
@@ -2260,11 +2301,16 @@ function StatusLine({
   transferStatus: TransferStatusDto | null;
   transferCount: number;
   recoveryTransfer: TransferDto | null;
+  showActiveTransfer?: boolean;
   onCancelTransfer: () => void;
   onRecoverTransfer: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
-  if (transferStatus && transferStatus.phase !== "completed") {
+  if (
+    showActiveTransfer &&
+    transferStatus &&
+    shouldShowActiveTransferBar(transferStatus)
+  ) {
     return (
       <TransferStatusView
         busy={busy}
@@ -2445,17 +2491,25 @@ function ActiveTransferBar({
           <strong>{model.title}</strong>
           <span title={model.rootName}>{model.rootName}</span>
         </div>
-        <div className="active-transfer-meter" aria-label="当前传输进度">
-          <span style={{ width: `${model.progressPercent}%` }} />
-        </div>
-        <div className="active-transfer-meta">
-          <span>{model.percentLabel}</span>
-          <span>{model.bytesLabel}</span>
-          <span>{model.fileIndexLabel}</span>
-          {model.speedLabel ? <span>{model.speedLabel}</span> : null}
-          {model.etaLabel ? <span>{model.etaLabel}</span> : null}
-          {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
-        </div>
+        {shouldShowTransferProgressMeter(status) ? (
+          <div className="active-transfer-meter" aria-label="当前传输进度">
+            <span style={{ width: `${model.progressPercent}%` }} />
+          </div>
+        ) : null}
+        {shouldShowTransferProgressMeter(status) ? (
+          <div className="active-transfer-meta">
+            <span>{model.percentLabel}</span>
+            <span>{model.bytesLabel}</span>
+            <span>{model.fileIndexLabel}</span>
+            {model.speedLabel ? <span>{model.speedLabel}</span> : null}
+            {model.etaLabel ? <span>{model.etaLabel}</span> : null}
+            {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
+          </div>
+        ) : (
+          <div className="active-transfer-meta">
+            <span>{model.message}</span>
+          </div>
+        )}
       </div>
       {canCancel ? (
         <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
@@ -2670,10 +2724,6 @@ function isRecoverableCurrentStatus(phase: string) {
 
 function isReceiveTransferActivePhase(phase: string) {
   return phase === "accepted" || phase === "transferring" || phase === "verifying";
-}
-
-function shouldShowActiveTransferBar(status: TransferStatusDto) {
-  return status.phase !== "completed" && status.phase !== "closed";
 }
 
 function shouldShowHistoryProgress(transfer: TransferDto) {
