@@ -5,7 +5,9 @@ import {
   buildTransferProgressViewModel,
   formatBytes,
   formatDuration,
-  progressPercent
+  progressPercent,
+  shouldShowActiveTransferBar,
+  shouldShowTransferProgressMeter
 } from "../src/transferProgress.ts";
 import type { TransferStatusDto } from "../src/types.ts";
 
@@ -80,4 +82,53 @@ test("adds short advice to failed transfer status messages", () => {
   });
 
   assert.equal(model.adviceLabel, "确认同一局域网；关闭 VPN/代理；可用备用码");
+});
+
+test("hides idle receive listening state from the active transfer bar", () => {
+  const listening = status({
+    phase: "listening",
+    root_name: "",
+    file_count: 0,
+    file_index: 0,
+    bytes_transferred: 0,
+    total_bytes: 0,
+    progress: 0,
+    message: "收件已打开，等待连接"
+  });
+
+  assert.equal(shouldShowActiveTransferBar(listening), false);
+  assert.equal(shouldShowTransferProgressMeter(listening), false);
+
+  const model = buildTransferProgressViewModel(listening, {
+    speedBytesPerSecond: null,
+    etaSeconds: null
+  });
+
+  assert.equal(model.title, "收件开启");
+  assert.equal(model.rootName, "收件已打开，等待连接");
+});
+
+test("shows transfer meter only when bytes are in flight", () => {
+  const connecting = status({
+    phase: "connecting",
+    root_name: "demo.zip",
+    file_count: 1,
+    bytes_transferred: 0,
+    total_bytes: 1024,
+    progress: 0,
+    message: "正在连接"
+  });
+
+  assert.equal(shouldShowActiveTransferBar(connecting), true);
+  assert.equal(shouldShowTransferProgressMeter(connecting), true);
+
+  const transferring = status({
+    phase: "transferring",
+    bytes_transferred: 0,
+    total_bytes: 0,
+    progress: 0,
+    message: "正在发送"
+  });
+
+  assert.equal(shouldShowTransferProgressMeter(transferring), true);
 });

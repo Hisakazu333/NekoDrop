@@ -29,7 +29,9 @@ import {
 import { buildSettingsViewModel, parseReceivePortValue } from "./settingsView";
 import {
   buildTransferProgressViewModel,
-  formatBytes
+  formatBytes,
+  shouldShowActiveTransferBar,
+  shouldShowTransferProgressMeter
 } from "./transferProgress";
 import type {
   AppSnapshot,
@@ -2262,7 +2264,7 @@ function StatusLine({
   onRecoverTransfer: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
-  if (transferStatus && transferStatus.phase !== "completed") {
+  if (transferStatus && shouldShowActiveTransferBar(transferStatus)) {
     return (
       <TransferStatusView
         busy={busy}
@@ -2443,17 +2445,25 @@ function ActiveTransferBar({
           <strong>{model.title}</strong>
           <span title={model.rootName}>{model.rootName}</span>
         </div>
-        <div className="active-transfer-meter" aria-label="当前传输进度">
-          <span style={{ width: `${model.progressPercent}%` }} />
-        </div>
-        <div className="active-transfer-meta">
-          <span>{model.percentLabel}</span>
-          <span>{model.bytesLabel}</span>
-          <span>{model.fileIndexLabel}</span>
-          {model.speedLabel ? <span>{model.speedLabel}</span> : null}
-          {model.etaLabel ? <span>{model.etaLabel}</span> : null}
-          {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
-        </div>
+        {shouldShowTransferProgressMeter(status) ? (
+          <div className="active-transfer-meter" aria-label="当前传输进度">
+            <span style={{ width: `${model.progressPercent}%` }} />
+          </div>
+        ) : null}
+        {shouldShowTransferProgressMeter(status) ? (
+          <div className="active-transfer-meta">
+            <span>{model.percentLabel}</span>
+            <span>{model.bytesLabel}</span>
+            <span>{model.fileIndexLabel}</span>
+            {model.speedLabel ? <span>{model.speedLabel}</span> : null}
+            {model.etaLabel ? <span>{model.etaLabel}</span> : null}
+            {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
+          </div>
+        ) : (
+          <div className="active-transfer-meta">
+            <span>{model.message}</span>
+          </div>
+        )}
       </div>
       {canCancel ? (
         <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
@@ -2668,10 +2678,6 @@ function isRecoverableCurrentStatus(phase: string) {
 
 function isReceiveTransferActivePhase(phase: string) {
   return phase === "accepted" || phase === "transferring" || phase === "verifying";
-}
-
-function shouldShowActiveTransferBar(status: TransferStatusDto) {
-  return status.phase !== "completed" && status.phase !== "closed";
 }
 
 function shouldShowHistoryProgress(transfer: TransferDto) {

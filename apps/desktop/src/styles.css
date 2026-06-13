@@ -734,10 +734,14 @@ button:disabled {
 .active-transfer-meter span {
   display: block;
   height: 100%;
-  min-width: 4px;
+  min-width: 0;
   border-radius: inherit;
   background: var(--accent);
   transition: width var(--t);
+}
+
+.active-transfer-meter span[style*="width: 0%"] {
+  display: none;
 }
 
 /* =========================================================================

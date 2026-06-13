@@ -56,7 +56,7 @@ export function buildTransferProgressViewModel(
 
   return {
     title: transferTitle(status),
-    rootName: status.root_name?.trim() || "传输中",
+    rootName: status.root_name?.trim() || status.message?.trim() || phaseLabel(status.phase),
     progressPercent: progress,
     percentLabel: `${progress}%`,
     bytesLabel:
@@ -98,4 +98,25 @@ function phaseLabel(phase: string) {
 function clampPercent(value: number) {
   if (!Number.isFinite(value)) return 0;
   return Math.round(Math.min(1, Math.max(0, value)) * 100);
+}
+
+const HIDDEN_ACTIVE_TRANSFER_PHASES = new Set([
+  "completed",
+  "closed",
+  "listening",
+  "declined",
+  "expired"
+]);
+
+export function shouldShowActiveTransferBar(status: TransferStatusDto) {
+  return !HIDDEN_ACTIVE_TRANSFER_PHASES.has(status.phase);
+}
+
+export function shouldShowTransferProgressMeter(status: TransferStatusDto) {
+  return (
+    status.total_bytes > 0 ||
+    status.bytes_transferred > 0 ||
+    status.phase === "transferring" ||
+    status.phase === "verifying"
+  );
 }
