@@ -329,6 +329,12 @@ Sent after user confirmation.
 
 When accepted, both sides persist `trusted_devices.json`. The current pairing establishes device trust state, but it is not yet an encrypted session.
 
+## Bundle messages
+
+NekoLink bundle is specified in [BUNDLE_SPEC.md](BUNDLE_SPEC.md). The current protocol does not yet define a dedicated `bundle.offer` message kind. The first implementation should carry bundle directories through the existing file transfer path, then detect and validate `bundle.json`, `checksums.json`, `permissions.json`, and `files/` after receive.
+
+Bundle import is not automatic. Receiving a valid bundle only creates a staged package for CCS/OpenNeko or another upper layer to inspect and import after explicit confirmation.
+
 ## Transfer Messages
 
 ### Current connection-code TCP v1

@@ -80,6 +80,7 @@
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
+| NekoLink bundle spec | 规格已写 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；代码还没有实现 bundle manifest、接收检测、staging 或 local bridge 导入。 |
 
 ## 当前不能宣传为已完成
 
@@ -89,6 +90,7 @@
 - 加密文件流
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
+- NekoLink bundle 发送和导入主流程
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储

@@ -180,7 +180,7 @@ scripts/                macOS / Windows 打包和审计脚本
 - CCS/OpenNeko 本地桥：让插件和 OpenNeko 通过本机受控 API 调用 NekoLink
 - iroh / relay / P2P：把跨网络 transport 接到同一套 session 和 bundle 上
 
-为什么按这个顺序走，看 [docs/NEXT_PHASE_ANALYSIS.md](docs/NEXT_PHASE_ANALYSIS.md)。路线图看 [docs/ROADMAP.md](docs/ROADMAP.md)，真实完成状态以 [docs/STATUS.md](docs/STATUS.md) 为准。
+bundle 规格看 [docs/BUNDLE_SPEC.md](docs/BUNDLE_SPEC.md)。为什么按这个顺序走，看 [docs/NEXT_PHASE_ANALYSIS.md](docs/NEXT_PHASE_ANALYSIS.md)。路线图看 [docs/ROADMAP.md](docs/ROADMAP.md)，真实完成状态以 [docs/STATUS.md](docs/STATUS.md) 为准。
 
 ## 文档
 
@@ -189,6 +189,7 @@ scripts/                macOS / Windows 打包和审计脚本
 - [安全模型](docs/SECURITY.md)
 - [架构](docs/ARCHITECTURE.md)
 - [协议](docs/PROTOCOL.md)
+- [Bundle 规格](docs/BUNDLE_SPEC.md)
 - [Roadmap](docs/ROADMAP.md)
 - [下一阶段分析](docs/NEXT_PHASE_ANALYSIS.md)
 - [模块边界](docs/MODULES.md)

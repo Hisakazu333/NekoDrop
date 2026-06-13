@@ -1,0 +1,301 @@
+# NekoLink bundle 规格
+
+这份规格定义 NekoLink 后续传递上层数据时的包格式。bundle 不是普通文件夹压缩包，也不是自动同步协议；它是一个可预览、可校验、可拒绝、可由上层应用显式导入的数据包。
+
+当前文档只定义协议和安全边界，不代表桌面端已经实现 bundle 发送或导入。真实完成状态仍以 [STATUS.md](STATUS.md) 为准。
+
+## 为什么需要 bundle
+
+NekoDrop 现在已经能发送文件和文件夹，但 skills、session、workspace、agent profile 这类数据不能直接当普通文件传。接收端需要先知道这包数据是什么、来自哪个应用、会写入哪些位置、需要哪些权限、能不能被当前客户端理解。
+
+bundle 要解决这些问题：
+
+- 给上层数据一个统一 manifest
+- 在接收前展示类型、来源、大小和权限
+- 绑定每个 payload 文件的 checksum
+- 阻止 token、密钥和本机隐私路径默认进入同步
+- 让 CCS/OpenNeko local bridge 只处理明确类型的数据包
+- 让未来 iroh / relay / P2P 只替换 transport，不改变上层包语义
+
+## 非目标
+
+第一版 bundle 不做这些事：
+
+- 不做云盘目录同步
+- 不自动导入 skills、session 或 workspace
+- 不传系统钥匙串、浏览器 cookie、SSH key、API token
+- 不执行远端 Agent 指令
+- 不做跨公网 relay
+- 不定义 OpenNeko 的完整业务模型
+- 不替代 NekoDrop 现有普通文件传输
+
+## 包结构
+
+bundle 在文件系统中的标准结构：
+
+```text
+bundle.json
+checksums.json
+permissions.json
+files/
+```
+
+各部分职责：
+
+- `bundle.json`：包身份、类型、来源、版本、文件列表和兼容信息
+- `checksums.json`：每个 payload 文件的 SHA-256
+- `permissions.json`：导入前需要展示和确认的权限
+- `files/`：实际 payload 文件，只能通过相对路径引用
+
+发送时可以把这些文件作为一个目录发送，也可以后续封装成单文件归档。无论外层如何打包，内部结构必须保持一致。
+
+## bundle 类型
+
+第一版只允许这些类型：
+
+| 类型 | 用途 | 默认导入 |
+| --- | --- | --- |
+| `skill` | 单个技能或插件能力包 | 否 |
+| `session` | 上层应用会话数据 | 否 |
+| `workspace` | 项目工作区快照或片段 | 否 |
+| `agent_profile` | Agent 配置、角色偏好或能力声明 | 否 |
+| `config_snapshot` | 应用配置快照 | 否 |
+
+未知类型必须拒绝导入，但可以保存为普通 bundle 文件。
+
+## `bundle.json`
+
+`bundle.json` 是接收端预览和兼容判断的入口。
+
+示例：
+
+```json
+{
+  "schema": "nekolink.bundle.v1",
+  "bundle_id": "bundle_1234567890",
+  "bundle_type": "skill",
+  "display_name": "voice_transcribe",
+  "source_app": "OpenNeko",
+  "created_at": "2026-06-14T10:30:00Z",
+  "sender": {
+    "device_id": "neko-device-1234567890",
+    "device_name": "MacBook",
+    "fingerprint": "sha256:0123456789abcdef"
+  },
+  "compatibility": {
+    "min_nekolink_version": 1,
+    "required_capabilities": ["bundle_transfer"]
+  },
+  "summary": {
+    "file_count": 2,
+    "total_bytes": 4096
+  },
+  "files": [
+    {
+      "path": "files/manifest.json",
+      "size": 1024,
+      "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+      "role": "manifest"
+    },
+    {
+      "path": "files/content.bin",
+      "size": 3072,
+      "sha256": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+      "role": "payload"
+    }
+  ]
+}
+```
+
+字段规则：
+
+- `schema` 必须是 `nekolink.bundle.v1`
+- `bundle_id` 必须非空，并且只用于去重和展示，不作为信任依据
+- `bundle_type` 必须是已知类型
+- `display_name` 只能用于展示，不能用于路径拼接
+- `source_app` 用于说明来源应用
+- `created_at` 使用 UTC ISO 8601
+- `sender` 必须来自当前 verified session，不信任 bundle 内自报身份
+- `compatibility.required_capabilities` 必须在导入前检查
+- `summary.file_count` 必须等于 `files` 数组长度
+- `summary.total_bytes` 必须等于 `files` 中 `size` 总和
+- `files[].path` 必须是相对 slash path
+- `files[].sha256` 必须是 64 位十六进制 SHA-256
+
+## `checksums.json`
+
+`checksums.json` 是冗余校验索引，方便接收端在不解析业务 payload 的情况下验证文件。
+
+示例：
+
+```json
+{
+  "algorithm": "sha256",
+  "files": {
+    "files/manifest.json": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+    "files/content.bin": "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+  }
+}
+```
+
+校验规则：
+
+- `algorithm` 第一版只接受 `sha256`
+- `files` 的 key 必须与 `bundle.json.files[].path` 完全一致
+- `files` 的 value 必须与 `bundle.json.files[].sha256` 完全一致
+- 缺失、额外、大小写不一致或 checksum 不匹配都必须拒绝导入
+
+## `permissions.json`
+
+`permissions.json` 描述导入前需要展示给用户或上层应用确认的权限。
+
+示例：
+
+```json
+{
+  "requested_scopes": [
+    "skill.install",
+    "workspace.write"
+  ],
+  "writes": [
+    {
+      "target": "openneko.skills",
+      "mode": "create_only"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": []
+  }
+}
+```
+
+权限规则：
+
+- `requested_scopes` 必须是已知 scope
+- `writes[].target` 只能是上层应用定义的逻辑目标，不能是本机绝对路径
+- `mode` 第一版只接受 `create_only` 或 `manual_import`
+- `contains_secrets=true` 的 bundle 第一版必须拒绝导入
+- 缺少 `permissions.json` 时可以保存 bundle，但不能导入
+
+第一版建议 scope：
+
+| Scope | 含义 |
+| --- | --- |
+| `skill.install` | 安装 skill |
+| `session.import` | 导入会话 |
+| `workspace.import` | 导入工作区快照 |
+| `agent_profile.import` | 导入 Agent 配置 |
+| `config.import` | 导入应用配置 |
+
+## 路径安全
+
+bundle 路径必须沿用 NekoDrop 当前 manifest 的安全原则，并且更严格。
+
+必须拒绝：
+
+- 空路径
+- 绝对路径
+- `.` 或 `..` 片段
+- 反斜杠
+- NUL 字符
+- Windows 保留设备名
+- 以空格或点结尾的路径片段
+- 包含 `< > : " | ? *` 或控制字符的路径片段
+- 指向 `bundle.json`、`checksums.json`、`permissions.json` 之外的根级未知文件
+
+接收端只能把 bundle 保存到应用控制的 staging 目录。导入动作由 CCS/OpenNeko 等上层应用读取 staging 目录后完成。
+
+## 接收流程
+
+第一版接收流程：
+
+1. 接收普通 NekoLink transfer offer
+2. 识别根目录中是否存在 `bundle.json`
+3. 校验 `bundle.json`、`checksums.json` 和 `permissions.json`
+4. 校验所有 payload 文件路径、大小和 SHA-256
+5. 展示 bundle 类型、来源、文件数、大小和权限
+6. 用户选择保存或拒绝
+7. 保存到 staging 目录
+8. 通知上层应用有可导入 bundle
+9. 上层应用再次确认后导入
+
+接收端不能在第 7 步之前修改上层应用配置，也不能在第 8 步自动导入。
+
+## 与现有文件传输的关系
+
+bundle 第一版应复用现有文件传输能力：
+
+- `FileManifest` 继续表示文件树
+- `TransferOffer` 继续表达传输前预览
+- encrypted `session.control` 继续承载 offer / accept / decline
+- 文件 payload 加密完成前，bundle 只能用于非敏感样例或受控测试
+
+bundle 不应该把 NekoDrop 文件传输改成上层应用专用通道。普通文件夹发送仍然是普通文件夹发送；只有符合本规格并通过校验的目录才被识别为 bundle。
+
+## 与 CCS/OpenNeko local bridge 的关系
+
+local bridge 依赖 bundle，而不是替代 bundle。
+
+bridge 可以做：
+
+- 创建 bundle
+- 请求发送 bundle
+- 订阅收到 bundle 的通知
+- 请求导入 staging bundle
+- 查询可信设备和传输状态
+
+bridge 不可以做：
+
+- 直接写入对方设备文件系统
+- 绕过 bundle 权限导入
+- 绕过 NekoLink session 自己建立网络连接
+- 把本机任意目录打成 bundle
+- 自动打包 token、密钥或隐私文件
+
+## 与 iroh / relay / P2P 的关系
+
+iroh / relay / P2P 只能替换 transport，不能改变 bundle 语义。
+
+未来关系应保持为：
+
+```text
+bundle
+  -> NekoLink session
+  -> TCP transport or iroh transport
+```
+
+如果同一个 bundle 在 TCP 和 iroh 上行为不同，说明 transport 边界泄漏到了应用层，需要先修 NekoLink 抽象。
+
+## 第一版实现切片
+
+建议按这个顺序实现：
+
+1. `nekolink-protocol` 增加 bundle manifest 类型和校验
+2. `nekodrop-storage` 增加 bundle 目录识别和 staging 校验
+3. `nekodrop-service` 在接收完成后产生 bundle detected 事件
+4. 桌面 UI 只展示 bundle 预览和保存状态
+5. CCS/OpenNeko local bridge 再接导入动作
+
+第一版测试必须覆盖：
+
+- 合法 bundle 通过校验
+- 未知 `bundle_type` 拒绝导入
+- 路径穿越被拒绝
+- checksum 缺失或不匹配被拒绝
+- `contains_secrets=true` 被拒绝
+- `summary` 和文件列表不一致被拒绝
+- 缺少 `permissions.json` 时只能保存，不能导入
+
+## 完成标准
+
+规格完成后，下一步实现必须满足：
+
+- 能构造一个 `skill` bundle manifest
+- 能从已接收目录识别 bundle
+- 能校验路径、大小、checksum 和权限
+- 能保存到 staging 目录
+- 不会自动导入或执行任何上层数据
+- 不要求 iroh / relay / P2P
+
+这些条件满足后，才进入 CCS/OpenNeko local bridge。
