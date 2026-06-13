@@ -576,14 +576,27 @@ button:disabled {
 .composer-dropzone {
   display: grid;
   place-items: center;
+  width: 100%;
   min-height: 160px;
   padding: 32px 24px;
   border: 1.5px dashed #d4d4d8;
   border-radius: var(--r-md);
   text-align: center;
+  color: inherit;
+  background: transparent;
   transition:
     border-color var(--t),
     background var(--t);
+}
+
+.composer-dropzone:not(:disabled):hover {
+  border-color: #a1a1aa;
+  background: rgba(0, 0, 0, 0.02);
+}
+
+.composer-dropzone:disabled {
+  cursor: not-allowed;
+  opacity: 0.72;
 }
 
 .composer.is-dragging .composer-dropzone {

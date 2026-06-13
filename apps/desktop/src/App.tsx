@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import { invokeCommand } from "./tauri";
+import { bindWindowDragDrop } from "./dragDrop";
+import { invokeCommand, isTauriRuntime } from "./tauri";
 import {
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
@@ -114,6 +114,8 @@ export function App() {
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
+  const [dragDropReady, setDragDropReady] = useState(false);
+  const desktopRuntime = useMemo(() => isTauriRuntime(), []);
   const [busy, setBusy] = useState<BusyMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -261,35 +263,38 @@ export function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "enter" || event.payload.type === "over") {
-          setDragActive(true);
-          return;
-        }
+    if (!desktopRuntime) {
+      setDragDropReady(false);
+      return;
+    }
 
-        if (event.payload.type === "leave") {
-          setDragActive(false);
-          return;
-        }
-
-        if (event.payload.type === "drop") {
-          setDragActive(false);
-          applyPickedPaths(event.payload.paths).catch((nextError) =>
-            setError(errorMessage(nextError))
-          );
-        }
-      })
-      .then((nextUnlisten) => {
-        unlisten = nextUnlisten;
-      })
-      .catch(() => undefined);
+    void bindWindowDragDrop({
+      onActiveChange: setDragActive,
+      onDrop: (paths) => {
+        void applyPickedPathsRef.current(paths).catch((nextError) =>
+          setError(errorMessage(nextError))
+        );
+      },
+      onError: (message) => {
+        setDragDropReady(false);
+        setError(`拖放初始化失败：${message}`);
+      }
+    }).then((nextUnlisten) => {
+      if (cancelled) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+      setDragDropReady(true);
+    });
 
     return () => {
+      cancelled = true;
       unlisten?.();
     };
-  }, [manualPaths, selectedPaths]);
+  }, [desktopRuntime]);
 
   async function refreshSnapshot() {
     const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
@@ -377,8 +382,12 @@ export function App() {
     setSelectedPaths(mergedPaths);
     setSendReport(null);
     setMode("send");
+    setToast(`已加入 ${paths.length} 个路径`);
     await scanPaths(mergedPaths, manualPaths);
   }
+
+  const applyPickedPathsRef = useRef(applyPickedPaths);
+  applyPickedPathsRef.current = applyPickedPaths;
 
   async function chooseReceiveDir() {
     setBusy("pick-receive");
@@ -1027,12 +1036,23 @@ export function App() {
                 <p className="send-hero-subtitle">
                   {transferPaths.length > 0
                     ? composerSubtitle
-                    : "拖入文件或文件夹，或选择下方设备发送"}
+                    : desktopRuntime
+                      ? dragDropReady
+                        ? "拖入文件或文件夹，或点击投放区 / 下方按钮选择"
+                        : "正在初始化拖放，请先用下方按钮选择文件"
+                      : "当前是浏览器预览，拖放和系统文件选择不可用，请用 npm --workspace apps/desktop run tauri:dev 启动桌面端"}
                 </p>
               </header>
 
               <section className={dragActive ? "composer is-dragging" : "composer"}>
-                <div className="composer-dropzone">
+                <button
+                  className="composer-dropzone"
+                  disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
+                  onClick={() => {
+                    void pickFiles();
+                  }}
+                  type="button"
+                >
                   <div className="composer-copy">
                     <strong>{composerTitle}</strong>
                     <span>
@@ -1040,10 +1060,14 @@ export function App() {
                         ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
                         : transferPaths.length > 0
                           ? composerSubtitle
-                          : "文件 / 文件夹"}
+                          : busy === "scan"
+                            ? "正在扫描文件…"
+                            : desktopRuntime
+                              ? "点击选择，或拖入文件 / 文件夹"
+                              : "浏览器预览不支持拖放"}
                     </span>
                   </div>
-                </div>
+                </button>
                 {connectionCodeOpen ? (
                   <textarea
                     className="composer-code"
