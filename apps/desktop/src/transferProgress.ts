@@ -120,3 +120,14 @@ export function shouldShowTransferProgressMeter(status: TransferStatusDto) {
     status.phase === "verifying"
   );
 }
+
+export function shouldShowSendPageStatusLine(
+  transferStatus: TransferStatusDto | null,
+  sendReport: unknown,
+  receiveReport: unknown,
+  plan: unknown,
+  transferCount: number
+) {
+  if (sendReport || receiveReport || plan || transferCount > 0) return true;
+  return transferStatus != null && shouldShowActiveTransferBar(transferStatus);
+}

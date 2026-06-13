@@ -7,6 +7,7 @@ import {
   formatDuration,
   progressPercent,
   shouldShowActiveTransferBar,
+  shouldShowSendPageStatusLine,
   shouldShowTransferProgressMeter
 } from "../src/transferProgress.ts";
 import type { TransferStatusDto } from "../src/types.ts";
@@ -131,4 +132,20 @@ test("shows transfer meter only when bytes are in flight", () => {
   });
 
   assert.equal(shouldShowTransferProgressMeter(transferring), true);
+});
+
+test("hides idle receive status from send page status line", () => {
+  const listening = status({
+    phase: "listening",
+    message: "收件已打开，等待连接"
+  });
+
+  assert.equal(
+    shouldShowSendPageStatusLine(listening, null, null, null, 0),
+    false
+  );
+  assert.equal(
+    shouldShowSendPageStatusLine(listening, null, null, { file_count: 1, total_bytes: 1 }, 0),
+    true
+  );
 });

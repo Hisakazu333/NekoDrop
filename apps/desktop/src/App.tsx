@@ -31,6 +31,7 @@ import {
   buildTransferProgressViewModel,
   formatBytes,
   shouldShowActiveTransferBar,
+  shouldShowSendPageStatusLine,
   shouldShowTransferProgressMeter
 } from "./transferProgress";
 import type {
@@ -1111,7 +1112,13 @@ export function App() {
                 </button>
               </div>
 
-              {(transferStatus || sendReport || receiveReport || plan) ? (
+              {shouldShowSendPageStatusLine(
+                transferStatus,
+                sendReport,
+                receiveReport,
+                plan,
+                transferPaths.length
+              ) ? (
                 <StatusLine
                   plan={plan}
                   receiveReport={receiveReport}
@@ -1122,6 +1129,7 @@ export function App() {
                   transferCount={transferPaths.length}
                   busy={busy}
                   recoveryTransfer={currentFailedTransfer}
+                  showActiveTransfer={false}
                   onCancelTransfer={cancelCurrentTransfer}
                   onRecoverTransfer={resendTransfer}
                   onUseFallbackCode={openFallbackCode}
@@ -2244,6 +2252,7 @@ function StatusLine({
   transferStatus,
   transferCount,
   recoveryTransfer,
+  showActiveTransfer = true,
   onCancelTransfer,
   onRecoverTransfer,
   onUseFallbackCode
@@ -2260,11 +2269,16 @@ function StatusLine({
   transferStatus: TransferStatusDto | null;
   transferCount: number;
   recoveryTransfer: TransferDto | null;
+  showActiveTransfer?: boolean;
   onCancelTransfer: () => void;
   onRecoverTransfer: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
-  if (transferStatus && shouldShowActiveTransferBar(transferStatus)) {
+  if (
+    showActiveTransfer &&
+    transferStatus &&
+    shouldShowActiveTransferBar(transferStatus)
+  ) {
     return (
       <TransferStatusView
         busy={busy}
