@@ -1065,6 +1065,7 @@ export function App() {
                   }}
                   type="button"
                 >
+                  <Icon className="icon-drop" name="upload" />
                   <div className="composer-copy">
                     <strong>{composerTitle}</strong>
                     <span>
@@ -1133,17 +1134,19 @@ export function App() {
                 </button>
               </div>
 
-              <div className="composer-target">
-                <span className="composer-target-label">
-                  发送到 <strong>{targetLabel}</strong>
-                </span>
+              <div className="send-bar">
+                <div className="send-bar-target">
+                  <span className="send-bar-label">发送到</span>
+                  <strong title={targetLabel}>{targetLabel}</strong>
+                </div>
                 <button
-                  className="composer-send"
+                  className="send-bar-action"
                   disabled={!canSend}
                   onClick={sendCurrentTransfer}
                   title={`发送到 ${targetLabel}`}
                   type="button"
                 >
+                  发送
                   <Icon name="arrow-up" />
                 </button>
               </div>
@@ -1352,11 +1355,12 @@ type IconName =
   | "list"
   | "settings"
   | "send"
-  | "trash";
+  | "trash"
+  | "upload";
 
-function Icon({ name }: { name: IconName }) {
+function Icon({ className, name }: { className?: string; name: IconName }) {
   return (
-    <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24">
+    <svg aria-hidden="true" className={className ? `icon ${className}` : "icon"} fill="none" viewBox="0 0 24 24">
       {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
       {name === "clock" ? <path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /> : null}
       {name === "devices" ? <path d="M7 8a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 13a7 7 0 0 1 14 0M17 11a3 3 0 0 1 0 6m3-8a6 6 0 0 1 0 10" /> : null}
@@ -1368,6 +1372,7 @@ function Icon({ name }: { name: IconName }) {
       {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
+      {name === "upload" ? <path d="M12 16V6m0 0 5 5m-5-5-5 5M4 18h16" /> : null}
     </svg>
   );
 }
@@ -1716,14 +1721,16 @@ function ReceivePanel({
           <p className="settings-section-note">
             {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
           </p>
-          <div className="connection-code-row">
+          <div className="code-highlight">
             <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
-            <button className="tool-button" onClick={onCopyConnectionCode} type="button">
-              复制
-            </button>
-            <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
-              打开目录
-            </button>
+            <div className="code-highlight-actions">
+              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
+                复制连接码
+              </button>
+              <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
+                打开目录
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
@@ -2001,11 +2008,13 @@ function SettingsPanel({
           ]}
         />
         {model.connectionCodeLabel ? (
-          <div className="connection-code-row">
+          <div className="code-highlight">
             <code title={model.connectionCodeLabel}>{model.connectionCodeLabel}</code>
-            <button className="tool-button" onClick={onCopyConnectionCode} type="button">
-              复制连接码
-            </button>
+            <div className="code-highlight-actions">
+              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
+                复制连接码
+              </button>
+            </div>
           </div>
         ) : null}
         <div className="settings-form-grid">
