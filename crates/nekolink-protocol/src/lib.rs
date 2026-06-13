@@ -113,6 +113,8 @@ pub enum MessageKind {
     SessionHello,
     #[serde(rename = "session.ready")]
     SessionReady,
+    #[serde(rename = "session.control")]
+    SessionControl,
     #[serde(rename = "pairing.request")]
     PairingRequest,
     #[serde(rename = "pairing.accept")]
@@ -150,6 +152,7 @@ impl MessageKind {
             Self::DeviceHeartbeat => "device.heartbeat",
             Self::SessionHello => "session.hello",
             Self::SessionReady => "session.ready",
+            Self::SessionControl => "session.control",
             Self::PairingRequest => "pairing.request",
             Self::PairingAccept => "pairing.accept",
             Self::PairingReject => "pairing.reject",
@@ -628,6 +631,80 @@ pub struct SessionTrafficFrameHeader {
     pub direction: SessionFrameDirection,
     pub counter: u64,
     pub nonce: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptedSessionPayload {
+    pub inner_kind: MessageKind,
+    pub header: SessionTrafficFrameHeader,
+    pub ciphertext: Vec<u8>,
+}
+
+impl EncryptedSessionPayload {
+    pub fn seal_control<T: Serialize>(
+        session_id: impl Into<String>,
+        message_id: impl Into<String>,
+        keys: &SessionKeyMaterial,
+        header: SessionTrafficFrameHeader,
+        inner_kind: MessageKind,
+        payload: &T,
+    ) -> Result<Envelope<Self>, ProtocolError> {
+        if header.kind != SessionFrameKind::Control {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "encrypted control payload requires a control frame header",
+            ));
+        }
+        let session_id = session_id.into();
+        let message_id = message_id.into();
+        let plaintext = serde_json::to_vec(payload).map_err(|error| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                format!("failed to serialize session control payload: {error}"),
+            )
+        })?;
+        let associated_data = session_control_associated_data(&session_id, &message_id, inner_kind);
+        let ciphertext = keys.seal_send_payload(&header, &associated_data, &plaintext)?;
+        Ok(Envelope::new(
+            session_id,
+            message_id,
+            MessageKind::SessionControl,
+            Self {
+                inner_kind,
+                header,
+                ciphertext,
+            },
+        ))
+    }
+
+    pub fn open_control<T: for<'de> Deserialize<'de>>(
+        envelope: &Envelope<Self>,
+        keys: &SessionKeyMaterial,
+    ) -> Result<T, ProtocolError> {
+        envelope.validate_kind(MessageKind::SessionControl)?;
+        if envelope.payload.header.kind != SessionFrameKind::Control {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "encrypted control payload requires a control frame header",
+            ));
+        }
+        let associated_data = session_control_associated_data(
+            &envelope.session_id,
+            &envelope.message_id,
+            envelope.payload.inner_kind,
+        );
+        let plaintext = keys.open_receive_payload(
+            &envelope.payload.header,
+            &associated_data,
+            &envelope.payload.ciphertext,
+        )?;
+        serde_json::from_slice(&plaintext).map_err(|error| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                format!("failed to deserialize session control payload: {error}"),
+            )
+        })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -1437,6 +1514,32 @@ fn session_frame_nonce(cipher: &str, counter: u64) -> Result<Vec<u8>, ProtocolEr
     let counter_offset = nonce_len - std::mem::size_of::<u64>();
     nonce[counter_offset..].copy_from_slice(&counter.to_be_bytes());
     Ok(nonce)
+}
+
+fn session_control_associated_data(
+    session_id: &str,
+    message_id: &str,
+    inner_kind: MessageKind,
+) -> Vec<u8> {
+    let mut data = Vec::new();
+    append_aad_field(&mut data, "protocol", PROTOCOL_NAME);
+    append_aad_field(&mut data, "version", &PROTOCOL_VERSION.to_string());
+    append_aad_field(&mut data, "session_id", session_id);
+    append_aad_field(&mut data, "message_id", message_id);
+    append_aad_field(
+        &mut data,
+        "kind.outer",
+        MessageKind::SessionControl.as_str(),
+    );
+    append_aad_field(&mut data, "kind.inner", inner_kind.as_str());
+    data
+}
+
+fn append_aad_field(data: &mut Vec<u8>, name: &str, value: &str) {
+    data.extend_from_slice(name.as_bytes());
+    data.push(0);
+    data.extend_from_slice(value.as_bytes());
+    data.push(0xff);
 }
 
 fn seal_session_payload(
@@ -2773,6 +2876,72 @@ mod tests {
 
         assert_ne!(sealed, b"aes payload");
         assert_eq!(opened, b"aes payload");
+    }
+
+    #[test]
+    fn builds_encrypted_session_control_envelope() {
+        let keys = SessionKeyMaterial {
+            send_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            9,
+        )
+        .unwrap();
+        let payload = TransferDecision::accept();
+
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "message-1",
+            &keys,
+            header,
+            MessageKind::FileAccept,
+            &payload,
+        )
+        .unwrap();
+        let opened: TransferDecision =
+            EncryptedSessionPayload::open_control(&envelope, &keys).unwrap();
+
+        assert_eq!(envelope.kind, MessageKind::SessionControl);
+        assert_eq!(envelope.payload.inner_kind, MessageKind::FileAccept);
+        assert_eq!(envelope.payload.header.kind, SessionFrameKind::Control);
+        assert!(!envelope.payload.ciphertext.is_empty());
+        assert!(!String::from_utf8_lossy(&envelope.payload.ciphertext).contains("accepted"));
+        assert_eq!(opened.accepted, payload.accepted);
+    }
+
+    #[test]
+    fn rejects_encrypted_session_control_envelope_with_tampered_aad() {
+        let keys = SessionKeyMaterial {
+            send_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            9,
+        )
+        .unwrap();
+        let mut envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "message-1",
+            &keys,
+            header,
+            MessageKind::FileAccept,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        envelope.message_id = "message-2".to_string();
+
+        let error = EncryptedSessionPayload::open_control::<TransferDecision>(&envelope, &keys)
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("failed to open session payload"));
     }
 
     #[test]

@@ -132,6 +132,7 @@ device.hello
 device.heartbeat
 session.hello
 session.ready
+session.control
 pairing.request
 pairing.accept
 pairing.reject
@@ -148,7 +149,7 @@ companion.state
 state.sync
 ```
 
-NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `file.offer`, `file.accept`, and `file.decline`. `session.hello` and `session.ready` are implemented at the protocol and TCP frame level for encrypted-session groundwork, but the desktop transfer path does not yet encrypt control messages or file bytes with them.
+NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `file.offer`, `file.accept`, and `file.decline`. `session.hello`, `session.ready`, and `session.control` are implemented at the protocol level for encrypted-session groundwork, but the desktop transfer path does not yet encrypt control messages or file bytes with them.
 
 ### DEVICE_HELLO
 
@@ -260,6 +261,26 @@ associated data: caller-provided session/frame context bytes
 ```
 
 Tampered ciphertext or mismatched associated data fails to open. This API is still not wired into the desktop TCP transfer path; encrypted control-frame envelopes, replay-window handling, and encrypted file streaming remain future work.
+
+### session.control
+
+Encrypted control envelope. The outer message kind is `session.control`; the encrypted payload records the original inner control kind and traffic frame header.
+
+```json
+{
+  "inner_kind": "file.accept",
+  "header": {
+    "cipher": "xchacha20poly1305",
+    "kind": "control",
+    "direction": "send",
+    "counter": 9,
+    "nonce": [0, 0, 0, "..."]
+  },
+  "ciphertext": [1, 2, 3]
+}
+```
+
+Associated data binds protocol name, version, session_id, message_id, outer kind, and inner kind. Moving the ciphertext to another envelope or changing the inner kind makes opening fail.
 
 ## Pairing Messages
 
