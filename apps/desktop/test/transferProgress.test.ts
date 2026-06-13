@@ -93,8 +93,8 @@ test("hides idle receive listening from the active transfer bar", () => {
 });
 
 test("only shows progress meter when bytes are moving", () => {
-  assert.equal(shouldShowTransferProgressMeter(status({ phase: "listening", total_bytes: 0 })), false);
-  assert.equal(shouldShowTransferProgressMeter(status({ phase: "connecting", total_bytes: 0 })), false);
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "listening", bytes_transferred: 0, total_bytes: 0 })), false);
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "connecting", bytes_transferred: 0, total_bytes: 0 })), false);
   assert.equal(shouldShowTransferProgressMeter(status({ phase: "transferring" })), true);
-  assert.equal(shouldShowTransferProgressMeter(status({ phase: "verifying", total_bytes: 0 })), true);
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "verifying", bytes_transferred: 0, total_bytes: 0 })), true);
 });
