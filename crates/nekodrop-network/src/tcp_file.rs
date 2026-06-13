@@ -15,7 +15,7 @@ use nekolink_protocol::{Capability, Envelope, ErrorCode, MessageKind, ProtocolEr
 use serde::{Deserialize, Serialize};
 
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
-const MAX_JSON_FRAME_SIZE: usize = 256 * 1024;
+const MAX_JSON_FRAME_SIZE: usize = 8 * 1024 * 1024;
 const MAX_FILE_FRAME_COUNT: u32 = 10_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -916,8 +916,9 @@ fn write_json_frame<T: Serialize>(stream: &mut impl Write, value: &T) -> NekoDro
         .map_err(|_| NekoDropError::Network("JSON frame is too large".into()))?;
     if payload.len() > MAX_JSON_FRAME_SIZE {
         return Err(NekoDropError::Network(format!(
-            "JSON frame exceeds maximum size: {}",
-            payload.len()
+            "JSON frame exceeds maximum size: {} > {}",
+            payload.len(),
+            MAX_JSON_FRAME_SIZE
         )));
     }
     stream.write_all(&len.to_be_bytes()).map_err(|error| {
@@ -937,7 +938,7 @@ fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Neko
     let len = u32::from_be_bytes(len_bytes) as usize;
     if len == 0 || len > MAX_JSON_FRAME_SIZE {
         return Err(NekoDropError::Network(format!(
-            "invalid JSON frame length: {len}"
+            "invalid JSON frame length: {len} (max {MAX_JSON_FRAME_SIZE})"
         )));
     }
 
@@ -1352,6 +1353,53 @@ mod tests {
         let received = receiver.join().unwrap();
 
         assert_eq!(received, offer);
+    }
+
+    #[test]
+    fn large_transfer_offer_round_trips_under_control_frame_limit() {
+        let files = (0..5_000)
+            .map(|index| TransferOfferFile {
+                manifest_path: format!(
+                    "drop/album-{}/disc-{}/track-{:04}-sample-audio-file.m4a",
+                    index / 100,
+                    index / 10,
+                    index
+                ),
+                size: 128 * 1024 * 1024,
+                sha256: "a".repeat(64),
+            })
+            .collect::<Vec<_>>();
+        let offer = TransferOffer::new("transfer-large-folder", "drop", files);
+        let mut buffer = Vec::new();
+
+        write_transfer_offer(&mut buffer, &offer).unwrap();
+        let received = read_transfer_offer(&mut Cursor::new(buffer)).unwrap();
+
+        assert_eq!(received, offer);
+    }
+
+    #[test]
+    fn json_frame_writer_rejects_control_payload_over_limit() {
+        let payload = serde_json::json!({
+            "blob": "x".repeat(MAX_JSON_FRAME_SIZE)
+        });
+        let mut buffer = Vec::new();
+
+        let error = write_json_frame(&mut buffer, &payload).unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("JSON frame exceeds maximum size"));
+    }
+
+    #[test]
+    fn json_frame_reader_rejects_declared_control_payload_over_limit() {
+        let mut buffer = Vec::new();
+        buffer.extend_from_slice(&((MAX_JSON_FRAME_SIZE + 1) as u32).to_be_bytes());
+
+        let error = read_json_frame::<serde_json::Value>(&mut Cursor::new(buffer)).unwrap_err();
+
+        assert!(error.to_string().contains("invalid JSON frame length"));
     }
 
     #[test]

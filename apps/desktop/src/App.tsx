@@ -21,6 +21,10 @@ import {
 } from "./networkPermissionHints";
 import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
+  REALTIME_REFRESH_INTERVAL_MS,
+  shouldRunDirectoryRefresh
+} from "./refreshSchedule";
+import {
   buildRecentTransferDetailLine,
   buildTransferHistoryDetailViewModel,
   transferFallbackActionLabel,
@@ -121,6 +125,9 @@ export function App() {
   const [toast, setToast] = useState<string | null>(null);
   const previousTransferStatus = useRef<TransferStatusDto | null>(null);
   const autoReceiveStarted = useRef(false);
+  const realtimeRefreshInFlight = useRef(false);
+  const directoryRefreshInFlight = useRef(false);
+  const lastDirectoryRefreshAt = useRef(0);
   const [transferMetrics, setTransferMetrics] = useState<{
     speedBytesPerSecond: number | null;
     etaSeconds: number | null;
@@ -174,7 +181,7 @@ export function App() {
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
-    refreshReceiveState().catch(() => undefined);
+    refreshReceiveState({ includeDirectoryState: true }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -191,8 +198,10 @@ export function App() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
-      refreshReceiveState().catch(() => undefined);
-    }, 1200);
+      refreshReceiveState({
+        includeDirectoryState: shouldRunDirectoryRefresh(Date.now(), lastDirectoryRefreshAt.current)
+      }).catch(() => undefined);
+    }, REALTIME_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -305,44 +314,66 @@ export function App() {
     setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
 
-  async function refreshReceiveState() {
-    const [
-      status,
-      session,
-      report,
-      pendingOffer,
-      pairingRequest,
-      nextTransferStatus,
-      diagnostics,
-      devices,
-      trusted,
-      discovery,
-      nextTransfers
-    ] = await Promise.all([
-      invokeCommand<string | null>("get_receive_status"),
-      invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
-      invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
-      invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
-      invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
-      invokeCommand<TransferStatusDto | null>("get_transfer_status"),
-      invokeCommand<ReceivePortDiagnosticsDto>("get_receive_port_diagnostics"),
-      invokeCommand<DeviceDto[]>("list_nearby_devices"),
-      invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
-      invokeCommand<DiscoveryStatusDto>("get_discovery_status"),
-      invokeCommand<TransferDto[]>("list_transfers")
+  async function refreshReceiveState(options: { includeDirectoryState?: boolean } = {}) {
+    await Promise.all([
+      refreshRealtimeState(),
+      options.includeDirectoryState ? refreshDirectoryState() : Promise.resolve()
     ]);
-    setReceiveStatus(status);
-    setReceiveSession(session);
-    setReceiveReport(report);
-    setPendingReceiveOffer(pendingOffer);
-    setPendingPairingRequest(pairingRequest);
-    setTransferStatus(nextTransferStatus);
-    setReceiveDiagnostics(diagnostics);
-    setNearbyDevices(devices);
-    setTrustedDevices(trusted);
-    setDiscoveryStatus(discovery);
-    setTransfers(nextTransfers);
-    if (pendingOffer || pairingRequest) setMode("receive");
+  }
+
+  async function refreshRealtimeState() {
+    if (realtimeRefreshInFlight.current) return;
+    realtimeRefreshInFlight.current = true;
+    try {
+      const [
+        status,
+        session,
+        report,
+        pendingOffer,
+        pairingRequest,
+        nextTransferStatus,
+        diagnostics,
+        discovery
+      ] = await Promise.all([
+        invokeCommand<string | null>("get_receive_status"),
+        invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
+        invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
+        invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
+        invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
+        invokeCommand<TransferStatusDto | null>("get_transfer_status"),
+        invokeCommand<ReceivePortDiagnosticsDto>("get_receive_port_diagnostics"),
+        invokeCommand<DiscoveryStatusDto>("get_discovery_status")
+      ]);
+      setReceiveStatus(status);
+      setReceiveSession(session);
+      setReceiveReport(report);
+      setPendingReceiveOffer(pendingOffer);
+      setPendingPairingRequest(pairingRequest);
+      setTransferStatus(nextTransferStatus);
+      setReceiveDiagnostics(diagnostics);
+      setDiscoveryStatus(discovery);
+      if (pendingOffer || pairingRequest) setMode("receive");
+    } finally {
+      realtimeRefreshInFlight.current = false;
+    }
+  }
+
+  async function refreshDirectoryState() {
+    if (directoryRefreshInFlight.current) return;
+    directoryRefreshInFlight.current = true;
+    try {
+      const [devices, trusted, nextTransfers] = await Promise.all([
+        invokeCommand<DeviceDto[]>("list_nearby_devices"),
+        invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
+        invokeCommand<TransferDto[]>("list_transfers")
+      ]);
+      setNearbyDevices(devices);
+      setTrustedDevices(trusted);
+      setTransfers(nextTransfers);
+      lastDirectoryRefreshAt.current = Date.now();
+    } finally {
+      directoryRefreshInFlight.current = false;
+    }
   }
 
   async function refreshTransfers() {
@@ -565,7 +596,7 @@ export function App() {
       setPendingReceiveOffer(null);
       setReceiveStatus("收件已关闭");
       setToast("收件已关闭");
-      await refreshReceiveState();
+      await refreshReceiveState({ includeDirectoryState: true });
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -673,7 +704,7 @@ export function App() {
         await invokeCommand<void>("cancel_current_transfer");
         setToast("正在取消发送");
       }
-      await refreshReceiveState();
+      await refreshReceiveState({ includeDirectoryState: true });
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -775,7 +806,7 @@ export function App() {
       });
       setConnectionCodeOpen(false);
       setToast(`配对完成：${trusted.device_name} · ${trusted.pairing_code}`);
-      await refreshReceiveState();
+      await refreshReceiveState({ includeDirectoryState: true });
     } catch (nextError) {
       const message = errorMessage(nextError);
       setError(pairingFailureAdvice(message) ?? message);
@@ -791,7 +822,7 @@ export function App() {
       await invokeCommand<void>("respond_pairing_request", { accept });
       setPendingPairingRequest(null);
       setToast(accept ? "已接受配对" : "已拒绝配对");
-      await refreshReceiveState();
+      await refreshReceiveState({ includeDirectoryState: true });
     } catch (nextError) {
       const message = errorMessage(nextError);
       setError(pairingFailureAdvice(message) ?? message);
@@ -812,7 +843,7 @@ export function App() {
         setSelectedDeviceSnapshot(null);
       }
       setToast(`已移除：${device.device_name}`);
-      await refreshReceiveState();
+      await refreshReceiveState({ includeDirectoryState: true });
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -1744,7 +1775,7 @@ function ReceivePanel({
     pendingOffer?.sender_device_name?.trim() ||
     pendingOffer?.sender_device_id ||
     null;
-  const pendingOfferPreview = pendingOffer ? pendingOfferFilePreview(pendingOffer.files) : null;
+  const pendingOfferPreview = pendingOffer ? pendingOfferFilePreview(pendingOffer) : null;
   const pendingOfferResumeSummary = pendingOffer
     ? pendingOfferResumeSummaryLabel(pendingOffer.resume_summary)
     : null;
@@ -1907,7 +1938,7 @@ function ReceivePanel({
               {receiveReportSender ? `来自 ${receiveReportSender}` : receiveReport.root_name}
             </strong>
             <span>
-              {receiveReport.files.length} 个 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查中"}
+              {receiveReport.file_count} 个 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查中"}
             </span>
           </div>
         </section>
@@ -2337,7 +2368,7 @@ function StatusLine({
     return (
       <div className="status-line">
         <strong>接收完成</strong>
-        <span>{receiveReport.files.length} 个文件 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</span>
+        <span>{receiveReport.file_count} 个文件 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</span>
       </div>
     );
   }
@@ -2645,10 +2676,11 @@ function portFromBindAddr(bindAddr: string): number | null {
   return port ? parseReceivePortValue(port) : null;
 }
 
-function pendingOfferFilePreview(files: PendingReceiveOfferDto["files"]) {
-  if (files.length === 0) return null;
-  const preview = files.slice(0, 3).map((file) => file.manifest_path).join(" · ");
-  const rest = files.length > 3 ? ` +${files.length - 3}` : "";
+function pendingOfferFilePreview(offer: PendingReceiveOfferDto) {
+  if (offer.files.length === 0) return null;
+  const preview = offer.files.slice(0, 3).map((file) => file.manifest_path).join(" · ");
+  const restCount = Math.max(0, offer.file_count - Math.min(3, offer.files.length));
+  const rest = restCount > 0 ? ` +${restCount}` : "";
   return `${preview}${rest}`;
 }
 
