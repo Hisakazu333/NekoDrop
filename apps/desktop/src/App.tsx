@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
-import { getCurrentWebview } from "@tauri-apps/api/webview";
 
-import { invokeCommand } from "./tauri";
+import { bindWindowDragDrop } from "./dragDrop";
+import { invokeCommand, isTauriRuntime } from "./tauri";
 import {
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
@@ -29,7 +29,10 @@ import {
 import { buildSettingsViewModel, parseReceivePortValue } from "./settingsView";
 import {
   buildTransferProgressViewModel,
-  formatBytes
+  formatBytes,
+  shouldShowActiveTransferBar,
+  shouldShowSendPageStatusLine,
+  shouldShowTransferProgressMeter
 } from "./transferProgress";
 import type {
   AppSnapshot,
@@ -111,6 +114,8 @@ export function App() {
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [dragActive, setDragActive] = useState(false);
+  const [dragDropReady, setDragDropReady] = useState(false);
+  const desktopRuntime = useMemo(() => isTauriRuntime(), []);
   const [busy, setBusy] = useState<BusyMode | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
@@ -258,35 +263,38 @@ export function App() {
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
-    getCurrentWebview()
-      .onDragDropEvent((event) => {
-        if (event.payload.type === "enter" || event.payload.type === "over") {
-          setDragActive(true);
-          return;
-        }
+    if (!desktopRuntime) {
+      setDragDropReady(false);
+      return;
+    }
 
-        if (event.payload.type === "leave") {
-          setDragActive(false);
-          return;
-        }
-
-        if (event.payload.type === "drop") {
-          setDragActive(false);
-          applyPickedPaths(event.payload.paths).catch((nextError) =>
-            setError(errorMessage(nextError))
-          );
-        }
-      })
-      .then((nextUnlisten) => {
-        unlisten = nextUnlisten;
-      })
-      .catch(() => undefined);
+    void bindWindowDragDrop({
+      onActiveChange: setDragActive,
+      onDrop: (paths) => {
+        void applyPickedPathsRef.current(paths).catch((nextError) =>
+          setError(errorMessage(nextError))
+        );
+      },
+      onError: (message) => {
+        setDragDropReady(false);
+        setError(`拖放初始化失败：${message}`);
+      }
+    }).then((nextUnlisten) => {
+      if (cancelled) {
+        nextUnlisten();
+        return;
+      }
+      unlisten = nextUnlisten;
+      setDragDropReady(true);
+    });
 
     return () => {
+      cancelled = true;
       unlisten?.();
     };
-  }, [manualPaths, selectedPaths]);
+  }, [desktopRuntime]);
 
   async function refreshSnapshot() {
     const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
@@ -374,8 +382,12 @@ export function App() {
     setSelectedPaths(mergedPaths);
     setSendReport(null);
     setMode("send");
+    setToast(`已加入 ${paths.length} 个路径`);
     await scanPaths(mergedPaths, manualPaths);
   }
+
+  const applyPickedPathsRef = useRef(applyPickedPaths);
+  applyPickedPathsRef.current = applyPickedPaths;
 
   async function chooseReceiveDir() {
     setBusy("pick-receive");
@@ -888,7 +900,7 @@ export function App() {
       : "文件 / 文件夹";
   const pageSubtitle =
     mode === "receive"
-      ? receiveState
+      ? receiveSession?.bind_addr ?? receiveState
       : mode === "devices"
         ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
         : mode === "history"
@@ -958,6 +970,7 @@ export function App() {
       </aside>
 
       <section className="workspace">
+        <div className="page-frame">
         <header className="topbar">
           {mode !== "send" ? (
             <div className="page-heading">
@@ -969,20 +982,31 @@ export function App() {
           )}
 
           <div className="topbar-actions">
-            <button
-              className={receiveSession ? "primary-button is-muted" : "primary-button"}
-              disabled={busy === "receive"}
-              onClick={() => {
-                if (receiveSession) {
-                  setMode("receive");
-                  return;
-                }
-                startReceive();
-              }}
-              type="button"
-            >
-              {receiveSession ? "查看收件" : "开启收件"}
-            </button>
+            {mode === "receive" && receiveSession ? (
+              <button
+                className="danger-button"
+                disabled={busy === "stop-receive" || busy === "receive"}
+                onClick={stopReceive}
+                type="button"
+              >
+                关闭收件
+              </button>
+            ) : (
+              <button
+                className={receiveSession ? "primary-button is-muted" : "primary-button"}
+                disabled={busy === "receive"}
+                onClick={() => {
+                  if (receiveSession) {
+                    setMode("receive");
+                    return;
+                  }
+                  startReceive();
+                }}
+                type="button"
+              >
+                {receiveSession ? "查看收件" : "开启收件"}
+              </button>
+            )}
           </div>
         </header>
 
@@ -1024,12 +1048,24 @@ export function App() {
                 <p className="send-hero-subtitle">
                   {transferPaths.length > 0
                     ? composerSubtitle
-                    : "拖入文件或文件夹，或选择下方设备发送"}
+                    : desktopRuntime
+                      ? dragDropReady
+                        ? "拖入文件或文件夹，或点击投放区 / 下方按钮选择"
+                        : "正在初始化拖放，请先用下方按钮选择文件"
+                      : "当前是浏览器预览，拖放和系统文件选择不可用，请用 npm --workspace apps/desktop run tauri:dev 启动桌面端"}
                 </p>
               </header>
 
               <section className={dragActive ? "composer is-dragging" : "composer"}>
-                <div className="composer-dropzone">
+                <button
+                  className="composer-dropzone"
+                  disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
+                  onClick={() => {
+                    void pickFiles();
+                  }}
+                  type="button"
+                >
+                  <Icon className="icon-drop" name="upload" />
                   <div className="composer-copy">
                     <strong>{composerTitle}</strong>
                     <span>
@@ -1037,10 +1073,14 @@ export function App() {
                         ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
                         : transferPaths.length > 0
                           ? composerSubtitle
-                          : "文件 / 文件夹"}
+                          : busy === "scan"
+                            ? "正在扫描文件…"
+                            : desktopRuntime
+                              ? "点击选择，或拖入文件 / 文件夹"
+                              : "浏览器预览不支持拖放"}
                     </span>
                   </div>
-                </div>
+                </button>
                 {connectionCodeOpen ? (
                   <textarea
                     className="composer-code"
@@ -1094,22 +1134,30 @@ export function App() {
                 </button>
               </div>
 
-              <div className="composer-target">
-                <span className="composer-target-label">
-                  发送到 <strong>{targetLabel}</strong>
-                </span>
+              <div className="send-bar">
+                <div className="send-bar-target">
+                  <span className="send-bar-label">发送到</span>
+                  <strong title={targetLabel}>{targetLabel}</strong>
+                </div>
                 <button
-                  className="composer-send"
+                  className="send-bar-action"
                   disabled={!canSend}
                   onClick={sendCurrentTransfer}
                   title={`发送到 ${targetLabel}`}
                   type="button"
                 >
+                  发送
                   <Icon name="arrow-up" />
                 </button>
               </div>
 
-              {(transferStatus || sendReport || receiveReport || plan) ? (
+              {shouldShowSendPageStatusLine(
+                transferStatus,
+                sendReport,
+                receiveReport,
+                plan,
+                transferPaths.length
+              ) ? (
                 <StatusLine
                   plan={plan}
                   receiveReport={receiveReport}
@@ -1120,6 +1168,7 @@ export function App() {
                   transferCount={transferPaths.length}
                   busy={busy}
                   recoveryTransfer={currentFailedTransfer}
+                  showActiveTransfer={false}
                   onCancelTransfer={cancelCurrentTransfer}
                   onRecoverTransfer={resendTransfer}
                   onUseFallbackCode={openFallbackCode}
@@ -1168,7 +1217,7 @@ export function App() {
               />
             </div>
           ) : (
-            <div className={mode === "history" ? "page-stack is-wide" : "page-stack"}>
+            <div className="page-stack">
               {mode === "receive" ? (
                 <ReceivePanel
                   bindPort={bindPort}
@@ -1267,7 +1316,6 @@ export function App() {
                   busy={busy}
                   deviceNameInput={deviceNameInput}
                   discoveryStatus={discoveryStatus}
-                  receiveDiagnostics={receiveDiagnostics}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
@@ -1276,19 +1324,17 @@ export function App() {
                   setReceiveDir={setReceiveDir}
                   snapshot={snapshot}
                   onChooseReceiveDir={chooseReceiveDir}
-                  onCopyConnectionCode={copyConnectionCode}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onSaveReceiveDir={saveReceiveDir}
                   onSaveReceivePort={saveReceivePort}
                   onSaveDeviceName={saveDeviceName}
-                  onStartReceive={startReceive}
-                  onStopReceive={stopReceive}
                   onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
             </div>
           )}
         </section>
+        </div>
       </section>
     </main>
   );
@@ -1305,11 +1351,12 @@ type IconName =
   | "list"
   | "settings"
   | "send"
-  | "trash";
+  | "trash"
+  | "upload";
 
-function Icon({ name }: { name: IconName }) {
+function Icon({ className, name }: { className?: string; name: IconName }) {
   return (
-    <svg aria-hidden="true" className="icon" fill="none" viewBox="0 0 24 24">
+    <svg aria-hidden="true" className={className ? `icon ${className}` : "icon"} fill="none" viewBox="0 0 24 24">
       {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
       {name === "clock" ? <path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /> : null}
       {name === "devices" ? <path d="M7 8a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 13a7 7 0 0 1 14 0M17 11a3 3 0 0 1 0 6m3-8a6 6 0 0 1 0 10" /> : null}
@@ -1321,6 +1368,7 @@ function Icon({ name }: { name: IconName }) {
       {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
+      {name === "upload" ? <path d="M12 16V6m0 0 5 5m-5-5-5 5M4 18h16" /> : null}
     </svg>
   );
 }
@@ -1573,6 +1621,62 @@ function DevicePanel({
   );
 }
 
+function SettingsGroup({
+  title,
+  note,
+  children
+}: {
+  title: string;
+  note?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section className="settings-group">
+      <header className="settings-group-head">
+        <h2>{title}</h2>
+        {note ? <p>{note}</p> : null}
+      </header>
+      <div className="settings-rows">{children}</div>
+    </section>
+  );
+}
+
+function SettingsRow({
+  label,
+  hint,
+  children
+}: {
+  label: string;
+  hint?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="settings-row">
+      <div className="settings-row-label">
+        <span>{label}</span>
+        {hint ? <small>{hint}</small> : null}
+      </div>
+      <div className="settings-row-control">{children}</div>
+    </div>
+  );
+}
+
+function SettingsValue({
+  children,
+  mono,
+  title
+}: {
+  children: ReactNode;
+  mono?: boolean;
+  title?: string;
+}) {
+  return (
+    <span className={mono ? "settings-value is-mono" : "settings-value"} title={title}>
+      {children}
+    </span>
+  );
+}
+
 function SettingsFacts({
   items
 }: {
@@ -1652,45 +1756,40 @@ function ReceivePanel({
 
   return (
     <section className="receive-page">
-      <header className="page-intro">
-        <div className="page-intro-copy">
-          <p className="page-intro-eyebrow">本机收件</p>
-          <strong>{receiveSession ? "等待附近设备连接" : "收件未开启"}</strong>
-          <span>{receiveSession?.bind_addr ?? "打开收件后会显示监听地址和连接码"}</span>
-          {diagnosticsAdvice ? <small>{diagnosticsAdvice}</small> : null}
-        </div>
-        <div className="page-intro-actions">
-          {receiveSession ? (
-            <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
-              关闭收件
-            </button>
-          ) : (
-            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-              开启收件
-            </button>
-          )}
-        </div>
-      </header>
+      {!receiveSession ? (
+        <section className="receive-section receive-empty">
+          <p className="receive-section-note">
+            开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
+          </p>
+          <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+            开启收件
+          </button>
+        </section>
+      ) : null}
 
       {receiveSession ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">连接码</h2>
-          <p className="settings-section-note">发送端可粘贴此连接码，或输入你的局域网 IP:端口</p>
-          <div className="connection-code-row">
+        <section className="receive-section">
+          <h2 className="receive-section-title">连接码</h2>
+          <p className="receive-section-note">
+            {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
+          </p>
+          <div className="code-highlight">
             <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
-            <button className="tool-button" onClick={onCopyConnectionCode} type="button">
-              复制
-            </button>
-            <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
-              打开目录
-            </button>
+            <div className="code-highlight-actions">
+              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
+                复制连接码
+              </button>
+              <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
+                打开目录
+              </button>
+            </div>
           </div>
         </section>
       ) : null}
 
       {diagnostics ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">网络状态</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">网络状态</h2>
           <SettingsFacts
             items={[
               { label: "诊断", value: diagnostics.message },
@@ -1710,8 +1809,8 @@ function ReceivePanel({
       ) : null}
 
       {pendingOffer ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">待确认传输</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">待确认传输</h2>
           <div className="incoming-offer">
             <div className="offer-main">
               <strong>{pendingOfferSender ? `来自 ${pendingOfferSender}` : "传输请求"}</strong>
@@ -1734,8 +1833,8 @@ function ReceivePanel({
       ) : null}
 
       {pendingPairingRequest ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">配对请求</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">配对请求</h2>
           <div className="incoming-offer">
             <div className="offer-main">
               <strong>{pendingPairingRequest.device_name}</strong>
@@ -1756,8 +1855,8 @@ function ReceivePanel({
         </section>
       ) : null}
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">接收配置</h2>
+      <section className="receive-section">
+        <h2 className="receive-section-title">接收配置</h2>
         <div className="settings-form-grid">
           <label>
             接收目录
@@ -1801,8 +1900,8 @@ function ReceivePanel({
       </section>
 
       {receiveReport ? (
-        <section className="settings-section">
-          <h2 className="settings-section-title">最近完成</h2>
+        <section className="receive-section">
+          <h2 className="receive-section-title">最近完成</h2>
           <div className="result-line">
             <strong title={receiveReport.root_name}>
               {receiveReportSender ? `来自 ${receiveReportSender}` : receiveReport.root_name}
@@ -1822,7 +1921,6 @@ function SettingsPanel({
   busy,
   deviceNameInput,
   discoveryStatus,
-  receiveDiagnostics,
   receiveDir,
   receivePolicy,
   receiveSession,
@@ -1831,20 +1929,16 @@ function SettingsPanel({
   setReceiveDir,
   snapshot,
   onChooseReceiveDir,
-  onCopyConnectionCode,
   onOpenReceiveDir,
   onSaveDeviceName,
   onSaveReceiveDir,
   onSaveReceivePort,
-  onStartReceive,
-  onStopReceive,
   onUpdateReceivePolicy
 }: {
   bindPort: string;
   busy: BusyMode | null;
   deviceNameInput: string;
   discoveryStatus: DiscoveryStatusDto | null;
-  receiveDiagnostics: ReceivePortDiagnosticsDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
@@ -1853,20 +1947,16 @@ function SettingsPanel({
   setReceiveDir: (value: string) => void;
   snapshot: AppSnapshot | null;
   onChooseReceiveDir: () => void;
-  onCopyConnectionCode: () => void;
   onOpenReceiveDir: () => void;
   onSaveDeviceName: () => void;
   onSaveReceiveDir: () => void;
   onSaveReceivePort: () => void;
-  onStartReceive: () => void;
-  onStopReceive: () => void;
   onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
 }) {
   const model = buildSettingsViewModel({
     snapshot,
     deviceNameInput,
     discoveryStatus,
-    receiveDiagnostics,
     receiveSession,
     receiveDir,
     receivePolicy,
@@ -1875,125 +1965,45 @@ function SettingsPanel({
 
   return (
     <section className="settings-page">
-      <header className="page-intro">
-        <div className="page-intro-copy">
-          <p className="page-intro-eyebrow">设置</p>
-          <strong>{model.deviceName}</strong>
-          <span>
-            {model.platformLabel} · {model.receiveStateLabel} · {model.discoveryLabel}
-          </span>
-        </div>
-        <div className="page-intro-actions">
-          {receiveSession ? (
-            <button className="danger-button" disabled={busy === "stop-receive" || busy === "receive"} onClick={onStopReceive} type="button">
-              关闭收件
-            </button>
-          ) : (
-            <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-              开启收件
-            </button>
-          )}
-        </div>
-      </header>
-
-      <section className="settings-section">
-        <h2 className="settings-section-title">本机身份</h2>
-        <p className="settings-section-note">附近设备会看到此名称；指纹用于确认配对对象</p>
-        <label className="settings-field">
-          设备名
-          <div className="input-action">
+      <SettingsGroup title="通用" note="附近设备会看到这里的名称">
+        <SettingsRow label="设备名称">
+          <div className="settings-inline-field">
             <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
             <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
               保存
             </button>
           </div>
-        </label>
-        <SettingsFacts
-          items={[
-            { label: "平台", value: model.platformLabel },
-            { label: "设备 ID", value: model.deviceIdLabel, mono: true },
-            { label: "类型", value: model.deviceKindLabel },
-            { label: "指纹", value: model.fingerprintLabel, mono: true },
-            { label: "能力", value: model.capabilitiesLabel }
-          ]}
-        />
-      </section>
+        </SettingsRow>
+        <SettingsRow label="平台">
+          <SettingsValue>{model.platformLabel}</SettingsValue>
+        </SettingsRow>
+      </SettingsGroup>
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">发现与网络</h2>
-        <p className="settings-section-note">局域网 mDNS 广播与扫描状态（配置项只读）</p>
-        <SettingsFacts
-          items={[
-            { label: "发现配置", value: model.discoveryEnabledLabel },
-            { label: "运行状态", value: model.discoveryLabel },
-            { label: "详情", value: model.discoveryDetailLabel },
-            { label: "本机 IP", value: model.lanIpLabel, mono: true },
-            { label: "附近设备", value: model.nearbyDeviceCountLabel },
-            { label: "服务类型", value: model.serviceTypeLabel, mono: true }
-          ]}
-        />
-        {receiveDiagnostics ? (
-          <>
-            <SettingsFacts
-              items={[
-                { label: "收件诊断", value: model.receiveDiagnosticsLabel },
-                { label: "局域网地址", value: model.lanIpsLabel, mono: true },
-                { label: "默认端口", value: model.defaultReceivePortLabel }
-              ]}
-            />
-            {receiveDiagnostics.checks.length > 0 ? (
-              <ul className="settings-checks">
-                {receiveDiagnostics.checks.map((check) => (
-                  <li key={check}>{check}</li>
-                ))}
-              </ul>
-            ) : null}
-          </>
-        ) : null}
-      </section>
-
-      <section className="settings-section">
-        <h2 className="settings-section-title">收件</h2>
-        <SettingsFacts
-          items={[
-            { label: "监听地址", value: model.receiveAddressLabel, mono: true },
-            { label: "接收策略", value: model.receivePolicyLabel }
-          ]}
-        />
-        {model.connectionCodeLabel ? (
-          <div className="connection-code-row">
-            <code title={model.connectionCodeLabel}>{model.connectionCodeLabel}</code>
-            <button className="tool-button" onClick={onCopyConnectionCode} type="button">
-              复制连接码
+      <SettingsGroup
+        title="接收"
+        note={model.receiveConfigLocked ? "收件开启时，目录和端口需先关闭收件再改" : "默认保存位置和连接端口"}
+      >
+        <SettingsRow label="保存位置">
+          <div className="settings-inline-field is-wide">
+            <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
+              选择
+            </button>
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
+              保存
             </button>
           </div>
-        ) : null}
-        <div className="settings-form-grid">
-          <label className="settings-field">
-            接收目录
-            <div className="input-action receive-dir-action">
-              <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
-              <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
-                选择
-              </button>
-              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
-                保存
-              </button>
-            </div>
-          </label>
-          <label className="settings-field port-field">
-            默认端口
-            <div className="input-action receive-port-action">
-              <input disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
-              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
-                保存
-              </button>
-            </div>
-          </label>
-        </div>
-        <div className="policy-row">
-          <span>接收策略</span>
-          <div className="policy-segment">
+        </SettingsRow>
+        <SettingsRow label="默认端口">
+          <div className="settings-inline-field">
+            <input className="is-port" disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
+              保存
+            </button>
+          </div>
+        </SettingsRow>
+        <SettingsRow label="收到文件时">
+          <div className="policy-segment is-settings">
             {RECEIVE_POLICY_OPTIONS.map((option) => (
               <button
                 className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
@@ -2006,18 +2016,48 @@ function SettingsPanel({
               </button>
             ))}
           </div>
-        </div>
-        <div className="settings-inline-actions">
-          <button className="tool-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
-            打开接收目录
+        </SettingsRow>
+        <SettingsRow label="文件夹">
+          <button className="text-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+            打开接收文件夹
           </button>
-        </div>
-      </section>
+        </SettingsRow>
+      </SettingsGroup>
 
-      <section className="settings-section">
-        <h2 className="settings-section-title">应用</h2>
-        <SettingsFacts items={[{ label: "托盘菜单", value: model.trayLabel }]} />
-      </section>
+      <SettingsGroup title="网络" note="发现与连接状态为只读">
+        <SettingsRow label="局域网发现">
+          <SettingsValue>{model.discoveryLabel}</SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="本机地址">
+          <SettingsValue mono title={model.lanIpLabel ?? undefined}>
+            {model.lanIpLabel ?? "—"}
+          </SettingsValue>
+        </SettingsRow>
+        {receiveSession ? (
+          <SettingsRow label="收件状态" hint="连接码请在收件页查看">
+            <SettingsValue>{model.receiveAddressLabel}</SettingsValue>
+          </SettingsRow>
+        ) : null}
+      </SettingsGroup>
+
+      <SettingsGroup title="关于本机" note="用于配对与排查">
+        <SettingsRow label="设备 ID">
+          <SettingsValue mono title={model.deviceIdLabel ?? undefined}>
+            {model.deviceIdLabel ?? "—"}
+          </SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="指纹">
+          <SettingsValue mono title={model.fingerprintLabel ?? undefined}>
+            {model.fingerprintLabel ?? "—"}
+          </SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="能力">
+          <SettingsValue>{model.capabilitiesLabel ?? "—"}</SettingsValue>
+        </SettingsRow>
+        <SettingsRow label="托盘菜单">
+          <SettingsValue>{model.trayLabel}</SettingsValue>
+        </SettingsRow>
+      </SettingsGroup>
     </section>
   );
 }
@@ -2127,7 +2167,7 @@ function HistoryPanel({
         </button>
       </div>
 
-      {transferStatus && transferStatus.phase !== "completed" ? (
+      {transferStatus && shouldShowActiveTransferBar(transferStatus) ? (
         <TransferStatusView
           busy={busy}
           metrics={transferMetrics}
@@ -2244,6 +2284,7 @@ function StatusLine({
   transferStatus,
   transferCount,
   recoveryTransfer,
+  showActiveTransfer = true,
   onCancelTransfer,
   onRecoverTransfer,
   onUseFallbackCode
@@ -2260,11 +2301,16 @@ function StatusLine({
   transferStatus: TransferStatusDto | null;
   transferCount: number;
   recoveryTransfer: TransferDto | null;
+  showActiveTransfer?: boolean;
   onCancelTransfer: () => void;
   onRecoverTransfer: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
-  if (transferStatus && transferStatus.phase !== "completed") {
+  if (
+    showActiveTransfer &&
+    transferStatus &&
+    shouldShowActiveTransferBar(transferStatus)
+  ) {
     return (
       <TransferStatusView
         busy={busy}
@@ -2445,17 +2491,25 @@ function ActiveTransferBar({
           <strong>{model.title}</strong>
           <span title={model.rootName}>{model.rootName}</span>
         </div>
-        <div className="active-transfer-meter" aria-label="当前传输进度">
-          <span style={{ width: `${model.progressPercent}%` }} />
-        </div>
-        <div className="active-transfer-meta">
-          <span>{model.percentLabel}</span>
-          <span>{model.bytesLabel}</span>
-          <span>{model.fileIndexLabel}</span>
-          {model.speedLabel ? <span>{model.speedLabel}</span> : null}
-          {model.etaLabel ? <span>{model.etaLabel}</span> : null}
-          {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
-        </div>
+        {shouldShowTransferProgressMeter(status) ? (
+          <div className="active-transfer-meter" aria-label="当前传输进度">
+            <span style={{ width: `${model.progressPercent}%` }} />
+          </div>
+        ) : null}
+        {shouldShowTransferProgressMeter(status) ? (
+          <div className="active-transfer-meta">
+            <span>{model.percentLabel}</span>
+            <span>{model.bytesLabel}</span>
+            <span>{model.fileIndexLabel}</span>
+            {model.speedLabel ? <span>{model.speedLabel}</span> : null}
+            {model.etaLabel ? <span>{model.etaLabel}</span> : null}
+            {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
+          </div>
+        ) : (
+          <div className="active-transfer-meta">
+            <span>{model.message}</span>
+          </div>
+        )}
       </div>
       {canCancel ? (
         <button className="text-button" disabled={busy === "cancel-transfer"} onClick={onCancel} type="button">
@@ -2670,10 +2724,6 @@ function isRecoverableCurrentStatus(phase: string) {
 
 function isReceiveTransferActivePhase(phase: string) {
   return phase === "accepted" || phase === "transferring" || phase === "verifying";
-}
-
-function shouldShowActiveTransferBar(status: TransferStatusDto) {
-  return status.phase !== "completed" && status.phase !== "closed";
 }
 
 function shouldShowHistoryProgress(transfer: TransferDto) {

@@ -5,7 +5,9 @@ import {
   buildTransferProgressViewModel,
   formatBytes,
   formatDuration,
-  progressPercent
+  progressPercent,
+  shouldShowActiveTransferBar,
+  shouldShowTransferProgressMeter
 } from "../src/transferProgress.ts";
 import type { TransferStatusDto } from "../src/types.ts";
 
@@ -80,4 +82,19 @@ test("adds short advice to failed transfer status messages", () => {
   });
 
   assert.equal(model.adviceLabel, "确认同一局域网；关闭 VPN/代理；可用备用码");
+});
+
+test("hides idle receive listening from the active transfer bar", () => {
+  assert.equal(shouldShowActiveTransferBar(status({ phase: "listening", total_bytes: 0 })), false);
+  assert.equal(shouldShowActiveTransferBar(status({ phase: "closed" })), false);
+  assert.equal(shouldShowActiveTransferBar(status({ phase: "transferring" })), true);
+  assert.equal(shouldShowActiveTransferBar(status({ phase: "connecting" })), true);
+  assert.equal(shouldShowActiveTransferBar(status({ phase: "failed" })), true);
+});
+
+test("only shows progress meter when bytes are moving", () => {
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "listening", bytes_transferred: 0, total_bytes: 0 })), false);
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "connecting", bytes_transferred: 0, total_bytes: 0 })), false);
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "transferring" })), true);
+  assert.equal(shouldShowTransferProgressMeter(status({ phase: "verifying", bytes_transferred: 0, total_bytes: 0 })), true);
 });
