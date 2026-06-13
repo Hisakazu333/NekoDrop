@@ -235,6 +235,20 @@ The same verified handshake produces mirrored directions on both peers: one side
 
 `SessionEphemeralKeyPair` can generate an X25519 ephemeral secret, expose the encoded public key for `session.hello` / `session.ready`, and derive the same 32-byte shared secret from the peer public key on both sides. The secret is not printed by the keypair Debug implementation.
 
+### Session Traffic Frames
+
+The protocol crate defines traffic-frame counters and nonce inputs for future encrypted control/file frames. This is not wired into desktop transfers yet.
+
+```text
+frame kinds: control, file
+directions: send, receive
+counter: u64, starts at 0 per direction
+nonce length: 12 bytes
+nonce layout today: 1 direction byte, reserved zero bytes, u64 counter in big-endian
+```
+
+Send and receive counters are independent. Counter exhaustion is rejected before producing another frame header. AEAD sealing/opening and replay-window handling are still future work.
+
 ## Pairing Messages
 
 Current desktop pairing runs through the same TCP JSON-frame channel as file offers. The first frame can be either `file.offer` or `pairing.request`.
