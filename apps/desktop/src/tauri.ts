@@ -42,8 +42,12 @@ export async function invokeCommand<T>(
   command: CommandName,
   args?: Record<string, unknown>
 ): Promise<T> {
-  if (!("__TAURI_INTERNALS__" in window)) {
+  if (!isTauriRuntime()) {
     throw new Error("NekoDrop 必须在 Tauri 桌面端中运行，不能用浏览器预览代替桌面软件。");
   }
   return invoke<T>(command, args);
+}
+
+export function isTauriRuntime() {
+  return "__TAURI_INTERNALS__" in window;
 }
