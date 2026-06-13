@@ -2,6 +2,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use sha2::{Digest, Sha256};
 
 pub const PROTOCOL_NAME: &str = "nekolink";
 pub const PROTOCOL_VERSION: u16 = 1;
@@ -583,6 +584,66 @@ pub fn select_session_cipher(
         })
 }
 
+pub fn session_handshake_hash(
+    hello: &SessionHelloPayload,
+    ready: &SessionReadyPayload,
+) -> Result<String, ProtocolError> {
+    hello.validate()?;
+    ready.validate()?;
+    if hello.session_id != ready.session_id {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "session handshake hash requires matching session_id",
+        ));
+    }
+    if hello.key_agreement != ready.key_agreement {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "session handshake hash requires matching key_agreement",
+        ));
+    }
+    if !hello.supported_ciphers.contains(&ready.cipher) {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "session ready cipher must be offered by session hello",
+        ));
+    }
+
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, "protocol", PROTOCOL_NAME);
+    hash_field(&mut hasher, "version", &PROTOCOL_VERSION.to_string());
+    hash_field(
+        &mut hasher,
+        "kind.hello",
+        MessageKind::SessionHello.as_str(),
+    );
+    hash_field(
+        &mut hasher,
+        "kind.ready",
+        MessageKind::SessionReady.as_str(),
+    );
+    hash_field(&mut hasher, "session_id", &hello.session_id);
+    hash_identity(&mut hasher, "hello.identity", &hello.identity);
+    hash_identity(&mut hasher, "ready.identity", &ready.identity);
+    hash_field(&mut hasher, "key_agreement", &hello.key_agreement);
+    hash_field(
+        &mut hasher,
+        "hello.ephemeral_public_key",
+        &hello.ephemeral_public_key,
+    );
+    hash_field(
+        &mut hasher,
+        "ready.ephemeral_public_key",
+        &ready.ephemeral_public_key,
+    );
+    for cipher in &hello.supported_ciphers {
+        hash_field(&mut hasher, "hello.supported_cipher", cipher);
+    }
+    hash_field(&mut hasher, "ready.cipher", &ready.cipher);
+
+    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
@@ -948,6 +1009,40 @@ fn validate_session_crypto_label(name: &str, value: &str) -> Result<(), Protocol
     Ok(())
 }
 
+fn hash_identity(hasher: &mut Sha256, prefix: &str, identity: &DeviceIdentity) {
+    hash_field(hasher, &format!("{prefix}.device_id"), &identity.device_id);
+    hash_field(
+        hasher,
+        &format!("{prefix}.device_name"),
+        &identity.device_name,
+    );
+    hash_field(
+        hasher,
+        &format!("{prefix}.device_kind"),
+        identity.device_kind.as_str(),
+    );
+    hash_field(
+        hasher,
+        &format!("{prefix}.platform"),
+        identity.platform.as_str(),
+    );
+    hash_field(
+        hasher,
+        &format!("{prefix}.public_key_fingerprint"),
+        &identity.public_key_fingerprint,
+    );
+    for capability in &identity.capabilities {
+        hash_field(hasher, &format!("{prefix}.capability"), capability.as_str());
+    }
+}
+
+fn hash_field(hasher: &mut Sha256, name: &str, value: &str) {
+    hasher.update(name.as_bytes());
+    hasher.update([0]);
+    hasher.update(value.as_bytes());
+    hasher.update([0xff]);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1231,6 +1326,95 @@ mod tests {
         assert!(error
             .message
             .contains("no mutually supported session cipher"));
+    }
+
+    #[test]
+    fn derives_stable_session_handshake_hash_from_transcript_fields() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity,
+            "x25519",
+            "base64-local-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+        let ready = SessionReadyPayload::new(
+            "session-1",
+            peer,
+            "x25519",
+            "base64-peer-key",
+            "xchacha20poly1305",
+            "sha256:placeholder",
+        );
+
+        let first = session_handshake_hash(&hello, &ready).unwrap();
+        let second = session_handshake_hash(&hello, &ready).unwrap();
+        let mut changed_ready = ready.clone();
+        changed_ready.ephemeral_public_key = "base64-other-peer-key".to_string();
+        let changed = session_handshake_hash(&hello, &changed_ready).unwrap();
+
+        assert!(first.starts_with("sha256:"));
+        assert_eq!(first, second);
+        assert_ne!(first, changed);
+    }
+
+    #[test]
+    fn rejects_session_handshake_hash_for_mismatched_transcript() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::new(
+            "session-1",
+            identity.clone(),
+            "x25519",
+            "base64-local-key",
+            vec!["xchacha20poly1305".to_string()],
+        );
+        let ready = SessionReadyPayload::new(
+            "session-2",
+            identity,
+            "x25519",
+            "base64-peer-key",
+            "xchacha20poly1305",
+            "sha256:placeholder",
+        );
+
+        let error = session_handshake_hash(&hello, &ready).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("matching session_id"));
     }
 
     #[test]
