@@ -71,7 +71,8 @@
 | Envelope | 已接入 | 包含 protocol、version、session_id、message_id、kind、capabilities、payload。 |
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
-| Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256 和配对能力，不声明未接入的加密 session / Agent host。 |
+| Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256 和配对能力，不声明未完成的加密文件流 / Agent host。 |
+| Encrypted session handshake | 部分接入 | 协议层已有 `session.hello` / `session.ready` payload、帧读写和 cipher 协商 helper；还没有把真实密钥交换、认证 transcript、控制消息加密、文件流加密接入传输主线。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
 | File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path、Windows 不安全路径片段和半截 sender identity。 |
 | TCP transport | 已接入 | 当前真实传输主线；接收文件帧数量有上限，并会按已接受 offer 的 file_count 做早期校验。 |
@@ -84,7 +85,7 @@
 - iroh 真实运行时
 - Relay 服务器
 - P2P / NAT 打洞
-- 加密 session
+- 加密文件流
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - NekoState 状态同步
