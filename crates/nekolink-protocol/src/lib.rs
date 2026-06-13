@@ -1,5 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -9,6 +10,8 @@ pub const PROTOCOL_VERSION: u16 = 1;
 pub const SESSION_KEY_AGREEMENT_X25519: &str = "x25519";
 pub const SESSION_CIPHER_XCHACHA20POLY1305: &str = "xchacha20poly1305";
 pub const SESSION_CIPHER_AES256GCM: &str = "aes256gcm";
+pub const SESSION_SHARED_SECRET_LEN: usize = 32;
+pub const SESSION_TRAFFIC_KEY_LEN: usize = 32;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T = Value> {
@@ -554,6 +557,32 @@ pub struct SessionKeyDerivationContext {
     pub salt: String,
     pub send_info: String,
     pub receive_info: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionKeyMaterial {
+    pub send_key: [u8; SESSION_TRAFFIC_KEY_LEN],
+    pub receive_key: [u8; SESSION_TRAFFIC_KEY_LEN],
+}
+
+impl SessionKeyDerivationContext {
+    pub fn derive_key_material(
+        &self,
+        shared_secret: &[u8; SESSION_SHARED_SECRET_LEN],
+    ) -> Result<SessionKeyMaterial, ProtocolError> {
+        let salt = session_hash_bytes("salt", &self.salt)?;
+        let hkdf = Hkdf::<Sha256>::new(Some(&salt), shared_secret);
+        let mut send_key = [0_u8; SESSION_TRAFFIC_KEY_LEN];
+        let mut receive_key = [0_u8; SESSION_TRAFFIC_KEY_LEN];
+        hkdf.expand(self.send_info.as_bytes(), &mut send_key)
+            .map_err(|_| session_key_derivation_error("send"))?;
+        hkdf.expand(self.receive_info.as_bytes(), &mut receive_key)
+            .map_err(|_| session_key_derivation_error("receive"))?;
+        Ok(SessionKeyMaterial {
+            send_key,
+            receive_key,
+        })
+    }
 }
 
 impl VerifiedSessionHandshake {
@@ -1201,6 +1230,26 @@ fn validate_sha256_digest_label(name: &str, value: &str) -> Result<(), ProtocolE
         ));
     }
     Ok(())
+}
+
+fn session_hash_bytes(name: &str, value: &str) -> Result<[u8; 32], ProtocolError> {
+    validate_sha256_digest_label(name, value)?;
+    let hex = value.strip_prefix("sha256:").unwrap_or_default();
+    let mut bytes = [0_u8; 32];
+    hex::decode_to_slice(hex, &mut bytes).map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("{name} must be sha256:<64 hex chars>"),
+        )
+    })?;
+    Ok(bytes)
+}
+
+fn session_key_derivation_error(direction: &str) -> ProtocolError {
+    ProtocolError::new(
+        ErrorCode::InvalidPayload,
+        format!("failed to derive {direction} session key"),
+    )
 }
 
 fn validate_session_key_agreement(value: &str) -> Result<(), ProtocolError> {
@@ -2080,6 +2129,112 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("not part of verified session"));
+    }
+
+    #[test]
+    fn derives_directional_session_key_material_from_shared_secret() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto("session-1", identity, "base64-local-key");
+        let ready = SessionReadyPayload::for_hello(
+            &hello,
+            peer,
+            "base64-peer-key",
+            SESSION_CIPHER_XCHACHA20POLY1305,
+        )
+        .unwrap();
+        let handshake = VerifiedSessionHandshake::from_ready(&hello, &ready).unwrap();
+        let initiator_context = handshake
+            .key_derivation_context_for_local_device("neko-device-abc123")
+            .unwrap();
+        let responder_context = handshake
+            .key_derivation_context_for_local_device("neko-device-peer")
+            .unwrap();
+        let shared_secret = [7_u8; SESSION_SHARED_SECRET_LEN];
+
+        let initiator_keys = initiator_context
+            .derive_key_material(&shared_secret)
+            .unwrap();
+        let responder_keys = responder_context
+            .derive_key_material(&shared_secret)
+            .unwrap();
+        let repeated_keys = initiator_context
+            .derive_key_material(&shared_secret)
+            .unwrap();
+
+        assert_eq!(initiator_keys, repeated_keys);
+        assert_eq!(initiator_keys.send_key, responder_keys.receive_key);
+        assert_eq!(initiator_keys.receive_key, responder_keys.send_key);
+        assert_ne!(initiator_keys.send_key, initiator_keys.receive_key);
+        assert_ne!(initiator_keys.send_key, [0_u8; SESSION_TRAFFIC_KEY_LEN]);
+    }
+
+    #[test]
+    fn rejects_session_key_derivation_with_malformed_salt() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto("session-1", identity, "base64-local-key");
+        let ready = SessionReadyPayload::for_hello(
+            &hello,
+            peer,
+            "base64-peer-key",
+            SESSION_CIPHER_XCHACHA20POLY1305,
+        )
+        .unwrap();
+        let handshake = VerifiedSessionHandshake::from_ready(&hello, &ready).unwrap();
+        let mut context = handshake.key_derivation_context();
+        context.salt = "not-a-sha256-label".to_string();
+
+        let error = context
+            .derive_key_material(&[7_u8; SESSION_SHARED_SECRET_LEN])
+            .unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("salt must be sha256"));
     }
 
     #[test]
