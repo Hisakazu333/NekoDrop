@@ -1,3 +1,4 @@
+pub mod bundle;
 pub mod checksum;
 pub mod chunk;
 pub mod manifest_builder;
@@ -6,6 +7,10 @@ pub mod received_file;
 pub mod resume;
 pub mod space;
 
+pub use bundle::{
+    detect_bundle_directory, stage_bundle_directory, BundleImportPolicy, DetectedBundle,
+    StagedBundle,
+};
 pub use checksum::{sha256_file, verify_sha256_file, Checksum, ChecksumAlgorithm};
 pub use chunk::{ChunkPlan, ChunkRange};
 pub use manifest_builder::{
