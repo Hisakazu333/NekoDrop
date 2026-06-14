@@ -23,6 +23,7 @@ import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
   shouldRunDiagnosticsRefresh,
   REALTIME_REFRESH_INTERVAL_MS,
+  shouldRefreshDirectoryOnModeActivation,
   shouldRefreshDirectoryForMode,
   shouldRunDirectoryRefresh
 } from "./refreshSchedule";
@@ -155,6 +156,7 @@ export function App() {
   const diagnosticsRefreshInFlight = useRef(false);
   const lastDirectoryRefreshAt = useRef(0);
   const lastDiagnosticsRefreshAt = useRef(0);
+  const previousMode = useRef<ComposerMode | null>(null);
   const [transferMetrics, setTransferMetrics] = useState<TransferMetrics>(EMPTY_TRANSFER_METRICS);
 
   const transferPaths = useMemo(
@@ -232,6 +234,13 @@ export function App() {
       }).catch(() => undefined);
     }, REALTIME_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
+  }, [hasActiveTransfer, mode]);
+
+  useEffect(() => {
+    const lastMode = previousMode.current;
+    previousMode.current = mode;
+    if (!shouldRefreshDirectoryOnModeActivation(mode, lastMode, hasActiveTransfer)) return;
+    refreshDirectoryState().catch(() => undefined);
   }, [hasActiveTransfer, mode]);
 
   useEffect(() => {
