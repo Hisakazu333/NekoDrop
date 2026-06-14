@@ -2,7 +2,7 @@
 
 这份文档记录当前仓库的真实能力。以后 README、路线图和 UI 文案都应该以这里为准，避免把已完成、实验中、待接入混在一起。
 
-更新时间：2026-06-14
+更新时间：2026-06-15
 
 ## 状态定义
 
@@ -58,9 +58,9 @@
 | 可信发送校验 | 已接入 | 后端发送到附近设备前会校验 device_id + fingerprint 已在可信设备中，未配对设备不能绕过 UI 直接收文件。 |
 | 可信设备地址刷新 | 已接入 | 自动发现扫到可信设备时，会用 device_id + fingerprint 更新可信记录里的 host、port 和 last_seen；收到可信设备真实来件或主动发送成功后也会刷新 last_seen；可信设备列表按最近活跃优先恢复，并按 device_id 去重。 |
 | 备用码复制兜底 | 已接入 | 系统剪贴板写入失败时会尝试 DOM fallback，并给出失败提示。 |
-| 设备管理页 | 已接入 | 展示附近设备和可信设备；附近设备会区分已信任、未配对和暂不可配对，可信设备会显示在线状态或上次地址兜底发送；选中离线可信设备后，发送页会标明正在使用上次地址。 |
-| 设置页 | 已接入 | 独立入口展示并保存本机设备名，展示 fingerprint、收件状态、监听地址、发现广播运行状态、托盘基础状态、接收目录、默认端口和接收策略；接收目录可选择或手动保存，默认端口可保存并用于下次打开收件，收件开启时锁定目录和端口，接收策略和收件开关来自现有真实能力。 |
-| 桌面状态刷新 | 已接入 | 实时接收/传输状态保持快速刷新；设备列表、可信设备和传输历史改为慢刷新并避免重叠轮询，降低 macOS 和 Windows 启动后持续卡顿。 |
+| 设备管理页 | 已接入 | 展示附近设备和可信设备；附近设备会区分已信任、未配对和暂不可配对，可信设备会显示在线状态或上次地址兜底发送；无附近设备时显示扫描中、未广播或发现异常，不再只显示 `0 附近在线`；选中离线可信设备后，发送页会标明正在使用上次地址。 |
+| 设置页 | 已接入 | 独立入口展示并保存本机设备名，展示 fingerprint、收件状态、监听地址、发现广播运行状态、托盘基础状态、接收目录、默认端口和接收策略；接收目录可选择或手动保存，默认端口可保存并用于下次打开收件，收件开启时锁定目录和端口，接收策略和收件开关来自现有真实能力；本机接入状态收在设置页，不作为日常主导航入口。 |
+| 桌面状态刷新 | 已接入 | 实时接收/传输状态保持快速刷新；设备列表、可信设备和传输历史改为按页面需要慢刷新并避免重叠轮询；相同状态不会重复写入 React state，降低 macOS 和 Windows 启动后持续卡顿。 |
 | macOS DMG | 已接入 | `scripts/package-desktop.sh --dmg`。 |
 | Windows NSIS / MSI | 已接入 | `scripts/package-windows.ps1`。 |
 
@@ -80,7 +80,7 @@
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
-| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端可以查看收到的 staged bundle、删除暂存记录，也可以手动创建资料包并加入发送队列。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
+| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看和删除，不再作为单独主导航页面。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
 | CCS / OpenNeko local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；授权申请、发送和导入仍返回 `pending_auth`，授权申请响应会带回 scope、reason 和 ttl。localhost runtime、持久化授权、授权码和导入执行还没有接入。 |
 
 ## 当前不能宣传为已完成

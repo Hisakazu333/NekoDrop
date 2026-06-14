@@ -2,6 +2,19 @@ export const REALTIME_REFRESH_INTERVAL_MS = 1200;
 export const DIRECTORY_REFRESH_INTERVAL_MS = 5000;
 export const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
 
+export function shouldRefreshDirectoryForMode(
+  mode: string,
+  hasActiveTransfer: boolean
+) {
+  return (
+    hasActiveTransfer ||
+    mode === "overview" ||
+    mode === "send" ||
+    mode === "devices" ||
+    mode === "transfers"
+  );
+}
+
 export function shouldRunDirectoryRefresh(
   nowMs: number,
   lastRefreshMs: number,
