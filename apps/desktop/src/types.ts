@@ -142,6 +142,17 @@ export interface ReceivedFileDto {
   verified: boolean;
 }
 
+export interface ReceivedBundleDto {
+  bundle_id: string;
+  bundle_type: "skill" | "session" | "workspace" | "agent_profile" | "config_snapshot" | string;
+  display_name: string;
+  source_app: string;
+  file_count: number;
+  total_bytes: number;
+  staging_path: string;
+  import_allowed: boolean;
+}
+
 export interface ReceiveReportDto {
   transfer_id: string;
   root_name: string;
@@ -149,6 +160,7 @@ export interface ReceiveReportDto {
   sender_device_name: string | null;
   sender_public_key_fingerprint: string | null;
   file_count: number;
+  bundle: ReceivedBundleDto | null;
   files: ReceivedFileDto[];
 }
 
