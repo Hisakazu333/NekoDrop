@@ -42,6 +42,33 @@ export interface TrustedDeviceDto {
   last_seen_at_ms: number;
 }
 
+export type LocalBridgeResponseStatus = "ok" | "pending_auth" | "unsupported" | string;
+export type LocalBridgeSecurityState = "read_only" | "requires_user_confirmation" | string;
+export type LocalBridgeClientState = "anonymous" | "identified" | string;
+export type LocalBridgePermissionScope =
+  | "device.read"
+  | "transfer.status.read"
+  | "bundle.read"
+  | "bundle.send"
+  | "bundle.import.request";
+
+export interface LocalBridgeResponseDto {
+  request_id: string;
+  status: LocalBridgeResponseStatus;
+  message: string;
+  security_state: LocalBridgeSecurityState;
+  requires_user_confirmation: boolean;
+  client_state: LocalBridgeClientState;
+  client_id: string | null;
+  client_display_name: string | null;
+  authorization_scopes: LocalBridgePermissionScope[];
+  authorization_reason: string | null;
+  authorization_ttl_seconds: number | null;
+  devices: TrustedDeviceDto[];
+  staged_bundles: ReceivedBundleDto[];
+  transfer_status: TransferStatusDto | null;
+}
+
 export interface DiscoveryStatusDto {
   phase: string;
   message: string;
