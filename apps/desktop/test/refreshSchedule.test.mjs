@@ -14,6 +14,7 @@ test("keeps realtime refresh frequent and moves expensive refreshes to slower la
   assert.equal(exportedNumber("REALTIME_REFRESH_INTERVAL_MS"), 1200);
   assert.ok(exportedNumber("DIRECTORY_REFRESH_INTERVAL_MS") >= 4000);
   assert.ok(exportedNumber("DIAGNOSTICS_REFRESH_INTERVAL_MS") >= 10000);
+  assert.ok(exportedNumber("STARTUP_SLOW_REFRESH_DELAY_MS") >= 400);
 });
 
 test("keeps diagnostics refresh separate from directory refresh", () => {

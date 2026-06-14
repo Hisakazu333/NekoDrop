@@ -42,3 +42,14 @@ test("desktop realtime snapshot command is typed and registered", () => {
   assert.match(commandsSource, /pub fn get_desktop_realtime_snapshot/);
   assert.match(mainSource, /commands::get_desktop_realtime_snapshot/);
 });
+
+test("startup defers slow receive diagnostics and directory refresh work", () => {
+  assert.match(appSource, /STARTUP_SLOW_REFRESH_DELAY_MS/);
+  assert.match(appSource, /window\.setTimeout\(\(\) => \{/);
+  assert.match(appSource, /refreshReceiveState\(\{ includeDiagnostics: true, includeDirectoryState: true \}\)/);
+
+  const startupBlock = appSource.match(/useEffect\(\(\) => \{[\s\S]+?STARTUP_SLOW_REFRESH_DELAY_MS[\s\S]+?\}, \[\]\);/);
+  assert.ok(startupBlock, "startup effect should defer slow refresh work");
+  assert.doesNotMatch(startupBlock[0].split("window.setTimeout")[0], /includeDiagnostics: true/);
+  assert.doesNotMatch(startupBlock[0].split("window.setTimeout")[0], /includeDirectoryState: true/);
+});
