@@ -29,7 +29,7 @@ use nekodrop_storage::{
     list_staged_bundles as list_staged_bundles_storage, ResumeExpectedFile, ResumePlan,
     StagedBundle,
 };
-use nekolink_protocol::{DeviceIdentity, LocalBridgeRequest};
+use nekolink_protocol::{DeviceIdentity, LocalBridgeClientIdentity, LocalBridgeRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -286,6 +286,9 @@ pub struct LocalBridgeResponseDto {
     pub message: String,
     pub security_state: String,
     pub requires_user_confirmation: bool,
+    pub client_state: String,
+    pub client_id: Option<String>,
+    pub client_display_name: Option<String>,
     pub devices: Vec<TrustedDeviceDto>,
     pub staged_bundles: Vec<ReceivedBundleDto>,
     pub transfer_status: Option<TransferStatusDto>,
@@ -2122,25 +2125,35 @@ fn handle_local_bridge_request_at(
     request.validate().map_err(|error| error.message)?;
 
     match request {
-        LocalBridgeRequest::ListDevices(request) => Ok(local_bridge_read_only_response(
-            request.request_id,
-            "local bridge read-only snapshot",
-            trusted_devices.iter().map(trusted_device_to_dto).collect(),
-            list_staged_bundle_dtos_at(staging_root)?,
-            None,
-        )),
-        LocalBridgeRequest::TransferStatus(request) => Ok(local_bridge_read_only_response(
-            request.request_id,
-            "local bridge transfer status snapshot",
-            Vec::new(),
-            Vec::new(),
-            transfer_status.map(transfer_status_to_dto),
-        )),
+        LocalBridgeRequest::ListDevices(request) => {
+            let client = request.client.clone();
+            Ok(local_bridge_read_only_response(
+                request.request_id,
+                client,
+                "local bridge read-only snapshot",
+                trusted_devices.iter().map(trusted_device_to_dto).collect(),
+                list_staged_bundle_dtos_at(staging_root)?,
+                None,
+            ))
+        }
+        LocalBridgeRequest::TransferStatus(request) => {
+            let client = request.client.clone();
+            Ok(local_bridge_read_only_response(
+                request.request_id,
+                client,
+                "local bridge transfer status snapshot",
+                Vec::new(),
+                Vec::new(),
+                transfer_status.map(transfer_status_to_dto),
+            ))
+        }
         LocalBridgeRequest::BundleDetail(request) => {
+            let client = request.client.clone();
             let bundle = find_staged_bundle_dto_at(staging_root, &request.staged_bundle_id)?;
             match bundle {
                 Some(bundle) => Ok(local_bridge_read_only_response(
                     request.request_id,
+                    client,
                     "local bridge staged bundle detail",
                     Vec::new(),
                     vec![bundle],
@@ -2148,32 +2161,39 @@ fn handle_local_bridge_request_at(
                 )),
                 None => Ok(local_bridge_read_only_unsupported_response(
                     request.request_id,
+                    client,
                     "staged bundle not found",
                 )),
             }
         }
         LocalBridgeRequest::SendBundle(request) => Ok(local_bridge_pending_confirmation_response(
             request.request_id,
+            request.client,
         )),
         LocalBridgeRequest::ImportBundle(request) => Ok(
-            local_bridge_pending_confirmation_response(request.request_id),
+            local_bridge_pending_confirmation_response(request.request_id, request.client),
         ),
     }
 }
 
 fn local_bridge_read_only_response(
     request_id: String,
+    client: Option<LocalBridgeClientIdentity>,
     message: &str,
     devices: Vec<TrustedDeviceDto>,
     staged_bundles: Vec<ReceivedBundleDto>,
     transfer_status: Option<TransferStatusDto>,
 ) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(client);
     LocalBridgeResponseDto {
         request_id,
         status: "ok".to_string(),
         message: message.to_string(),
         security_state: "read_only".to_string(),
         requires_user_confirmation: false,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
         devices,
         staged_bundles,
         transfer_status,
@@ -2182,30 +2202,55 @@ fn local_bridge_read_only_response(
 
 fn local_bridge_read_only_unsupported_response(
     request_id: String,
+    client: Option<LocalBridgeClientIdentity>,
     message: &str,
 ) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(client);
     LocalBridgeResponseDto {
         request_id,
         status: "unsupported".to_string(),
         message: message.to_string(),
         security_state: "read_only".to_string(),
         requires_user_confirmation: false,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
     }
 }
 
-fn local_bridge_pending_confirmation_response(request_id: String) -> LocalBridgeResponseDto {
+fn local_bridge_pending_confirmation_response(
+    request_id: String,
+    client: Option<LocalBridgeClientIdentity>,
+) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(client);
     LocalBridgeResponseDto {
         request_id,
         status: "pending_auth".to_string(),
         message: "local bridge auth runtime is not connected; user confirmation is required before this request can run".to_string(),
         security_state: "requires_user_confirmation".to_string(),
         requires_user_confirmation: true,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+    }
+}
+
+fn local_bridge_client_metadata(
+    client: Option<LocalBridgeClientIdentity>,
+) -> (String, Option<String>, Option<String>) {
+    match client {
+        Some(client) => (
+            "identified".to_string(),
+            Some(client.client_id),
+            Some(client.display_name),
+        ),
+        None => ("anonymous".to_string(), None, None),
     }
 }
 
@@ -3625,6 +3670,58 @@ mod tests {
         assert_eq!(response.status, "ok");
         assert_eq!(response.security_state, "read_only");
         assert!(!response.requires_user_confirmation);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_response_marks_anonymous_client() {
+        let dir = unique_bundle_temp_dir("local-bridge-client-anonymous");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "transfer.status",
+            "payload": {
+                "request_id": "bridge-request-status",
+                "transfer_id": null
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+
+        assert_eq!(response.client_state, "anonymous");
+        assert!(response.client_id.is_none());
+        assert!(response.client_display_name.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_response_echoes_identified_client() {
+        let dir = unique_bundle_temp_dir("local-bridge-client-identified");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "transfer.status",
+            "payload": {
+                "request_id": "bridge-request-status",
+                "client": {
+                    "client_id": "openneko-desktop",
+                    "display_name": "OpenNeko Desktop",
+                    "app_kind": "openneko"
+                },
+                "transfer_id": null
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+
+        assert_eq!(response.client_state, "identified");
+        assert_eq!(response.client_id.as_deref(), Some("openneko-desktop"));
+        assert_eq!(
+            response.client_display_name.as_deref(),
+            Some("OpenNeko Desktop")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
