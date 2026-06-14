@@ -284,6 +284,8 @@ pub struct LocalBridgeResponseDto {
     pub request_id: String,
     pub status: String,
     pub message: String,
+    pub security_state: String,
+    pub requires_user_confirmation: bool,
     pub devices: Vec<TrustedDeviceDto>,
     pub staged_bundles: Vec<ReceivedBundleDto>,
     pub transfer_status: Option<TransferStatusDto>,
@@ -2111,36 +2113,55 @@ fn handle_local_bridge_request_at(
     request.validate().map_err(|error| error.message)?;
 
     match request {
-        LocalBridgeRequest::ListDevices(request) => Ok(LocalBridgeResponseDto {
-            request_id: request.request_id,
-            status: "ok".to_string(),
-            message: "local bridge read-only snapshot".to_string(),
-            devices: trusted_devices.iter().map(trusted_device_to_dto).collect(),
-            staged_bundles: list_staged_bundle_dtos_at(staging_root)?,
-            transfer_status: None,
-        }),
-        LocalBridgeRequest::TransferStatus(request) => Ok(LocalBridgeResponseDto {
-            request_id: request.request_id,
-            status: "ok".to_string(),
-            message: "local bridge transfer status snapshot".to_string(),
-            devices: Vec::new(),
-            staged_bundles: Vec::new(),
-            transfer_status: transfer_status.map(transfer_status_to_dto),
-        }),
-        LocalBridgeRequest::SendBundle(request) => {
-            Ok(local_bridge_pending_response(request.request_id))
-        }
-        LocalBridgeRequest::ImportBundle(request) => {
-            Ok(local_bridge_pending_response(request.request_id))
-        }
+        LocalBridgeRequest::ListDevices(request) => Ok(local_bridge_read_only_response(
+            request.request_id,
+            "local bridge read-only snapshot",
+            trusted_devices.iter().map(trusted_device_to_dto).collect(),
+            list_staged_bundle_dtos_at(staging_root)?,
+            None,
+        )),
+        LocalBridgeRequest::TransferStatus(request) => Ok(local_bridge_read_only_response(
+            request.request_id,
+            "local bridge transfer status snapshot",
+            Vec::new(),
+            Vec::new(),
+            transfer_status.map(transfer_status_to_dto),
+        )),
+        LocalBridgeRequest::SendBundle(request) => Ok(local_bridge_pending_confirmation_response(
+            request.request_id,
+        )),
+        LocalBridgeRequest::ImportBundle(request) => Ok(
+            local_bridge_pending_confirmation_response(request.request_id),
+        ),
     }
 }
 
-fn local_bridge_pending_response(request_id: String) -> LocalBridgeResponseDto {
+fn local_bridge_read_only_response(
+    request_id: String,
+    message: &str,
+    devices: Vec<TrustedDeviceDto>,
+    staged_bundles: Vec<ReceivedBundleDto>,
+    transfer_status: Option<TransferStatusDto>,
+) -> LocalBridgeResponseDto {
+    LocalBridgeResponseDto {
+        request_id,
+        status: "ok".to_string(),
+        message: message.to_string(),
+        security_state: "read_only".to_string(),
+        requires_user_confirmation: false,
+        devices,
+        staged_bundles,
+        transfer_status,
+    }
+}
+
+fn local_bridge_pending_confirmation_response(request_id: String) -> LocalBridgeResponseDto {
     LocalBridgeResponseDto {
         request_id,
         status: "pending_auth".to_string(),
-        message: "local bridge auth and runtime are not connected yet".to_string(),
+        message: "local bridge auth runtime is not connected; user confirmation is required before this request can run".to_string(),
+        security_state: "requires_user_confirmation".to_string(),
+        requires_user_confirmation: true,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -3541,6 +3562,52 @@ mod tests {
         assert_eq!(response.staged_bundles.len(), 1);
         assert_eq!(response.staged_bundles[0].bundle_id, "bundle_1234567890");
         assert!(response.transfer_status.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_read_only_requests_are_marked_read_only() {
+        let dir = unique_bundle_temp_dir("local-bridge-read-only-security");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "transfer.status",
+            "payload": {
+                "request_id": "bridge-request-status",
+                "transfer_id": null
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.security_state, "read_only");
+        assert!(!response.requires_user_confirmation);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_mutating_requests_require_user_confirmation() {
+        let dir = unique_bundle_temp_dir("local-bridge-mutating-security");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+
+        assert_eq!(response.status, "pending_auth");
+        assert_eq!(response.security_state, "requires_user_confirmation");
+        assert!(response.requires_user_confirmation);
+        assert!(response.message.contains("user confirmation"));
 
         fs::remove_dir_all(dir).unwrap();
     }

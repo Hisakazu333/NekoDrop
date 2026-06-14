@@ -296,7 +296,7 @@ bridge 可以做：
 
 这些只是本机 API 的稳定 JSON 模型，不代表 localhost server、鉴权、导入执行已经完成。
 
-桌面端现在有一个内部 handler skeleton，可以处理 `devices.list` 和 `transfer.status` 的只读快照，并让 `bundle.send` / `bundle.import` 返回明确的 `pending_auth`。它不是公开 localhost 服务，也不会绕过用户确认去发送或导入 bundle。
+桌面端现在有一个内部 handler skeleton，可以处理 `devices.list` 和 `transfer.status` 的只读快照，并让 `bundle.send` / `bundle.import` 返回明确的 `pending_auth`。响应会标记 `read_only` 或 `requires_user_confirmation`，方便后续接本机授权码和确认弹窗。它不是公开 localhost 服务，也不会绕过用户确认去发送或导入 bundle。
 
 bridge 不可以做：
 
