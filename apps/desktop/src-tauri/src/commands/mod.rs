@@ -3237,6 +3237,7 @@ mod tests {
             sender_device_id: None,
             sender_device_name: None,
             sender_public_key_fingerprint: None,
+            bundle: None,
             files: (0..100)
                 .map(|index| nekodrop_storage::ReceivedFile {
                     path: PathBuf::from(format!("/tmp/drop/file-{index:03}.txt")),
