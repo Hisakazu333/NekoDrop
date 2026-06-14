@@ -1390,6 +1390,8 @@ pub enum LocalBridgeRequest {
     ListDevices(LocalBridgeListDevicesRequest),
     #[serde(rename = "bundle.send")]
     SendBundle(LocalBridgeSendBundleRequest),
+    #[serde(rename = "bundle.detail")]
+    BundleDetail(LocalBridgeBundleDetailRequest),
     #[serde(rename = "bundle.import")]
     ImportBundle(LocalBridgeImportBundleRequest),
     #[serde(rename = "transfer.status")]
@@ -1409,6 +1411,12 @@ pub struct LocalBridgeSendBundleRequest {
     pub bundle_root: String,
     pub bundle_type: BundleType,
     pub require_trusted_device: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeBundleDetailRequest {
+    pub request_id: String,
+    pub staged_bundle_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1471,6 +1479,7 @@ impl LocalBridgeRequest {
         match self {
             Self::ListDevices(request) => request.validate(),
             Self::SendBundle(request) => request.validate(),
+            Self::BundleDetail(request) => request.validate(),
             Self::ImportBundle(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
         }
@@ -1488,6 +1497,13 @@ impl LocalBridgeSendBundleRequest {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_non_empty("target_device_id", self.target_device_id.as_deref())?;
         validate_bridge_bundle_root(&self.bundle_root)
+    }
+}
+
+impl LocalBridgeBundleDetailRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_staged_bundle_id(&self.staged_bundle_id)
     }
 }
 
@@ -3662,6 +3678,25 @@ mod tests {
         assert_eq!(json["payload"]["bundle_root"], "bundle");
         assert_eq!(json["payload"]["bundle_type"], "skill");
         assert_eq!(json["payload"]["require_trusted_device"], true);
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn local_bridge_bundle_detail_request_uses_stable_json_shape() {
+        let request = LocalBridgeRequest::BundleDetail(LocalBridgeBundleDetailRequest {
+            request_id: "bridge-request-detail".to_string(),
+            staged_bundle_id: "bundle_1234567890".to_string(),
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "bundle.detail");
+        assert_eq!(json["payload"]["request_id"], "bridge-request-detail");
+        assert_eq!(json["payload"]["staged_bundle_id"], "bundle_1234567890");
         assert_eq!(
             serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
             request
