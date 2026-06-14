@@ -304,6 +304,17 @@ pub struct TransferStatusDto {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct DesktopRealtimeSnapshotDto {
+    pub receive_status: Option<String>,
+    pub receive_session: Option<ReceiveSessionDto>,
+    pub receive_report: Option<ReceiveReportDto>,
+    pub pending_receive_offer: Option<PendingReceiveOfferDto>,
+    pub pending_pairing_request: Option<PendingPairingRequestDto>,
+    pub transfer_status: Option<TransferStatusDto>,
+    pub discovery_status: DiscoveryStatusDto,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LocalBridgeResponseDto {
     pub request_id: String,
     pub status: String,
@@ -368,29 +379,13 @@ pub fn list_nearby_devices(state: State<'_, AppState>) -> Result<Vec<DeviceDto>,
 
 #[tauri::command]
 pub fn get_discovery_status(state: State<'_, AppState>) -> Result<DiscoveryStatusDto, String> {
-    let status = state
-        .discovery_status
-        .lock()
-        .map_err(|error| error.to_string())?;
     let device_count = state
         .nearby_devices
         .lock()
         .map_err(|error| error.to_string())?
         .len();
 
-    Ok(DiscoveryStatusDto {
-        phase: status.phase.clone(),
-        message: status.message.clone(),
-        service_type: status.service_type.clone(),
-        advertised: status.advertised,
-        lan_ip: status.lan_ip.clone(),
-        port: status.port,
-        device_count,
-        last_seen_seconds_ago: status
-            .last_seen_at
-            .map(|seen_at| seen_at.elapsed().as_secs()),
-        last_error: status.last_error.clone(),
-    })
+    discovery_status_snapshot(&state, device_count)
 }
 
 #[tauri::command]
@@ -529,6 +524,13 @@ pub fn get_pending_pairing_request(
         .lock()
         .map_err(|error| error.to_string())?;
     Ok(request.as_ref().map(pending_pairing_request_to_dto))
+}
+
+#[tauri::command]
+pub fn get_desktop_realtime_snapshot(
+    state: State<'_, AppState>,
+) -> Result<DesktopRealtimeSnapshotDto, String> {
+    desktop_realtime_snapshot(&state)
 }
 
 #[tauri::command]
@@ -1914,6 +1916,84 @@ pub fn get_transfer_status(
         .lock()
         .map_err(|error| error.to_string())?;
     Ok(status.as_ref().map(transfer_status_to_dto))
+}
+
+fn desktop_realtime_snapshot(state: &AppState) -> Result<DesktopRealtimeSnapshotDto, String> {
+    let receive_status = state
+        .receive_status
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let receive_session = state
+        .receive_session
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .map(receive_session_to_dto);
+    let receive_report = state
+        .last_receive_report
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .map(receive_report_to_dto);
+    let pending_receive_offer = state
+        .pending_receive_offer
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .map(pending_offer_to_dto);
+    let pending_pairing_request = state
+        .pending_pairing_request
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .map(pending_pairing_request_to_dto);
+    let transfer_status = state
+        .transfer_status
+        .lock()
+        .map_err(|error| error.to_string())?
+        .as_ref()
+        .map(transfer_status_to_dto);
+    let device_count = state
+        .nearby_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .len();
+    let discovery_status = discovery_status_snapshot(state, device_count)?;
+
+    Ok(DesktopRealtimeSnapshotDto {
+        receive_status,
+        receive_session,
+        receive_report,
+        pending_receive_offer,
+        pending_pairing_request,
+        transfer_status,
+        discovery_status,
+    })
+}
+
+fn discovery_status_snapshot(
+    state: &AppState,
+    device_count: usize,
+) -> Result<DiscoveryStatusDto, String> {
+    let status = state
+        .discovery_status
+        .lock()
+        .map_err(|error| error.to_string())?;
+
+    Ok(DiscoveryStatusDto {
+        phase: status.phase.clone(),
+        message: status.message.clone(),
+        service_type: status.service_type.clone(),
+        advertised: status.advertised,
+        lan_ip: status.lan_ip.clone(),
+        port: status.port,
+        device_count,
+        last_seen_seconds_ago: status
+            .last_seen_at
+            .map(|seen_at| seen_at.elapsed().as_secs()),
+        last_error: status.last_error.clone(),
+    })
 }
 
 fn receive_session_to_dto(session: &ActiveReceiveSession) -> ReceiveSessionDto {
