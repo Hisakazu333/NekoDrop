@@ -22,3 +22,9 @@ test("state equality skips serialization for identical references and empty valu
   assert.ok(resetBody, "resetTransferMetrics should exist");
   assert.match(resetBody[0], /keepIfEqual\(current, EMPTY_TRANSFER_METRICS\)/);
 });
+
+test("manual transfer list refresh preserves state when content is unchanged", () => {
+  const refreshBody = appSource.match(/async function refreshTransfers\(\) \{[\s\S]+?\n  \}/);
+  assert.ok(refreshBody, "refreshTransfers should exist");
+  assert.match(refreshBody[0], /setTransfers\(\(current\) => keepIfEqual\(current, nextTransfers\)\)/);
+});

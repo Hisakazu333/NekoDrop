@@ -412,7 +412,7 @@ export function App() {
 
   async function refreshTransfers() {
     const nextTransfers = await invokeCommand<TransferDto[]>("list_transfers");
-    setTransfers(nextTransfers);
+    setTransfers((current) => keepIfEqual(current, nextTransfers));
   }
 
   async function pickFiles() {
