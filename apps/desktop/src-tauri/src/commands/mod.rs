@@ -2173,6 +2173,9 @@ fn handle_local_bridge_request_at(
         LocalBridgeRequest::ImportBundle(request) => Ok(
             local_bridge_pending_confirmation_response(request.request_id, request.client),
         ),
+        LocalBridgeRequest::AuthorizationRequest(request) => Ok(
+            local_bridge_pending_authorization_response(request.request_id, request.client),
+        ),
     }
 }
 
@@ -2230,6 +2233,26 @@ fn local_bridge_pending_confirmation_response(
         request_id,
         status: "pending_auth".to_string(),
         message: "local bridge auth runtime is not connected; user confirmation is required before this request can run".to_string(),
+        security_state: "requires_user_confirmation".to_string(),
+        requires_user_confirmation: true,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
+        devices: Vec::new(),
+        staged_bundles: Vec::new(),
+        transfer_status: None,
+    }
+}
+
+fn local_bridge_pending_authorization_response(
+    request_id: String,
+    client: LocalBridgeClientIdentity,
+) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(Some(client));
+    LocalBridgeResponseDto {
+        request_id,
+        status: "pending_auth".to_string(),
+        message: "local bridge authorization request is waiting for user confirmation".to_string(),
         security_state: "requires_user_confirmation".to_string(),
         requires_user_confirmation: true,
         client_state: client_metadata.0,
@@ -3837,6 +3860,42 @@ mod tests {
         assert_eq!(import_response.request_id, "bridge-request-import");
         assert_eq!(import_response.status, "pending_auth");
         assert!(import_response.message.contains("runtime"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_authorization_request_waits_for_user_confirmation() {
+        let dir = unique_bundle_temp_dir("local-bridge-authorization");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "authorization.request",
+            "payload": {
+                "request_id": "bridge-auth-1",
+                "client": {
+                    "client_id": "openneko-desktop",
+                    "display_name": "OpenNeko Desktop",
+                    "app_kind": "openneko"
+                },
+                "requested_scopes": [
+                    "device.read",
+                    "bundle.send"
+                ],
+                "reason": "Send a skill bundle to a trusted desktop device",
+                "ttl_seconds": 900
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+
+        assert_eq!(response.request_id, "bridge-auth-1");
+        assert_eq!(response.status, "pending_auth");
+        assert_eq!(response.security_state, "requires_user_confirmation");
+        assert!(response.requires_user_confirmation);
+        assert_eq!(response.client_state, "identified");
+        assert_eq!(response.client_id.as_deref(), Some("openneko-desktop"));
+        assert!(response.message.contains("authorization"));
 
         fs::remove_dir_all(dir).unwrap();
     }
