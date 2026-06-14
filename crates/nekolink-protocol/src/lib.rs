@@ -1394,6 +1394,8 @@ pub enum LocalBridgeRequest {
     BundleDetail(LocalBridgeBundleDetailRequest),
     #[serde(rename = "bundle.import")]
     ImportBundle(LocalBridgeImportBundleRequest),
+    #[serde(rename = "authorization.request")]
+    AuthorizationRequest(LocalBridgeAuthorizationRequest),
     #[serde(rename = "transfer.status")]
     TransferStatus(LocalBridgeTransferStatusRequest),
 }
@@ -1445,6 +1447,29 @@ pub struct LocalBridgeTransferStatusRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeAuthorizationRequest {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub requested_scopes: Vec<LocalBridgePermissionScope>,
+    pub reason: String,
+    pub ttl_seconds: Option<u64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LocalBridgePermissionScope {
+    #[serde(rename = "device.read")]
+    DeviceRead,
+    #[serde(rename = "transfer.status.read")]
+    TransferStatusRead,
+    #[serde(rename = "bundle.read")]
+    BundleRead,
+    #[serde(rename = "bundle.send")]
+    BundleSend,
+    #[serde(rename = "bundle.import.request")]
+    BundleImportRequest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "payload")]
 pub enum LocalBridgeEvent {
     #[serde(rename = "bundle.received")]
@@ -1493,6 +1518,7 @@ impl LocalBridgeRequest {
             Self::SendBundle(request) => request.validate(),
             Self::BundleDetail(request) => request.validate(),
             Self::ImportBundle(request) => request.validate(),
+            Self::AuthorizationRequest(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
         }
     }
@@ -1535,6 +1561,29 @@ impl LocalBridgeTransferStatusRequest {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
         validate_optional_non_empty("transfer_id", self.transfer_id.as_deref())
+    }
+}
+
+impl LocalBridgeAuthorizationRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        self.client.validate()?;
+        if self.requested_scopes.is_empty() {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "requested_scopes cannot be empty",
+            ));
+        }
+        validate_non_empty("reason", &self.reason)?;
+        if let Some(ttl_seconds) = self.ttl_seconds {
+            if ttl_seconds == 0 || ttl_seconds > 604_800 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "ttl_seconds must be between 1 and 604800",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -3779,6 +3828,80 @@ mod tests {
         let error = request.validate().unwrap_err();
 
         assert!(error.message.contains("client_id"));
+    }
+
+    #[test]
+    fn local_bridge_authorization_request_uses_stable_json_shape() {
+        let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "openneko-desktop".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            },
+            requested_scopes: vec![
+                LocalBridgePermissionScope::DeviceRead,
+                LocalBridgePermissionScope::BundleSend,
+            ],
+            reason: "Send a skill bundle to a trusted desktop device".to_string(),
+            ttl_seconds: Some(900),
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "authorization.request");
+        assert_eq!(json["payload"]["request_id"], "bridge-auth-1");
+        assert_eq!(json["payload"]["client"]["client_id"], "openneko-desktop");
+        assert_eq!(json["payload"]["requested_scopes"][0], "device.read");
+        assert_eq!(json["payload"]["requested_scopes"][1], "bundle.send");
+        assert_eq!(
+            json["payload"]["reason"],
+            "Send a skill bundle to a trusted desktop device"
+        );
+        assert_eq!(json["payload"]["ttl_seconds"], 900);
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn local_bridge_authorization_request_requires_scopes_and_reason() {
+        let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "openneko-desktop".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            },
+            requested_scopes: Vec::new(),
+            reason: " ".to_string(),
+            ttl_seconds: Some(900),
+        });
+
+        let error = request.validate().unwrap_err();
+
+        assert!(error.message.contains("requested_scopes"));
+    }
+
+    #[test]
+    fn local_bridge_authorization_request_rejects_invalid_ttl() {
+        let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "openneko-desktop".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            },
+            requested_scopes: vec![LocalBridgePermissionScope::BundleRead],
+            reason: "Read staged bundle metadata".to_string(),
+            ttl_seconds: Some(604_801),
+        });
+
+        let error = request.validate().unwrap_err();
+
+        assert!(error.message.contains("ttl_seconds"));
     }
 
     #[test]
