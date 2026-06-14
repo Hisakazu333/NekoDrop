@@ -151,6 +151,8 @@ export interface ReceivedBundleDto {
   total_bytes: number;
   staging_path: string;
   import_allowed: boolean;
+  staging_status: "saved" | "deleted" | string;
+  can_import_now: boolean;
 }
 
 export interface ReceiveReportDto {

@@ -1444,6 +1444,18 @@ button:disabled {
   font-weight: 600;
 }
 
+.bundle-actions {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.bundle-actions .text-button {
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
 .transfer-status-head strong,
 .panel-head strong,
 .result-line strong,

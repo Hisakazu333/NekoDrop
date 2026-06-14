@@ -45,6 +45,7 @@ import type {
   PendingPairingRequestDto,
   PendingReceiveOfferDto,
   ReceivePortDiagnosticsDto,
+  ReceivedBundleDto,
   ReceiveReportDto,
   ReceiveSessionDto,
   SendReportDto,
@@ -768,6 +769,25 @@ export function App() {
     }
   }
 
+  async function deleteCurrentStagedBundle(bundle: ReceivedBundleDto) {
+    setBusy("receive");
+    setError(null);
+    try {
+      await invokeCommand<boolean>("delete_staged_bundle", {
+        bundleId: bundle.bundle_id
+      });
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: null };
+      });
+      setToast("已删除暂存 bundle");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function openFallbackCode() {
     setMode("send");
     setConnectionCodeOpen(true);
@@ -1269,6 +1289,7 @@ export function App() {
                   onRespondPairingRequest={respondPairingRequest}
                   onStartReceive={startReceive}
                   onStopReceive={stopReceive}
+                  onDeleteStagedBundle={deleteCurrentStagedBundle}
                   onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
@@ -1745,6 +1766,7 @@ function ReceivePanel({
   onChooseReceiveDir,
   onCopyConnectionCode,
   onOpenPath,
+  onDeleteStagedBundle,
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
@@ -1765,6 +1787,7 @@ function ReceivePanel({
   onChooseReceiveDir: () => void;
   onCopyConnectionCode: () => void;
   onOpenPath: (path: string) => void;
+  onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
   onRespondReceiveOffer: (accept: boolean) => void;
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
@@ -1783,6 +1806,7 @@ function ReceivePanel({
     receiveReport?.sender_device_name?.trim() ||
     receiveReport?.sender_device_id ||
     null;
+  const receivedBundle = receiveReport?.bundle ?? null;
   const receivedBundleSummary = receiveReport ? receiveBundleSummaryLine(receiveReport) : null;
   const receivedBundleStatus = receiveReport ? receiveBundleStatusLabel(receiveReport) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
@@ -1946,7 +1970,19 @@ function ReceivePanel({
           {receivedBundleSummary ? (
             <div className="bundle-line">
               <span>{receivedBundleSummary}</span>
-              {receivedBundleStatus ? <strong>{receivedBundleStatus}</strong> : null}
+              <div className="bundle-actions">
+                {receivedBundleStatus ? <strong>{receivedBundleStatus} · 已保存</strong> : null}
+                {receivedBundle ? (
+                  <button
+                    className="text-button"
+                    disabled={busy === "receive"}
+                    onClick={() => onDeleteStagedBundle(receivedBundle)}
+                    type="button"
+                  >
+                    删除暂存
+                  </button>
+                ) : null}
+              </div>
             </div>
           ) : null}
         </section>
@@ -2380,7 +2416,7 @@ function StatusLine({
         <strong>接收完成</strong>
         <span>
           {receivedBundleSummary
-            ? [receivedBundleSummary, receivedBundleStatus].filter(Boolean).join(" · ")
+            ? [receivedBundleSummary, receivedBundleStatus, "已保存"].filter(Boolean).join(" · ")
             : `${receiveReport.file_count} 个文件 · ${receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}`}
         </span>
       </div>
@@ -2722,8 +2758,10 @@ function receiveBundleSummaryLine(report: ReceiveReportDto) {
 }
 
 function receiveBundleStatusLabel(report: ReceiveReportDto) {
-  if (!report.bundle) return null;
-  return report.bundle.import_allowed ? "可导入" : "仅保存";
+  const bundle = report.bundle;
+  if (!bundle) return null;
+  if (bundle.can_import_now) return "可导入";
+  return bundle.import_allowed ? "等待导入" : "仅保存";
 }
 
 function bundleTypeLabel(type: string) {

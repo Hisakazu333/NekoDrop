@@ -36,7 +36,9 @@ type CommandName =
   | "respond_pairing_request"
   | "get_transfer_status"
   | "delete_transfer"
-  | "clear_transfer_history";
+  | "clear_transfer_history"
+  | "list_staged_bundles"
+  | "delete_staged_bundle";
 
 export async function invokeCommand<T>(
   command: CommandName,
