@@ -73,7 +73,15 @@ type BusyMode =
   | "resend"
   | "open";
 
-type ComposerMode = "send" | "devices" | "receive" | "queue" | "history" | "settings";
+type ComposerMode =
+  | "overview"
+  | "send"
+  | "receive"
+  | "devices"
+  | "transfers"
+  | "bundles"
+  | "integrations"
+  | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
@@ -82,11 +90,13 @@ const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }>
 ];
 
 const NAV_ITEMS: Array<{ mode: ComposerMode; label: string; icon: IconName }> = [
+  { mode: "overview", label: "概览", icon: "overview" },
   { mode: "send", label: "发送", icon: "send" },
   { mode: "receive", label: "收件", icon: "inbox" },
   { mode: "devices", label: "设备", icon: "devices" },
-  { mode: "queue", label: "队列", icon: "list" },
-  { mode: "history", label: "历史", icon: "clock" },
+  { mode: "transfers", label: "传输", icon: "clock" },
+  { mode: "bundles", label: "资料包", icon: "package" },
+  { mode: "integrations", label: "集成", icon: "plug" },
   { mode: "settings", label: "设置", icon: "settings" }
 ];
 
@@ -117,7 +127,7 @@ export function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
-  const [mode, setMode] = useState<ComposerMode>("send");
+  const [mode, setMode] = useState<ComposerMode>("overview");
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
   const desktopRuntime = useMemo(() => isTauriRuntime(), []);
@@ -921,24 +931,6 @@ export function App() {
     : trimmedConnectionCode.length > 0
       ? "备用码"
       : "选择目标";
-  const pageTitle =
-    mode === "receive"
-      ? "收件"
-      : mode === "devices"
-        ? "设备"
-        : mode === "queue"
-          ? "发送队列"
-          : mode === "history"
-            ? "传输历史"
-            : mode === "settings"
-              ? "设置"
-              : selectedTargetCopy
-                ? `发给 ${selectedTargetCopy.targetLabel}`
-                : selectedDevice
-                  ? `发给 ${selectedDevice.name}`
-                  : trimmedConnectionCode.length > 0
-                    ? "使用备用码发送"
-                    : "把文件发到哪台设备？";
   const composerTitle = plan
     ? plan.root_name
     : transferPaths.length > 0
@@ -949,18 +941,24 @@ export function App() {
     : transferPaths.length > 0
       ? transferPaths[0]
       : "文件 / 文件夹";
-  const pageSubtitle =
-    mode === "receive"
-      ? receiveSession?.bind_addr ?? receiveState
-      : mode === "devices"
-        ? trustedDevices.length > 0 ? `${trustedDevices.length} 台可信设备` : "暂无可信设备"
-        : mode === "history"
-          ? transfers.length > 0 ? `${transfers.length} 条真实记录` : "暂无记录"
-          : mode === "settings"
-            ? snapshot?.device_name ?? "这台电脑"
-            : selectedTargetCopy
-              ? selectedTargetCopy.subtitle
-              : composerSubtitle;
+  const pageTitle = buildPageTitle({
+    connectionCode: trimmedConnectionCode,
+    mode,
+    selectedDeviceName: selectedDevice?.name ?? null,
+    selectedTargetLabel: selectedTargetCopy?.targetLabel ?? null
+  });
+  const pageSubtitle = buildPageSubtitle({
+    composerSubtitle,
+    mode,
+    nearbyDeviceCount: nearbyDevices.length,
+    receiveBundleSummary: receiveReport?.bundle ? receiveBundleSummaryLine(receiveReport) : null,
+    receiveSessionBindAddr: receiveSession?.bind_addr ?? null,
+    receiveState,
+    selectedTargetSubtitle: selectedTargetCopy?.subtitle ?? null,
+    snapshotDeviceName: snapshot?.device_name ?? null,
+    transferCount: transfers.length,
+    trustedDeviceCount: trustedDevices.length
+  });
 
   return (
     <main className="app-shell">
@@ -1092,9 +1090,8 @@ export function App() {
           ) : null}
 
           {mode === "send" ? (
-            <div className="drop-home">
+            <div className="send-page">
               <header className="send-hero">
-                <p className="send-hero-brand">NekoDrop</p>
                 <h1 className="send-hero-title">{pageTitle}</h1>
                 <p className="send-hero-subtitle">
                   {transferPaths.length > 0
@@ -1226,6 +1223,16 @@ export function App() {
                 />
               ) : null}
 
+              {selectedPaths.length > 0 ? (
+                <QueuePreview
+                  plan={plan}
+                  scanStatus={scanStatus}
+                  selectedPaths={selectedPaths}
+                  onClearQueue={clearQueue}
+                  onRemovePath={removePath}
+                />
+              ) : null}
+
               <NearbyDevices
                 busy={busy}
                 discoveryStatus={discoveryStatus}
@@ -1241,34 +1248,36 @@ export function App() {
                 }}
                 onTrustDevice={requestPairing}
               />
-
-              {selectedPaths.length > 0 ? (
-                <QueuePreview
-                  plan={plan}
-                  scanStatus={scanStatus}
-                  selectedPaths={selectedPaths}
-                  onClearQueue={clearQueue}
-                  onRemovePath={removePath}
-                />
-              ) : null}
-
-              <RecentActivity
-                busy={busy}
-                compact
-                selectedTransferId={selectedTransferId}
-                transfers={transfers}
-                onClearTransfers={clearTransferHistory}
-                onDeleteTransfer={deleteTransfer}
-                onOpenTransfer={openTransferLocation}
-                onResendTransfer={resendTransfer}
-                onSelectTransfer={(transfer) =>
-                  setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
-                }
-                onUseFallbackCode={openFallbackCode}
-              />
             </div>
           ) : (
             <div className="page-stack">
+              {mode === "overview" ? (
+                <OverviewPanel
+                  busy={busy}
+                  currentFailedTransfer={currentFailedTransfer}
+                  nearbyDevices={nearbyDevices}
+                  pendingOffer={pendingReceiveOffer}
+                  receiveReport={receiveReport}
+                  receiveSession={receiveSession}
+                  receiveState={receiveState}
+                  selectedTransferId={selectedTransferId}
+                  transferMetrics={transferMetrics}
+                  transferStatus={transferStatus}
+                  transfers={transfers}
+                  trustedDevices={trustedDevices}
+                  onCancelTransfer={cancelCurrentTransfer}
+                  onClearTransfers={clearTransferHistory}
+                  onDeleteTransfer={deleteTransfer}
+                  onOpenTransfer={openTransferLocation}
+                  onRecoverTransfer={resendTransfer}
+                  onSelectMode={setMode}
+                  onSelectTransfer={(transfer) =>
+                    setSelectedTransferId((current) => current === transfer.id ? null : transfer.id)
+                  }
+                  onUseFallbackCode={openFallbackCode}
+                />
+              ) : null}
+
               {mode === "receive" ? (
                 <ReceivePanel
                   bindPort={bindPort}
@@ -1324,26 +1333,7 @@ export function App() {
                 />
               ) : null}
 
-              {mode === "queue" ? (
-                <QueuePanel
-                  busy={busy}
-                  manualPaths={manualPaths}
-                  plan={plan}
-                  scanStatus={scanStatus}
-                  selectedPaths={selectedPaths}
-                  setManualPaths={(value) => {
-                    setManualPaths(value);
-                    setPlan(null);
-                    setScanStatus(null);
-                    setSendReport(null);
-                  }}
-                  onClearQueue={clearQueue}
-                  onRemovePath={removePath}
-                  onScan={() => scanPaths()}
-                />
-              ) : null}
-
-              {mode === "history" ? (
+              {mode === "transfers" ? (
                 <HistoryPanel
                   busy={busy}
                   selectedTransferId={selectedTransferId}
@@ -1360,6 +1350,18 @@ export function App() {
                   }
                   onUseFallbackCode={openFallbackCode}
                 />
+              ) : null}
+
+              {mode === "bundles" ? (
+                <BundlePanel
+                  busy={busy}
+                  receiveReport={receiveReport}
+                  onDeleteStagedBundle={deleteCurrentStagedBundle}
+                />
+              ) : null}
+
+              {mode === "integrations" ? (
+                <IntegrationPanel />
               ) : null}
 
               {mode === "settings" ? (
@@ -1401,6 +1403,9 @@ type IconName =
   | "inbox"
   | "link"
   | "list"
+  | "overview"
+  | "package"
+  | "plug"
   | "settings"
   | "send"
   | "trash"
@@ -1417,6 +1422,9 @@ function Icon({ className, name }: { className?: string; name: IconName }) {
       {name === "inbox" ? <path d="M4 4h16v11l-3 5H7l-3-5V4Zm0 11h5l2 2h2l2-2h5" /> : null}
       {name === "link" ? <path d="M10 13a5 5 0 0 0 7.07 0l2-2A5 5 0 0 0 12 4l-1.2 1.2M14 11a5 5 0 0 0-7.07 0l-2 2A5 5 0 0 0 12 20l1.2-1.2" /> : null}
       {name === "list" ? <path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01" /> : null}
+      {name === "overview" ? <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 13h7v6H4v-6Zm9-2h7v8h-7v-8Z" /> : null}
+      {name === "package" ? <path d="m4 7 8-4 8 4-8 4-8-4Zm0 0v10l8 4m0-10v10m0-10 8-4m0 0v10l-8 4" /> : null}
+      {name === "plug" ? <path d="M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Zm5 10v4" /> : null}
       {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
@@ -1669,6 +1677,241 @@ function DevicePanel({
         onSelectDevice={onSelectNearbyDevice}
         onTrustDevice={onTrustDevice}
       />
+    </section>
+  );
+}
+
+function OverviewPanel({
+  busy,
+  currentFailedTransfer,
+  nearbyDevices,
+  pendingOffer,
+  receiveReport,
+  receiveSession,
+  receiveState,
+  selectedTransferId,
+  transferMetrics,
+  transferStatus,
+  transfers,
+  trustedDevices,
+  onCancelTransfer,
+  onClearTransfers,
+  onDeleteTransfer,
+  onOpenTransfer,
+  onRecoverTransfer,
+  onSelectMode,
+  onSelectTransfer,
+  onUseFallbackCode
+}: {
+  busy: BusyMode | null;
+  currentFailedTransfer: TransferDto | null;
+  nearbyDevices: DeviceDto[];
+  pendingOffer: PendingReceiveOfferDto | null;
+  receiveReport: ReceiveReportDto | null;
+  receiveSession: ReceiveSessionDto | null;
+  receiveState: string;
+  selectedTransferId: string | null;
+  transferMetrics: {
+    speedBytesPerSecond: number | null;
+    etaSeconds: number | null;
+  };
+  transferStatus: TransferStatusDto | null;
+  transfers: TransferDto[];
+  trustedDevices: TrustedDeviceDto[];
+  onCancelTransfer: () => void;
+  onClearTransfers: () => void;
+  onDeleteTransfer: (transfer: TransferDto) => void;
+  onOpenTransfer: (transfer: TransferDto) => void;
+  onRecoverTransfer: (transfer: TransferDto) => void;
+  onSelectMode: (mode: ComposerMode) => void;
+  onSelectTransfer: (transfer: TransferDto) => void;
+  onUseFallbackCode: () => void;
+}) {
+  const latestBundle = receiveReport?.bundle ?? null;
+  const activeTransfer = transferStatus && shouldShowActiveTransferBar(transferStatus);
+
+  return (
+    <section className="overview-page">
+      <div className="overview-status">
+        <button type="button" onClick={() => onSelectMode("receive")}>
+          <strong>{receiveState}</strong>
+          <span>{receiveSession?.bind_addr ?? "收件未监听"}</span>
+        </button>
+        <button type="button" onClick={() => onSelectMode("devices")}>
+          <strong>{nearbyDevices.length}</strong>
+          <span>附近在线</span>
+        </button>
+        <button type="button" onClick={() => onSelectMode("devices")}>
+          <strong>{trustedDevices.length}</strong>
+          <span>可信设备</span>
+        </button>
+        <button type="button" onClick={() => onSelectMode("bundles")}>
+          <strong>{latestBundle ? "1" : "0"}</strong>
+          <span>待处理资料包</span>
+        </button>
+      </div>
+
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>当前</strong>
+          <span>{pendingOffer ? "等待确认" : activeTransfer ? "传输中" : "空闲"}</span>
+        </div>
+        {pendingOffer ? (
+          <div className="console-row is-attention">
+            <span>
+              {pendingOffer.root_name} · {pendingOffer.file_count} 个文件 · {formatBytes(pendingOffer.total_bytes)}
+            </span>
+            <button className="text-button" type="button" onClick={() => onSelectMode("receive")}>
+              处理
+            </button>
+          </div>
+        ) : activeTransfer && transferStatus ? (
+          <TransferStatusView
+            busy={busy}
+            metrics={transferMetrics}
+            status={transferStatus}
+            recoveryTransfer={currentFailedTransfer}
+            onCancel={onCancelTransfer}
+            onRecover={onRecoverTransfer}
+            onUseFallbackCode={onUseFallbackCode}
+          />
+        ) : (
+          <div className="console-empty">没有正在进行的传输</div>
+        )}
+      </section>
+
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>下一步</strong>
+        </div>
+        <div className="overview-actions">
+          <button className="primary-button" type="button" onClick={() => onSelectMode("send")}>
+            发送文件
+          </button>
+          <button className="tool-button" type="button" onClick={() => onSelectMode("receive")}>
+            查看收件
+          </button>
+          <button className="tool-button" type="button" onClick={() => onSelectMode("bundles")}>
+            资料包
+          </button>
+          <button className="tool-button" type="button" onClick={() => onSelectMode("integrations")}>
+            集成
+          </button>
+        </div>
+      </section>
+
+      {latestBundle ? (
+        <section className="console-section">
+          <div className="console-section-head">
+            <strong>最近资料包</strong>
+            <span>{receiveBundleStatusLabel(receiveReport!)}</span>
+          </div>
+          <div className="console-row">
+            <span>{receiveBundleSummaryLine(receiveReport!)}</span>
+            <button className="text-button" type="button" onClick={() => onSelectMode("bundles")}>
+              查看
+            </button>
+          </div>
+        </section>
+      ) : null}
+
+      <RecentActivity
+        busy={busy}
+        compact
+        selectedTransferId={selectedTransferId}
+        transfers={transfers}
+        onClearTransfers={onClearTransfers}
+        onDeleteTransfer={onDeleteTransfer}
+        onOpenTransfer={onOpenTransfer}
+        onResendTransfer={onRecoverTransfer}
+        onSelectTransfer={onSelectTransfer}
+        onUseFallbackCode={onUseFallbackCode}
+      />
+    </section>
+  );
+}
+
+function BundlePanel({
+  busy,
+  receiveReport,
+  onDeleteStagedBundle
+}: {
+  busy: BusyMode | null;
+  receiveReport: ReceiveReportDto | null;
+  onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
+}) {
+  const bundle = receiveReport?.bundle ?? null;
+
+  return (
+    <section className="bundle-page">
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>暂存区</strong>
+          <span>{bundle ? receiveBundleStatusLabel(receiveReport!) : "暂无资料包"}</span>
+        </div>
+        {bundle ? (
+          <div className="bundle-record">
+            <div>
+              <strong>{bundle.display_name}</strong>
+              <span>
+                {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {bundle.file_count} 个文件 · {formatBytes(bundle.total_bytes)}
+              </span>
+              <small>{bundle.can_import_now ? "等待导入确认" : bundle.import_allowed ? "已保存到暂存区" : "仅保存，不可导入"}</small>
+            </div>
+            <div className="bundle-record-actions">
+              <button className="tool-button" disabled type="button">
+                预览
+              </button>
+              <button className="primary-button is-muted" disabled={!bundle.can_import_now} type="button">
+                导入
+              </button>
+              <button
+                className="text-button"
+                disabled={busy === "receive"}
+                onClick={() => onDeleteStagedBundle(bundle)}
+                type="button"
+              >
+                删除
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="console-empty">收到的 session、skill、workspace 会先进入这里，确认后再导入。</div>
+        )}
+      </section>
+    </section>
+  );
+}
+
+function IntegrationPanel() {
+  return (
+    <section className="integration-page">
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>本机桥接</strong>
+          <span>内部 handler 就绪</span>
+        </div>
+        <div className="console-row">
+          <span>可读取设备、资料包和传输状态。发送、导入和授权仍需确认。</span>
+        </div>
+      </section>
+
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>授权请求</strong>
+          <span>暂无待处理</span>
+        </div>
+        <div className="console-empty">本机应用请求 device.read、bundle.send 等权限时，会进入这里。</div>
+      </section>
+
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>适配边界</strong>
+        </div>
+        <div className="console-row">
+          <span>协议层只认通用能力，具体应用通过 adapter 接入。</span>
+        </div>
+      </section>
     </section>
   );
 }
@@ -2133,69 +2376,6 @@ function SettingsPanel({
           <SettingsValue>{model.trayLabel}</SettingsValue>
         </SettingsRow>
       </SettingsGroup>
-    </section>
-  );
-}
-
-function QueuePanel({
-  busy,
-  manualPaths,
-  plan,
-  scanStatus,
-  selectedPaths,
-  setManualPaths,
-  onClearQueue,
-  onRemovePath,
-  onScan
-}: {
-  busy: BusyMode | null;
-  manualPaths: string;
-  plan: TransferPlanDto | null;
-  scanStatus: TransferScanProgressDto | null;
-  selectedPaths: string[];
-  setManualPaths: (value: string) => void;
-  onClearQueue: () => void;
-  onRemovePath: (path: string) => void;
-  onScan: () => void;
-}) {
-  return (
-    <section className="function-panel">
-      <div className="panel-head">
-        <div>
-          <strong>{plan ? `${plan.file_count} 个文件` : "发送队列"}</strong>
-          <span>{plan ? formatBytes(plan.total_bytes) : "未扫描"}</span>
-        </div>
-        <div className="panel-actions">
-          <button className="tool-button" disabled={busy === "scan"} onClick={onScan} type="button">
-            扫描
-          </button>
-          <button className="tool-button" disabled={selectedPaths.length === 0 && !manualPaths.trim()} onClick={onClearQueue} type="button">
-            清空
-          </button>
-        </div>
-      </div>
-
-      <TransferScanStatus status={scanStatus} />
-
-      {selectedPaths.length > 0 ? (
-        <div className="path-list">
-          {selectedPaths.map((path) => (
-            <div className="path-row" key={path}>
-              <span>{path}</span>
-              <button className="text-button" onClick={() => onRemovePath(path)} type="button">
-                移除
-              </button>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      <textarea
-        className="manual-paths"
-        value={manualPaths}
-        onChange={(event) => setManualPaths(event.target.value)}
-        placeholder="每行一个路径"
-      />
     </section>
   );
 }
@@ -2714,6 +2894,69 @@ function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
     public_key_fingerprint: device.public_key_fingerprint,
     pairing_code: device.pairing_code
   };
+}
+
+function buildPageTitle({
+  connectionCode,
+  mode,
+  selectedDeviceName,
+  selectedTargetLabel
+}: {
+  connectionCode: string;
+  mode: ComposerMode;
+  selectedDeviceName: string | null;
+  selectedTargetLabel: string | null;
+}) {
+  if (mode === "overview") return "概览";
+  if (mode === "send") {
+    if (selectedTargetLabel) return `发给 ${selectedTargetLabel}`;
+    if (selectedDeviceName) return `发给 ${selectedDeviceName}`;
+    if (connectionCode.length > 0) return "使用备用码发送";
+    return "发送";
+  }
+  if (mode === "receive") return "收件";
+  if (mode === "devices") return "设备";
+  if (mode === "transfers") return "传输";
+  if (mode === "bundles") return "资料包";
+  if (mode === "integrations") return "集成";
+  return "设置";
+}
+
+function buildPageSubtitle({
+  composerSubtitle,
+  mode,
+  nearbyDeviceCount,
+  receiveBundleSummary,
+  receiveSessionBindAddr,
+  receiveState,
+  selectedTargetSubtitle,
+  snapshotDeviceName,
+  transferCount,
+  trustedDeviceCount
+}: {
+  composerSubtitle: string;
+  mode: ComposerMode;
+  nearbyDeviceCount: number;
+  receiveBundleSummary: string | null;
+  receiveSessionBindAddr: string | null;
+  receiveState: string;
+  selectedTargetSubtitle: string | null;
+  snapshotDeviceName: string | null;
+  transferCount: number;
+  trustedDeviceCount: number;
+}) {
+  if (mode === "overview") return `${receiveState} · ${nearbyDeviceCount} 台附近设备`;
+  if (mode === "send") return selectedTargetSubtitle ?? composerSubtitle;
+  if (mode === "receive") return receiveSessionBindAddr ?? receiveState;
+  if (mode === "devices") {
+    return trustedDeviceCount > 0 ? `${trustedDeviceCount} 台可信设备` : "暂无可信设备";
+  }
+  if (mode === "transfers") {
+    return transferCount > 0 ? `${transferCount} 条真实记录` : "暂无记录";
+  }
+  if (mode === "bundles") return receiveBundleSummary ?? "暂无暂存资料包";
+  if (mode === "integrations") return "本机应用接入与授权请求";
+  return snapshotDeviceName ?? "这台电脑";
 }
 
 function normalizeReceivePolicy(value: string): ReceivePolicyMode {
