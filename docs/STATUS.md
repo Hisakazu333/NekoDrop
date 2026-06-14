@@ -81,7 +81,7 @@
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
 | NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验并保存到 staging，且可以列出、删除、按过期时间清理 staged bundle，`nekodrop-service` 已有接收完成后的 staged bundle report，桌面后端 DTO 已能暴露 staged bundle 元数据，桌面接收完成区会显示紧凑 bundle 摘要、已保存状态和删除暂存入口。local bridge 导入还没有接入。 |
-| CCS / OpenNeko local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；授权申请、发送和导入仍返回 `pending_auth`。localhost runtime、持久化授权、授权码和导入执行还没有接入。 |
+| CCS / OpenNeko local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；授权申请、发送和导入仍返回 `pending_auth`，授权申请响应会带回 scope、reason 和 ttl。localhost runtime、持久化授权、授权码和导入执行还没有接入。 |
 
 ## 当前不能宣传为已完成
 
