@@ -85,11 +85,20 @@ type ComposerMode =
   | "transfers"
   | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
+type TransferMetrics = {
+  speedBytesPerSecond: number | null;
+  etaSeconds: number | null;
+};
 
 const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }> = [
   { value: "always_ask", label: "询问" },
   { value: "block_all", label: "阻止" }
 ];
+
+const EMPTY_TRANSFER_METRICS = Object.freeze<TransferMetrics>({
+  speedBytesPerSecond: null,
+  etaSeconds: null
+});
 
 const NAV_ITEMS: Array<{ mode: ComposerMode; label: string; icon: IconName }> = [
   { mode: "overview", label: "概览", icon: "overview" },
@@ -146,10 +155,7 @@ export function App() {
   const diagnosticsRefreshInFlight = useRef(false);
   const lastDirectoryRefreshAt = useRef(0);
   const lastDiagnosticsRefreshAt = useRef(0);
-  const [transferMetrics, setTransferMetrics] = useState<{
-    speedBytesPerSecond: number | null;
-    etaSeconds: number | null;
-  }>({ speedBytesPerSecond: null, etaSeconds: null });
+  const [transferMetrics, setTransferMetrics] = useState<TransferMetrics>(EMPTY_TRANSFER_METRICS);
 
   const transferPaths = useMemo(
     () => buildPathPayload(selectedPaths, manualPaths),
@@ -265,7 +271,7 @@ export function App() {
   useEffect(() => {
     if (!transferStatus || transferStatus.phase !== "transferring") {
       previousTransferStatus.current = transferStatus;
-      setTransferMetrics({ speedBytesPerSecond: null, etaSeconds: null });
+      resetTransferMetrics(setTransferMetrics);
       return;
     }
 
@@ -287,10 +293,12 @@ export function App() {
     const speedBytesPerSecond =
       (transferStatus.bytes_transferred - previous.bytes_transferred) / elapsedSeconds;
     const remainingBytes = Math.max(0, transferStatus.total_bytes - transferStatus.bytes_transferred);
-    setTransferMetrics({
-      speedBytesPerSecond,
-      etaSeconds: speedBytesPerSecond > 0 ? Math.ceil(remainingBytes / speedBytesPerSecond) : null
-    });
+    setTransferMetrics((current) =>
+      keepIfEqual(current, {
+        speedBytesPerSecond,
+        etaSeconds: speedBytesPerSecond > 0 ? Math.ceil(remainingBytes / speedBytesPerSecond) : null
+      })
+    );
   }, [transferStatus]);
 
   useEffect(() => {
@@ -1772,10 +1780,7 @@ function OverviewPanel({
   receiveSession: ReceiveSessionDto | null;
   receiveState: string;
   selectedTransferId: string | null;
-  transferMetrics: {
-    speedBytesPerSecond: number | null;
-    etaSeconds: number | null;
-  };
+  transferMetrics: TransferMetrics;
   transferStatus: TransferStatusDto | null;
   transfers: TransferDto[];
   trustedDevices: TrustedDeviceDto[];
@@ -2469,10 +2474,7 @@ function HistoryPanel({
 }: {
   busy: BusyMode | null;
   selectedTransferId: string | null;
-  transferMetrics: {
-    speedBytesPerSecond: number | null;
-    etaSeconds: number | null;
-  };
+  transferMetrics: TransferMetrics;
   transferStatus: TransferStatusDto | null;
   transfers: TransferDto[];
   onCancelTransfer: () => void;
@@ -2622,10 +2624,7 @@ function StatusLine({
   receiveReport: ReceiveReportDto | null;
   receiveSession: ReceiveSessionDto | null;
   sendReport: SendReportDto | null;
-  transferMetrics: {
-    speedBytesPerSecond: number | null;
-    etaSeconds: number | null;
-  };
+  transferMetrics: TransferMetrics;
   transferStatus: TransferStatusDto | null;
   transferCount: number;
   recoveryTransfer: TransferDto | null;
@@ -2801,10 +2800,7 @@ function ActiveTransferBar({
   onUseFallbackCode
 }: {
   busy: BusyMode | null;
-  metrics: {
-    speedBytesPerSecond: number | null;
-    etaSeconds: number | null;
-  };
+  metrics: TransferMetrics;
   status: TransferStatusDto;
   recoveryTransfer: TransferDto | null;
   onCancel: () => void;
@@ -2877,17 +2873,14 @@ function TransferStatusView({
   onUseFallbackCode
 }: {
   busy?: BusyMode | null;
-  metrics?: {
-    speedBytesPerSecond: number | null;
-    etaSeconds: number | null;
-  };
+  metrics?: TransferMetrics;
   status: TransferStatusDto;
   recoveryTransfer?: TransferDto | null;
   onCancel?: () => void;
   onRecover?: (transfer: TransferDto) => void;
   onUseFallbackCode?: () => void;
 }) {
-  const model = buildTransferProgressViewModel(status, metrics ?? { speedBytesPerSecond: null, etaSeconds: null });
+  const model = buildTransferProgressViewModel(status, metrics ?? EMPTY_TRANSFER_METRICS);
   const recoveryActions = currentTransferRecoveryActions(status, recoveryTransfer ?? null);
   const canCancel =
     onCancel &&
@@ -2958,6 +2951,16 @@ function uniquePaths(paths: string[]) {
 
 function keepIfEqual<T>(current: T, next: T): T {
   return stableJson(current) === stableJson(next) ? current : next;
+}
+
+function resetTransferMetrics(
+  setTransferMetrics: (updater: (current: TransferMetrics) => TransferMetrics) => void
+) {
+  setTransferMetrics((current) =>
+    current === EMPTY_TRANSFER_METRICS || stableJson(current) === stableJson(EMPTY_TRANSFER_METRICS)
+      ? current
+      : EMPTY_TRANSFER_METRICS
+  );
 }
 
 function stableJson(value: unknown) {
