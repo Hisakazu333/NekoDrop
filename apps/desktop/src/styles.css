@@ -1420,6 +1420,30 @@ button:disabled {
   gap: 12px;
 }
 
+.bundle-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.bundle-line span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-line strong {
+  flex: 0 0 auto;
+  color: var(--text-2);
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .transfer-status-head strong,
 .panel-head strong,
 .result-line strong,

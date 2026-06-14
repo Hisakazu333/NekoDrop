@@ -1783,6 +1783,8 @@ function ReceivePanel({
     receiveReport?.sender_device_name?.trim() ||
     receiveReport?.sender_device_id ||
     null;
+  const receivedBundleSummary = receiveReport ? receiveBundleSummaryLine(receiveReport) : null;
+  const receivedBundleStatus = receiveReport ? receiveBundleStatusLabel(receiveReport) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
 
   return (
@@ -1941,6 +1943,12 @@ function ReceivePanel({
               {receiveReport.file_count} 个 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查中"}
             </span>
           </div>
+          {receivedBundleSummary ? (
+            <div className="bundle-line">
+              <span>{receivedBundleSummary}</span>
+              {receivedBundleStatus ? <strong>{receivedBundleStatus}</strong> : null}
+            </div>
+          ) : null}
         </section>
       ) : null}
     </section>
@@ -2365,10 +2373,16 @@ function StatusLine({
   }
 
   if (receiveReport) {
+    const receivedBundleSummary = receiveBundleSummaryLine(receiveReport);
+    const receivedBundleStatus = receiveBundleStatusLabel(receiveReport);
     return (
       <div className="status-line">
         <strong>接收完成</strong>
-        <span>{receiveReport.file_count} 个文件 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}</span>
+        <span>
+          {receivedBundleSummary
+            ? [receivedBundleSummary, receivedBundleStatus].filter(Boolean).join(" · ")
+            : `${receiveReport.file_count} 个文件 · ${receiveReport.files.every((file) => file.verified) ? "已校验" : "检查"}`}
+        </span>
       </div>
     );
   }
@@ -2699,6 +2713,34 @@ function pendingOfferResumeSummaryLabel(summary: PendingReceiveOfferDto["resume_
   }
 
   return `${parts.join(" · ")} · 已接收 ${formatBytes(summary.received_bytes)}`;
+}
+
+function receiveBundleSummaryLine(report: ReceiveReportDto) {
+  const bundle = report.bundle;
+  if (!bundle) return null;
+  return `${bundle.display_name} · ${bundleTypeLabel(bundle.bundle_type)} · ${bundle.source_app} · ${formatBytes(bundle.total_bytes)}`;
+}
+
+function receiveBundleStatusLabel(report: ReceiveReportDto) {
+  if (!report.bundle) return null;
+  return report.bundle.import_allowed ? "可导入" : "仅保存";
+}
+
+function bundleTypeLabel(type: string) {
+  switch (type) {
+    case "skill":
+      return "Skill";
+    case "session":
+      return "Session";
+    case "workspace":
+      return "Workspace";
+    case "agent_profile":
+      return "Agent profile";
+    case "config_snapshot":
+      return "Config";
+    default:
+      return type;
+  }
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {
