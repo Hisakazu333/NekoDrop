@@ -29,7 +29,9 @@ use nekodrop_storage::{
     list_staged_bundles as list_staged_bundles_storage, ResumeExpectedFile, ResumePlan,
     StagedBundle,
 };
-use nekolink_protocol::{DeviceIdentity, LocalBridgeClientIdentity, LocalBridgeRequest};
+use nekolink_protocol::{
+    DeviceIdentity, LocalBridgeClientIdentity, LocalBridgePermissionScope, LocalBridgeRequest,
+};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -289,6 +291,9 @@ pub struct LocalBridgeResponseDto {
     pub client_state: String,
     pub client_id: Option<String>,
     pub client_display_name: Option<String>,
+    pub authorization_scopes: Vec<String>,
+    pub authorization_reason: Option<String>,
+    pub authorization_ttl_seconds: Option<u64>,
     pub devices: Vec<TrustedDeviceDto>,
     pub staged_bundles: Vec<ReceivedBundleDto>,
     pub transfer_status: Option<TransferStatusDto>,
@@ -2173,9 +2178,15 @@ fn handle_local_bridge_request_at(
         LocalBridgeRequest::ImportBundle(request) => Ok(
             local_bridge_pending_confirmation_response(request.request_id, request.client),
         ),
-        LocalBridgeRequest::AuthorizationRequest(request) => Ok(
-            local_bridge_pending_authorization_response(request.request_id, request.client),
-        ),
+        LocalBridgeRequest::AuthorizationRequest(request) => {
+            Ok(local_bridge_pending_authorization_response(
+                request.request_id,
+                request.client,
+                request.requested_scopes,
+                request.reason,
+                request.ttl_seconds,
+            ))
+        }
     }
 }
 
@@ -2197,6 +2208,9 @@ fn local_bridge_read_only_response(
         client_state: client_metadata.0,
         client_id: client_metadata.1,
         client_display_name: client_metadata.2,
+        authorization_scopes: Vec::new(),
+        authorization_reason: None,
+        authorization_ttl_seconds: None,
         devices,
         staged_bundles,
         transfer_status,
@@ -2218,6 +2232,9 @@ fn local_bridge_read_only_unsupported_response(
         client_state: client_metadata.0,
         client_id: client_metadata.1,
         client_display_name: client_metadata.2,
+        authorization_scopes: Vec::new(),
+        authorization_reason: None,
+        authorization_ttl_seconds: None,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -2238,6 +2255,9 @@ fn local_bridge_pending_confirmation_response(
         client_state: client_metadata.0,
         client_id: client_metadata.1,
         client_display_name: client_metadata.2,
+        authorization_scopes: Vec::new(),
+        authorization_reason: None,
+        authorization_ttl_seconds: None,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -2247,6 +2267,9 @@ fn local_bridge_pending_confirmation_response(
 fn local_bridge_pending_authorization_response(
     request_id: String,
     client: LocalBridgeClientIdentity,
+    requested_scopes: Vec<LocalBridgePermissionScope>,
+    reason: String,
+    ttl_seconds: Option<u64>,
 ) -> LocalBridgeResponseDto {
     let client_metadata = local_bridge_client_metadata(Some(client));
     LocalBridgeResponseDto {
@@ -2258,6 +2281,13 @@ fn local_bridge_pending_authorization_response(
         client_state: client_metadata.0,
         client_id: client_metadata.1,
         client_display_name: client_metadata.2,
+        authorization_scopes: requested_scopes
+            .into_iter()
+            .map(local_bridge_permission_scope_label)
+            .map(str::to_string)
+            .collect(),
+        authorization_reason: Some(reason),
+        authorization_ttl_seconds: ttl_seconds,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -2274,6 +2304,16 @@ fn local_bridge_client_metadata(
             Some(client.display_name),
         ),
         None => ("anonymous".to_string(), None, None),
+    }
+}
+
+fn local_bridge_permission_scope_label(scope: LocalBridgePermissionScope) -> &'static str {
+    match scope {
+        LocalBridgePermissionScope::DeviceRead => "device.read",
+        LocalBridgePermissionScope::TransferStatusRead => "transfer.status.read",
+        LocalBridgePermissionScope::BundleRead => "bundle.read",
+        LocalBridgePermissionScope::BundleSend => "bundle.send",
+        LocalBridgePermissionScope::BundleImportRequest => "bundle.import.request",
     }
 }
 
@@ -3895,6 +3935,15 @@ mod tests {
         assert!(response.requires_user_confirmation);
         assert_eq!(response.client_state, "identified");
         assert_eq!(response.client_id.as_deref(), Some("openneko-desktop"));
+        assert_eq!(
+            response.authorization_scopes,
+            vec!["device.read".to_string(), "bundle.send".to_string()]
+        );
+        assert_eq!(
+            response.authorization_reason.as_deref(),
+            Some("Send a skill bundle to a trusted desktop device")
+        );
+        assert_eq!(response.authorization_ttl_seconds, Some(900));
         assert!(response.message.contains("authorization"));
 
         fs::remove_dir_all(dir).unwrap();
