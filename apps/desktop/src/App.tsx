@@ -42,6 +42,7 @@ import type {
   AppSnapshot,
   DeviceDto,
   DiscoveryStatusDto,
+  ManualBundleCreateDto,
   PendingPairingRequestDto,
   PendingReceiveOfferDto,
   ReceivePortDiagnosticsDto,
@@ -123,6 +124,11 @@ export function App() {
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
   const [transfers, setTransfers] = useState<TransferDto[]>([]);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDeviceDto[]>([]);
+  const [manualBundleType, setManualBundleType] = useState("workspace");
+  const [manualBundleSourcePath, setManualBundleSourcePath] = useState("");
+  const [manualBundleDisplayName, setManualBundleDisplayName] = useState("");
+  const [manualBundleSourceApp, setManualBundleSourceApp] = useState("NekoDrop");
+  const [createdManualBundle, setCreatedManualBundle] = useState<ManualBundleCreateDto | null>(null);
   const [selectedTransferId, setSelectedTransferId] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
@@ -798,6 +804,51 @@ export function App() {
     }
   }
 
+  async function chooseManualBundleSourceDir() {
+    setBusy("pick-folders");
+    setError(null);
+    try {
+      const picked = await invokeCommand<string | null>("select_manual_bundle_source_dir");
+      if (!picked) return;
+      setManualBundleSourcePath(picked);
+      if (!manualBundleDisplayName.trim()) {
+        setManualBundleDisplayName(lastPathSegment(picked));
+      }
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createManualBundleForSend() {
+    const sourcePath = manualBundleSourcePath.trim();
+    if (!sourcePath) {
+      setError("选择来源目录");
+      return;
+    }
+    setBusy("scan");
+    setError(null);
+    setCreatedManualBundle(null);
+    try {
+      const bundle = await invokeCommand<ManualBundleCreateDto>("create_manual_bundle", {
+        request: {
+          source_path: sourcePath,
+          bundle_type: manualBundleType,
+          display_name: manualBundleDisplayName.trim() || lastPathSegment(sourcePath),
+          source_app: manualBundleSourceApp.trim() || "NekoDrop"
+        }
+      });
+      setCreatedManualBundle(bundle);
+      setToast(`已创建资料包：${bundle.display_name}`);
+      await applyPickedPaths([bundle.staging_path]);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   function openFallbackCode() {
     setMode("send");
     setConnectionCodeOpen(true);
@@ -1355,7 +1406,17 @@ export function App() {
               {mode === "bundles" ? (
                 <BundlePanel
                   busy={busy}
+                  createdManualBundle={createdManualBundle}
+                  manualBundleDisplayName={manualBundleDisplayName}
+                  manualBundleSourceApp={manualBundleSourceApp}
+                  manualBundleSourcePath={manualBundleSourcePath}
+                  manualBundleType={manualBundleType}
                   receiveReport={receiveReport}
+                  setManualBundleDisplayName={setManualBundleDisplayName}
+                  setManualBundleSourceApp={setManualBundleSourceApp}
+                  setManualBundleType={setManualBundleType}
+                  onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
+                  onCreateManualBundle={createManualBundleForSend}
                   onDeleteStagedBundle={deleteCurrentStagedBundle}
                 />
               ) : null}
@@ -1833,17 +1894,88 @@ function OverviewPanel({
 
 function BundlePanel({
   busy,
+  createdManualBundle,
+  manualBundleDisplayName,
+  manualBundleSourceApp,
+  manualBundleSourcePath,
+  manualBundleType,
   receiveReport,
+  setManualBundleDisplayName,
+  setManualBundleSourceApp,
+  setManualBundleType,
+  onChooseManualBundleSourceDir,
+  onCreateManualBundle,
   onDeleteStagedBundle
 }: {
   busy: BusyMode | null;
+  createdManualBundle: ManualBundleCreateDto | null;
+  manualBundleDisplayName: string;
+  manualBundleSourceApp: string;
+  manualBundleSourcePath: string;
+  manualBundleType: string;
   receiveReport: ReceiveReportDto | null;
+  setManualBundleDisplayName: (value: string) => void;
+  setManualBundleSourceApp: (value: string) => void;
+  setManualBundleType: (value: string) => void;
+  onChooseManualBundleSourceDir: () => void;
+  onCreateManualBundle: () => void;
   onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
 }) {
   const bundle = receiveReport?.bundle ?? null;
 
   return (
     <section className="bundle-page">
+      <section className="console-section">
+        <div className="console-section-head">
+          <strong>创建资料包</strong>
+          <span>{manualBundleSourcePath ? lastPathSegment(manualBundleSourcePath) : "选择来源目录"}</span>
+        </div>
+        <div className="bundle-create">
+          <label>
+            <span>类型</span>
+            <select
+              value={manualBundleType}
+              onChange={(event) => setManualBundleType(event.target.value)}
+            >
+              <option value="workspace">Workspace</option>
+              <option value="session">Session</option>
+              <option value="skill">Skill</option>
+              <option value="agent_profile">Agent profile</option>
+              <option value="config_snapshot">Config</option>
+            </select>
+          </label>
+          <label>
+            <span>名称</span>
+            <input
+              value={manualBundleDisplayName}
+              onChange={(event) => setManualBundleDisplayName(event.target.value)}
+              placeholder="资料包名称"
+            />
+          </label>
+          <label>
+            <span>来源</span>
+            <input
+              value={manualBundleSourceApp}
+              onChange={(event) => setManualBundleSourceApp(event.target.value)}
+              placeholder="NekoDrop"
+            />
+          </label>
+          <button className="tool-button" disabled={busy === "pick-folders"} type="button" onClick={onChooseManualBundleSourceDir}>
+            选目录
+          </button>
+          <button className="primary-button" disabled={!manualBundleSourcePath || busy === "scan"} type="button" onClick={onCreateManualBundle}>
+            创建并加入发送
+          </button>
+        </div>
+        {createdManualBundle ? (
+          <div className="console-row">
+            <span>
+              {createdManualBundle.display_name} · {bundleTypeLabel(createdManualBundle.bundle_type)} · {createdManualBundle.file_count} 个文件 · {formatBytes(createdManualBundle.total_bytes)}
+            </span>
+          </div>
+        ) : null}
+      </section>
+
       <section className="console-section">
         <div className="console-section-head">
           <strong>暂存区</strong>
@@ -2992,6 +3124,12 @@ function pendingOfferResumeSummaryLabel(summary: PendingReceiveOfferDto["resume_
   }
 
   return `${parts.join(" · ")} · 已接收 ${formatBytes(summary.received_bytes)}`;
+}
+
+function lastPathSegment(path: string) {
+  const normalized = path.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalized) return "资料包";
+  return normalized.split("/").pop() || "资料包";
 }
 
 function receiveBundleSummaryLine(report: ReceiveReportDto) {

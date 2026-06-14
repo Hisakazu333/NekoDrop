@@ -25,14 +25,17 @@ use nekodrop_service::{
     TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
 use nekodrop_storage::{
-    build_resume_plan_for_files, delete_staged_bundle as delete_staged_bundle_storage,
-    list_staged_bundles as list_staged_bundles_storage, ResumeExpectedFile, ResumePlan,
-    StagedBundle,
+    build_resume_plan_for_files, create_manual_bundle_directory,
+    delete_staged_bundle as delete_staged_bundle_storage,
+    list_staged_bundles as list_staged_bundles_storage, ManualBundleCreateRequest,
+    ResumeExpectedFile, ResumePlan, StagedBundle,
 };
 use nekolink_protocol::{
-    DeviceIdentity, LocalBridgeClientIdentity, LocalBridgePermissionScope, LocalBridgeRequest,
+    BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
+    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeClientIdentity,
+    LocalBridgePermissionScope, LocalBridgeRequest,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
 
 use crate::app_config::{receive_policy_label, save_app_config};
@@ -211,6 +214,25 @@ pub struct ReceivedBundleDto {
     pub import_allowed: bool,
     pub staging_status: String,
     pub can_import_now: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ManualBundleCreateDto {
+    pub bundle_id: String,
+    pub bundle_type: String,
+    pub display_name: String,
+    pub source_app: String,
+    pub staging_path: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ManualBundleCreateRequestDto {
+    pub source_path: String,
+    pub bundle_type: String,
+    pub display_name: String,
+    pub source_app: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -560,6 +582,56 @@ pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
 pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
     let staging_root = bundle_staging_root()?;
     delete_staged_bundle_at(&staging_root, &bundle_id)
+}
+
+#[tauri::command]
+pub fn create_manual_bundle(
+    state: State<'_, AppState>,
+    request: ManualBundleCreateRequestDto,
+) -> Result<ManualBundleCreateDto, String> {
+    let bundle_type = parse_bundle_type(&request.bundle_type)?;
+    let display_name = request.display_name.trim().to_string();
+    if display_name.is_empty() {
+        return Err("资料包名称不能为空".to_string());
+    }
+    let source_app = request.source_app.trim().to_string();
+    if source_app.is_empty() {
+        return Err("来源应用不能为空".to_string());
+    }
+    let source_path = expand_home_dir(&request.source_path);
+    let output_root = manual_bundle_output_root()?;
+    fs::create_dir_all(&output_root)
+        .map_err(|error| format!("无法创建资料包输出目录 {}: {error}", output_root.display()))?;
+
+    let identity = state.device_identity.public_identity();
+    let sender = BundleSender {
+        device_id: identity.device_id,
+        device_name: identity.device_name,
+        fingerprint: identity.public_key_fingerprint,
+    };
+    let created = create_manual_bundle_directory(ManualBundleCreateRequest {
+        source_path: source_path.clone(),
+        output_root,
+        bundle_id: manual_bundle_id(&display_name, &bundle_type, &source_path),
+        bundle_type,
+        display_name,
+        source_app,
+        sender,
+        created_at: current_utc_timestamp(),
+        permissions: Some(manual_bundle_permissions(&bundle_type)),
+    })
+    .map_err(|error| error.to_string())?;
+
+    let manifest = &created.detected.manifest;
+    Ok(ManualBundleCreateDto {
+        bundle_id: manifest.bundle_id.clone(),
+        bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
+        display_name: manifest.display_name.clone(),
+        source_app: manifest.source_app.clone(),
+        staging_path: created.staging_path.display().to_string(),
+        file_count: manifest.summary.file_count,
+        total_bytes: manifest.summary.total_bytes,
+    })
 }
 
 #[tauri::command]
@@ -1139,6 +1211,13 @@ pub fn select_send_files() -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn select_send_folders() -> Result<Vec<String>, String> {
     choose_paths(PathDialogKind::Folders)
+}
+
+#[tauri::command]
+pub fn select_manual_bundle_source_dir() -> Result<Option<String>, String> {
+    Ok(choose_paths(PathDialogKind::BundleSourceFolder)?
+        .into_iter()
+        .next())
 }
 
 #[tauri::command]
@@ -2327,6 +2406,17 @@ fn bundle_type_label(bundle_type: nekolink_protocol::BundleType) -> &'static str
     }
 }
 
+fn parse_bundle_type(value: &str) -> Result<BundleType, String> {
+    match value {
+        "skill" => Ok(BundleType::Skill),
+        "session" => Ok(BundleType::Session),
+        "workspace" => Ok(BundleType::Workspace),
+        "agent_profile" => Ok(BundleType::AgentProfile),
+        "config_snapshot" => Ok(BundleType::ConfigSnapshot),
+        _ => Err(format!("不支持的资料包类型：{value}")),
+    }
+}
+
 fn received_root_name(report: &TransferReceiveReport) -> String {
     if !report.root_name.trim().is_empty() {
         return report.root_name.clone();
@@ -2348,6 +2438,85 @@ fn received_root_name(report: &TransferReceiveReport) -> String {
 
 fn bundle_staging_root() -> Result<PathBuf, String> {
     Ok(app_config_dir()?.join("bundle_staging"))
+}
+
+fn manual_bundle_output_root() -> Result<PathBuf, String> {
+    Ok(app_config_dir()?.join("manual_bundles"))
+}
+
+fn current_utc_timestamp() -> String {
+    use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+
+    OffsetDateTime::now_utc()
+        .format(&Rfc3339)
+        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+}
+
+fn manual_bundle_id(
+    display_name: &str,
+    bundle_type: &BundleType,
+    source_path: &std::path::Path,
+) -> String {
+    let mut slug = display_name
+        .trim()
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    slug = slug.trim_matches('-').to_string();
+    if slug.is_empty() {
+        slug = match bundle_type {
+            BundleType::Skill => "skill".to_string(),
+            BundleType::Session => "session".to_string(),
+            BundleType::Workspace => "workspace".to_string(),
+            BundleType::AgentProfile => "agent-profile".to_string(),
+            BundleType::ConfigSnapshot => "config-snapshot".to_string(),
+        };
+    }
+    let source_hash = sha256_hex(source_path.display().to_string().as_bytes());
+    format!("bundle_{slug}_{}", &source_hash[..8.min(source_hash.len())])
+}
+
+fn sha256_hex(bytes: &[u8]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hex::encode(hasher.finalize())
+}
+
+fn manual_bundle_permissions(bundle_type: &BundleType) -> BundlePermissions {
+    let requested_scopes = match bundle_type {
+        BundleType::Skill => vec![BundlePermissionScope::SkillInstall],
+        BundleType::Session => vec![BundlePermissionScope::SessionImport],
+        BundleType::Workspace => vec![BundlePermissionScope::WorkspaceImport],
+        BundleType::AgentProfile => vec![BundlePermissionScope::AgentProfileImport],
+        BundleType::ConfigSnapshot => vec![BundlePermissionScope::ConfigImport],
+    };
+
+    let target = match bundle_type {
+        BundleType::Skill => "bundle.skill",
+        BundleType::Session => "bundle.session",
+        BundleType::Workspace => "bundle.workspace",
+        BundleType::AgentProfile => "bundle.agent_profile",
+        BundleType::ConfigSnapshot => "bundle.config_snapshot",
+    };
+
+    BundlePermissions {
+        requested_scopes,
+        writes: vec![BundleWritePermission {
+            target: target.to_string(),
+            mode: BundleWriteMode::ManualImport,
+        }],
+        secrets: BundleSecretsPolicy {
+            contains_secrets: false,
+            redacted_fields: Vec::new(),
+        },
+    }
 }
 
 fn push_receive_failure_history(
@@ -3492,6 +3661,22 @@ mod tests {
     }
 
     #[test]
+    fn windows_dialog_script_uses_bundle_source_prompt() {
+        let script = windows_dialog_script(PathDialogKind::BundleSourceFolder);
+
+        assert!(script.contains("选择资料包来源目录"));
+        assert!(!script.contains("选择接收目录"));
+    }
+
+    #[test]
+    fn current_utc_timestamp_uses_utc_iso_8601_shape() {
+        let timestamp = current_utc_timestamp();
+
+        assert!(timestamp.contains('T'));
+        assert!(timestamp.ends_with('Z'));
+    }
+
+    #[test]
     fn manual_path_rejects_replacement_character_before_exists_check() {
         let error = normalize_user_path(r"I:\�ļ�\asmr\z\����\16����.m4a").unwrap_err();
 
@@ -4381,6 +4566,7 @@ enum PathDialogKind {
     Files,
     Folders,
     SingleFolder,
+    BundleSourceFolder,
 }
 
 fn parse_dialog_output(output: &[u8]) -> Vec<String> {
@@ -4426,6 +4612,16 @@ if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
 }
 "#
         }
+        PathDialogKind::BundleSourceFolder => {
+            r#"
+Add-Type -AssemblyName System.Windows.Forms
+$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
+$dialog.Description = '选择资料包来源目录'
+if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+  $dialog.SelectedPath
+}
+"#
+        }
     };
 
     format!(
@@ -4464,6 +4660,12 @@ return outputText
         PathDialogKind::SingleFolder => {
             r#"
 set pickedItem to choose folder with prompt "选择接收目录"
+return POSIX path of pickedItem
+"#
+        }
+        PathDialogKind::BundleSourceFolder => {
+            r#"
+set pickedItem to choose folder with prompt "选择资料包来源目录"
 return POSIX path of pickedItem
 "#
         }
@@ -4521,6 +4723,10 @@ fn choose_paths(kind: PathDialogKind) -> Result<Vec<String>, String> {
         PathDialogKind::SingleFolder => {
             args.push("--directory".to_string());
             args.push("--title=选择接收目录".to_string());
+        }
+        PathDialogKind::BundleSourceFolder => {
+            args.push("--directory".to_string());
+            args.push("--title=选择资料包来源目录".to_string());
         }
     }
 
