@@ -25,7 +25,8 @@ import {
   REALTIME_REFRESH_INTERVAL_MS,
   shouldRefreshDirectoryOnModeActivation,
   shouldRefreshDirectoryForMode,
-  shouldRunDirectoryRefresh
+  shouldRunDirectoryRefresh,
+  STARTUP_SLOW_REFRESH_DELAY_MS
 } from "./refreshSchedule";
 import {
   buildRecentTransferDetailLine,
@@ -208,7 +209,10 @@ export function App() {
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
-    refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
+    const slowRefreshTimer = window.setTimeout(() => {
+      refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
+    }, STARTUP_SLOW_REFRESH_DELAY_MS);
+    return () => window.clearTimeout(slowRefreshTimer);
   }, []);
 
   useEffect(() => {

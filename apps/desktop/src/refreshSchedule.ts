@@ -1,6 +1,7 @@
 export const REALTIME_REFRESH_INTERVAL_MS = 1200;
 export const DIRECTORY_REFRESH_INTERVAL_MS = 5000;
 export const DIAGNOSTICS_REFRESH_INTERVAL_MS = 10000;
+export const STARTUP_SLOW_REFRESH_DELAY_MS = 600;
 
 export function shouldRefreshDirectoryForMode(
   mode: string,
