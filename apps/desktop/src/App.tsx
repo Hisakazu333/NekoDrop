@@ -2141,6 +2141,7 @@ function ReceivePanel({
   const receivedBundle = receiveReport?.bundle ?? null;
   const receivedBundleSummary = receiveReport ? receiveBundleSummaryLine(receiveReport) : null;
   const receivedBundleStatus = receiveReport ? receiveBundleStatusLabel(receiveReport) : null;
+  const receivedBundleHint = receivedBundle ? receiveBundleImportHint(receivedBundle) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
 
   return (
@@ -2302,6 +2303,7 @@ function ReceivePanel({
           {receivedBundleSummary ? (
             <div className="bundle-line">
               <span>{receivedBundleSummary}</span>
+              {receivedBundleHint ? <small>{receivedBundleHint}</small> : null}
               <div className="bundle-actions">
                 {receivedBundleStatus ? <strong>{receivedBundleStatus} · 已保存</strong> : null}
                 {receivedBundle ? (
@@ -3100,6 +3102,12 @@ function receiveBundleStatusLabel(report: ReceiveReportDto) {
   if (!bundle) return null;
   if (bundle.can_import_now) return "可导入";
   return bundle.import_allowed ? "等待导入" : "仅保存";
+}
+
+function receiveBundleImportHint(bundle: ReceivedBundleDto) {
+  if (bundle.can_import_now) return "可导入，导入前仍需要确认";
+  if (bundle.import_allowed) return "已暂存，等待本机应用申请导入";
+  return "已暂存，但缺少导入权限或包含敏感内容";
 }
 
 function bundleTypeLabel(type: string) {

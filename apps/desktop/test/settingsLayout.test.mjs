@@ -40,6 +40,14 @@ test("send flow owns manual bundle creation instead of a separate bundle page", 
   assert.match(appSource, /资料包目录/);
 });
 
+test("received bundle state explains why import is or is not available", () => {
+  assert.match(appSource, /function receiveBundleImportHint\(bundle: ReceivedBundleDto\)/);
+  assert.match(appSource, /bundle\.can_import_now/);
+  assert.match(appSource, /bundle\.import_allowed/);
+  assert.match(appSource, /receivedBundleHint/);
+  assert.match(appSource, /\{receivedBundleHint \? <small>\{receivedBundleHint\}<\/small> : null\}/);
+});
+
 test("local integration status lives in settings instead of a separate integration page", () => {
   assert.match(appSource, /<IntegrationSettings \/>/);
   assert.doesNotMatch(appSource, /mode === "integrations"/);
