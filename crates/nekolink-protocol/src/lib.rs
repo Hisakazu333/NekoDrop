@@ -1384,6 +1384,168 @@ impl BundleWritePermission {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum LocalBridgeRequest {
+    #[serde(rename = "devices.list")]
+    ListDevices(LocalBridgeListDevicesRequest),
+    #[serde(rename = "bundle.send")]
+    SendBundle(LocalBridgeSendBundleRequest),
+    #[serde(rename = "bundle.import")]
+    ImportBundle(LocalBridgeImportBundleRequest),
+    #[serde(rename = "transfer.status")]
+    TransferStatus(LocalBridgeTransferStatusRequest),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeListDevicesRequest {
+    pub request_id: String,
+    pub trusted_only: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeSendBundleRequest {
+    pub request_id: String,
+    pub target_device_id: Option<String>,
+    pub bundle_root: String,
+    pub bundle_type: BundleType,
+    pub require_trusted_device: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeImportBundleRequest {
+    pub request_id: String,
+    pub staged_bundle_id: String,
+    pub expected_bundle_type: Option<BundleType>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeTransferStatusRequest {
+    pub request_id: String,
+    pub transfer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "payload")]
+pub enum LocalBridgeEvent {
+    #[serde(rename = "bundle.received")]
+    BundleReceived(LocalBridgeBundleReceivedEvent),
+    #[serde(rename = "transfer.updated")]
+    TransferUpdated(LocalBridgeTransferUpdatedEvent),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeBundleReceivedEvent {
+    pub event_id: String,
+    pub transfer_id: String,
+    pub bundle_id: String,
+    pub bundle_type: BundleType,
+    pub display_name: String,
+    pub source_app: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub import_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeTransferUpdatedEvent {
+    pub event_id: String,
+    pub transfer_id: String,
+    pub phase: LocalBridgeTransferPhase,
+    pub bytes_transferred: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalBridgeTransferPhase {
+    Queued,
+    Sending,
+    Receiving,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl LocalBridgeRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::ListDevices(request) => request.validate(),
+            Self::SendBundle(request) => request.validate(),
+            Self::ImportBundle(request) => request.validate(),
+            Self::TransferStatus(request) => request.validate(),
+        }
+    }
+}
+
+impl LocalBridgeListDevicesRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)
+    }
+}
+
+impl LocalBridgeSendBundleRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_non_empty("target_device_id", self.target_device_id.as_deref())?;
+        validate_bridge_bundle_root(&self.bundle_root)
+    }
+}
+
+impl LocalBridgeImportBundleRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_staged_bundle_id(&self.staged_bundle_id)
+    }
+}
+
+impl LocalBridgeTransferStatusRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_non_empty("transfer_id", self.transfer_id.as_deref())
+    }
+}
+
+impl LocalBridgeEvent {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        match self {
+            Self::BundleReceived(event) => event.validate(),
+            Self::TransferUpdated(event) => event.validate(),
+        }
+    }
+}
+
+impl LocalBridgeBundleReceivedEvent {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("event_id", &self.event_id)?;
+        validate_non_empty("transfer_id", &self.transfer_id)?;
+        validate_staged_bundle_id(&self.bundle_id)?;
+        validate_non_empty("display_name", &self.display_name)?;
+        validate_non_empty("source_app", &self.source_app)?;
+        if self.file_count == 0 {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "bundle received file_count must be greater than 0",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl LocalBridgeTransferUpdatedEvent {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("event_id", &self.event_id)?;
+        validate_non_empty("transfer_id", &self.transfer_id)?;
+        if self.bytes_transferred > self.total_bytes {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "bytes_transferred cannot exceed total_bytes",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TransferOfferFile {
     pub manifest_path: String,
     pub size: u64,
@@ -1563,6 +1725,13 @@ fn validate_non_empty(field: &str, value: &str) -> Result<(), ProtocolError> {
     Ok(())
 }
 
+fn validate_optional_non_empty(field: &str, value: Option<&str>) -> Result<(), ProtocolError> {
+    if let Some(value) = value {
+        validate_non_empty(field, value)?;
+    }
+    Ok(())
+}
+
 fn validate_sha256_hex(field: &str, value: &str) -> Result<(), ProtocolError> {
     if value.len() != 64 || !value.chars().all(|ch| ch.is_ascii_hexdigit()) {
         return Err(ProtocolError::new(
@@ -1582,6 +1751,49 @@ fn validate_bundle_path(path: &str) -> Result<(), ProtocolError> {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
             "bundle payload path must be under files/",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_bridge_bundle_root(path: &str) -> Result<(), ProtocolError> {
+    validate_non_empty("bundle_root", path)?;
+    if path.starts_with('/')
+        || path.starts_with('\\')
+        || path.contains('\\')
+        || path.contains("..")
+        || path.contains(':')
+        || path.contains('\0')
+    {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "bundle_root must be a safe relative bundle path",
+        ));
+    }
+    validate_transfer_manifest_path(path).map_err(|error| {
+        ProtocolError::new(
+            error.code,
+            format!(
+                "bundle_root must be a safe relative bundle path: {}",
+                error.message
+            ),
+        )
+    })
+}
+
+fn validate_staged_bundle_id(bundle_id: &str) -> Result<(), ProtocolError> {
+    let trimmed = bundle_id.trim();
+    if trimmed.is_empty()
+        || trimmed != bundle_id
+        || bundle_id.contains('/')
+        || bundle_id.contains('\\')
+        || bundle_id.contains("..")
+        || bundle_id.contains(':')
+        || bundle_id.contains('\0')
+    {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "staged_bundle_id must be a safe staging id",
         ));
     }
     Ok(())
@@ -3429,6 +3641,72 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("logical target"));
+    }
+
+    #[test]
+    fn local_bridge_send_bundle_request_uses_stable_json_shape() {
+        let request = LocalBridgeRequest::SendBundle(LocalBridgeSendBundleRequest {
+            request_id: "bridge-request-1".to_string(),
+            target_device_id: Some("device-b".to_string()),
+            bundle_root: "bundle".to_string(),
+            bundle_type: BundleType::Skill,
+            require_trusted_device: true,
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "bundle.send");
+        assert_eq!(json["payload"]["request_id"], "bridge-request-1");
+        assert_eq!(json["payload"]["target_device_id"], "device-b");
+        assert_eq!(json["payload"]["bundle_root"], "bundle");
+        assert_eq!(json["payload"]["bundle_type"], "skill");
+        assert_eq!(json["payload"]["require_trusted_device"], true);
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn local_bridge_rejects_unsafe_bundle_roots() {
+        let request = LocalBridgeRequest::SendBundle(LocalBridgeSendBundleRequest {
+            request_id: "bridge-request-1".to_string(),
+            target_device_id: None,
+            bundle_root: "../bundle".to_string(),
+            bundle_type: BundleType::Skill,
+            require_trusted_device: true,
+        });
+
+        let error = request.validate().unwrap_err();
+
+        assert!(error.message.contains("bundle_root"));
+    }
+
+    #[test]
+    fn local_bridge_bundle_received_event_uses_stable_json_shape() {
+        let event = LocalBridgeEvent::BundleReceived(LocalBridgeBundleReceivedEvent {
+            event_id: "bridge-event-1".to_string(),
+            transfer_id: "transfer-1".to_string(),
+            bundle_id: "bundle_1234567890".to_string(),
+            bundle_type: BundleType::Skill,
+            display_name: "voice_transcribe".to_string(),
+            source_app: "OpenNeko".to_string(),
+            file_count: 2,
+            total_bytes: 28,
+            import_allowed: true,
+        });
+
+        event.validate().unwrap();
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "bundle.received");
+        assert_eq!(json["payload"]["event_id"], "bridge-event-1");
+        assert_eq!(json["payload"]["bundle_type"], "skill");
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeEvent>(json).unwrap(),
+            event
+        );
     }
 
     fn valid_bundle_manifest() -> BundleManifest {

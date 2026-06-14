@@ -283,6 +283,19 @@ bridge 可以做：
 - 请求导入 staging bundle
 - 查询可信设备和传输状态
 
+第一版 bridge 合约先落在 `nekolink-protocol`：
+
+- `LocalBridgeRequest`
+  - `devices.list`
+  - `bundle.send`
+  - `bundle.import`
+  - `transfer.status`
+- `LocalBridgeEvent`
+  - `bundle.received`
+  - `transfer.updated`
+
+这些只是本机 API 的稳定 JSON 模型，不代表 localhost server、鉴权、导入执行已经完成。
+
 bridge 不可以做：
 
 - 直接写入对方设备文件系统

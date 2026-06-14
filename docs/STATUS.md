@@ -81,6 +81,7 @@
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
 | NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验并保存到 staging，`nekodrop-service` 已有接收完成后的 staged bundle report，桌面后端 DTO 已能暴露 staged bundle 元数据，桌面接收完成区会显示紧凑 bundle 摘要。local bridge 导入还没有接入。 |
+| CCS / OpenNeko local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、发送 bundle、收到 bundle 通知、请求导入和查询传输状态。localhost runtime、鉴权、权限 scope 和导入执行还没有接入。 |
 
 ## 当前不能宣传为已完成
 
@@ -91,6 +92,7 @@
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - NekoLink bundle 发送和导入主流程
+- CCS / OpenNeko local bridge runtime
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储
