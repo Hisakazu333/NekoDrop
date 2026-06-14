@@ -49,9 +49,18 @@ test("received bundle state explains why import is or is not available", () => {
 });
 
 test("local integration status lives in settings instead of a separate integration page", () => {
-  assert.match(appSource, /<IntegrationSettings \/>/);
+  assert.match(appSource, /<IntegrationSettings[\s\S]+onRunLocalBridgeSelfCheck/);
   assert.doesNotMatch(appSource, /mode === "integrations"/);
   assert.doesNotMatch(appSource, /onSelectMode\("integrations"\)/);
+});
+
+test("local integration settings expose a generic read-only bridge self check", () => {
+  assert.match(appSource, /const \[localBridgeCheck, setLocalBridgeCheck\]/);
+  assert.match(appSource, /function runLocalBridgeSelfCheck/);
+  assert.match(appSource, /invokeCommand<LocalBridgeResponseDto>\("handle_local_bridge_request"/);
+  assert.match(appSource, /"kind": "devices.list"/);
+  assert.match(appSource, /<IntegrationSettings[\s\S]+localBridgeCheck=\{localBridgeCheck\}/);
+  assert.match(appSource, /onRunLocalBridgeSelfCheck=\{runLocalBridgeSelfCheck\}/);
 });
 
 test("device overview uses discovery guidance when no nearby devices are online", () => {
