@@ -17,3 +17,9 @@ test("receive policy segment columns match the visible policy options", () => {
 
   assert.equal(Number(repeat[1]), optionCount);
 });
+
+test("overview nearby status includes discovery guidance instead of only a count", () => {
+  assert.match(appSource, /<OverviewPanel[\s\S]+discoveryStatus=\{discoveryStatus\}/);
+  assert.match(appSource, /const discoveryCopy = buildDiscoveryCopy\(discoveryStatus, nearbyDevices\.length, localPlatform\)/);
+  assert.match(appSource, /className=\{discoveryCopy\.isError \? "overview-status-item is-warning" : "overview-status-item"\}/);
+});

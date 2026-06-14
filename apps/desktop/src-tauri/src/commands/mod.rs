@@ -1819,6 +1819,9 @@ pub fn get_receive_port_diagnostics(
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+    if session.is_none() {
+        return Ok(receive_port_diagnostics_from_session(None, Vec::new()));
+    }
     Ok(receive_port_diagnostics_from_session(
         session.as_ref(),
         local_lan_ips(),
