@@ -38,7 +38,8 @@ type CommandName =
   | "delete_transfer"
   | "clear_transfer_history"
   | "list_staged_bundles"
-  | "delete_staged_bundle";
+  | "delete_staged_bundle"
+  | "handle_local_bridge_request";
 
 export async function invokeCommand<T>(
   command: CommandName,
