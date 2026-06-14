@@ -1781,6 +1781,41 @@ input:focus {
   gap: 8px;
 }
 
+.bundle-create {
+  display: grid;
+  grid-template-columns: minmax(120px, 160px) minmax(160px, 1fr) minmax(140px, 180px) auto auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.bundle-create label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.bundle-create label span {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.bundle-create input,
+.bundle-create select {
+  width: 100%;
+  min-height: 36px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--text-1);
+  background: var(--surface-input);
+  font-size: 13px;
+}
+
+.bundle-create input::placeholder {
+  color: var(--text-3);
+}
+
 .bundle-record {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;

@@ -182,6 +182,16 @@ export interface ReceivedBundleDto {
   can_import_now: boolean;
 }
 
+export interface ManualBundleCreateDto {
+  bundle_id: string;
+  bundle_type: "skill" | "session" | "workspace" | "agent_profile" | "config_snapshot" | string;
+  display_name: string;
+  source_app: string;
+  staging_path: string;
+  file_count: number;
+  total_bytes: number;
+}
+
 export interface ReceiveReportDto {
   transfer_id: string;
   root_name: string;

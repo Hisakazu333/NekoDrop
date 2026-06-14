@@ -17,6 +17,8 @@ type CommandName =
   | "open_transfer_location"
   | "select_send_files"
   | "select_send_folders"
+  | "select_manual_bundle_source_dir"
+  | "create_manual_bundle"
   | "select_receive_dir"
   | "set_receive_dir"
   | "set_receive_port"

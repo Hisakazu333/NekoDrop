@@ -1,12 +1,17 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
     time::SystemTime,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
-use nekolink_protocol::{BundleChecksums, BundleManifest, BundlePermissions, ProtocolError};
+use nekolink_protocol::{
+    BundleChecksums, BundleCompatibility, BundleFile, BundleManifest, BundlePermissions,
+    BundleSender, BundleSummary, BundleType, Capability, ProtocolError, BUNDLE_CHECKSUM_SHA256,
+    BUNDLE_SCHEMA_V1,
+};
+use walkdir::WalkDir;
 
 use crate::checksum::sha256_file;
 
@@ -29,6 +34,170 @@ pub struct DetectedBundle {
 pub struct StagedBundle {
     pub staging_path: PathBuf,
     pub detected: DetectedBundle,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManualBundleCreateRequest {
+    pub source_path: PathBuf,
+    pub output_root: PathBuf,
+    pub bundle_id: String,
+    pub bundle_type: BundleType,
+    pub display_name: String,
+    pub source_app: String,
+    pub sender: BundleSender,
+    pub created_at: String,
+    pub permissions: Option<BundlePermissions>,
+}
+
+pub fn create_manual_bundle_directory(
+    request: ManualBundleCreateRequest,
+) -> NekoDropResult<StagedBundle> {
+    validate_bundle_id_for_staging(&request.bundle_id)?;
+    if request.display_name.trim().is_empty() {
+        return Err(NekoDropError::Storage(
+            "bundle display_name is required".into(),
+        ));
+    }
+    if request.source_app.trim().is_empty() {
+        return Err(NekoDropError::Storage(
+            "bundle source_app is required".into(),
+        ));
+    }
+    if !request.source_path.is_dir() {
+        return Err(NekoDropError::Storage(format!(
+            "bundle source must be a directory: {}",
+            request.source_path.display()
+        )));
+    }
+
+    let bundle_root = request.output_root.join(&request.bundle_id);
+    if bundle_root.exists() {
+        fs::remove_dir_all(&bundle_root).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to replace bundle directory {}: {error}",
+                bundle_root.display()
+            ))
+        })?;
+    }
+    fs::create_dir_all(bundle_root.join("files")).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to create bundle directory {}: {error}",
+            bundle_root.display()
+        ))
+    })?;
+
+    let mut bundle_files = Vec::new();
+    let mut checksums = BTreeMap::new();
+    for entry in WalkDir::new(&request.source_path)
+        .follow_links(false)
+        .sort_by_file_name()
+    {
+        let entry = entry.map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to scan bundle source {}: {error}",
+                request.source_path.display()
+            ))
+        })?;
+        let path = entry.path();
+        let metadata = fs::symlink_metadata(path).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to read bundle source {}: {error}",
+                path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(NekoDropError::Storage(format!(
+                "bundle source symlinks are not supported: {}",
+                path.display()
+            )));
+        }
+        if metadata.is_dir() {
+            continue;
+        }
+        if !metadata.is_file() {
+            return Err(NekoDropError::Storage(format!(
+                "unsupported bundle source entry: {}",
+                path.display()
+            )));
+        }
+
+        let relative = path.strip_prefix(&request.source_path).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to normalize bundle source {}: {error}",
+                path.display()
+            ))
+        })?;
+        let bundle_path = path_to_bundle_manifest_path(relative)?;
+        let destination = bundle_root.join(&bundle_path);
+        if let Some(parent) = destination.parent() {
+            fs::create_dir_all(parent).map_err(|error| {
+                NekoDropError::Storage(format!(
+                    "failed to create bundle payload directory {}: {error}",
+                    parent.display()
+                ))
+            })?;
+        }
+        fs::copy(path, &destination).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to copy bundle payload {}: {error}",
+                path.display()
+            ))
+        })?;
+        let checksum = sha256_file(&destination)?;
+        bundle_files.push(BundleFile {
+            path: bundle_path.clone(),
+            size: metadata.len(),
+            sha256: checksum.value.clone(),
+            role: "payload".to_string(),
+        });
+        checksums.insert(bundle_path, checksum.value);
+    }
+
+    if bundle_files.is_empty() {
+        return Err(NekoDropError::Storage(
+            "bundle source must contain at least one file".into(),
+        ));
+    }
+
+    let manifest = BundleManifest {
+        schema: BUNDLE_SCHEMA_V1.to_string(),
+        bundle_id: request.bundle_id,
+        bundle_type: request.bundle_type,
+        display_name: request.display_name,
+        source_app: request.source_app,
+        created_at: request.created_at,
+        sender: request.sender,
+        compatibility: BundleCompatibility {
+            min_nekolink_version: 1,
+            required_capabilities: vec![Capability::BundleTransfer],
+        },
+        summary: BundleSummary {
+            file_count: bundle_files.len(),
+            total_bytes: bundle_files.iter().map(|file| file.size).sum(),
+        },
+        files: bundle_files,
+    };
+    let checksum_index = BundleChecksums {
+        algorithm: BUNDLE_CHECKSUM_SHA256.to_string(),
+        files: checksums,
+    };
+
+    write_json_file(&bundle_root.join("bundle.json"), &manifest)?;
+    write_json_file(&bundle_root.join("checksums.json"), &checksum_index)?;
+    if let Some(permissions) = request.permissions {
+        write_json_file(&bundle_root.join("permissions.json"), &permissions)?;
+    }
+
+    let detected = detect_bundle_directory(&bundle_root)?.ok_or_else(|| {
+        NekoDropError::Storage(format!(
+            "created bundle is not detectable: {}",
+            bundle_root.display()
+        ))
+    })?;
+    Ok(StagedBundle {
+        staging_path: bundle_root,
+        detected,
+    })
 }
 
 pub fn detect_bundle_directory(root: &Path) -> NekoDropResult<Option<DetectedBundle>> {
@@ -241,6 +410,15 @@ fn read_json_file<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> NekoDropR
     })?;
     serde_json::from_slice(&bytes).map_err(|error| {
         NekoDropError::Storage(format!("failed to parse {}: {error}", path.display()))
+    })
+}
+
+fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> NekoDropResult<()> {
+    let json = serde_json::to_vec_pretty(value).map_err(|error| {
+        NekoDropError::Storage(format!("failed to serialize {}: {error}", path.display()))
+    })?;
+    fs::write(path, json).map_err(|error| {
+        NekoDropError::Storage(format!("failed to write {}: {error}", path.display()))
     })
 }
 
@@ -482,6 +660,70 @@ mod tests {
     };
 
     use super::*;
+
+    #[test]
+    fn creates_manual_bundle_from_source_directory() {
+        let dir = unique_temp_dir("bundle-create-manual");
+        let source = dir.join("workspace");
+        fs::create_dir_all(source.join("src")).unwrap();
+        fs::write(source.join("README.md"), b"hello workspace").unwrap();
+        fs::write(source.join("src").join("main.txt"), b"run agent").unwrap();
+        let output_root = dir.join("out");
+
+        let created = create_manual_bundle_directory(ManualBundleCreateRequest {
+            source_path: source.clone(),
+            output_root: output_root.clone(),
+            bundle_id: "bundle_workspace_1".to_string(),
+            bundle_type: BundleType::Workspace,
+            display_name: "workspace".to_string(),
+            source_app: "NekoDrop".to_string(),
+            sender: BundleSender {
+                device_id: "device-1".to_string(),
+                device_name: "MacBook".to_string(),
+                fingerprint: "sha256:abc".to_string(),
+            },
+            created_at: "2026-06-14T00:00:00Z".to_string(),
+            permissions: Some(BundlePermissions {
+                requested_scopes: vec![BundlePermissionScope::WorkspaceImport],
+                writes: vec![BundleWritePermission {
+                    target: "workspace.import".to_string(),
+                    mode: BundleWriteMode::ManualImport,
+                }],
+                secrets: BundleSecretsPolicy {
+                    contains_secrets: false,
+                    redacted_fields: vec![],
+                },
+            }),
+        })
+        .unwrap();
+
+        assert_eq!(created.staging_path, output_root.join("bundle_workspace_1"));
+        assert!(created.staging_path.join("bundle.json").is_file());
+        assert!(created.staging_path.join("checksums.json").is_file());
+        assert!(created.staging_path.join("permissions.json").is_file());
+        assert!(created
+            .staging_path
+            .join("files")
+            .join("README.md")
+            .is_file());
+        assert!(created
+            .staging_path
+            .join("files")
+            .join("src")
+            .join("main.txt")
+            .is_file());
+
+        let detected = detect_bundle_directory(&created.staging_path)
+            .unwrap()
+            .unwrap();
+        assert_eq!(detected.manifest.bundle_id, "bundle_workspace_1");
+        assert_eq!(detected.manifest.bundle_type, BundleType::Workspace);
+        assert_eq!(detected.manifest.summary.file_count, 2);
+        assert_eq!(detected.manifest.summary.total_bytes, 24);
+        assert_eq!(detected.import_policy, BundleImportPolicy::ImportAllowed);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
 
     #[test]
     fn detects_valid_bundle_directory() {

@@ -8,9 +8,9 @@ pub mod resume;
 pub mod space;
 
 pub use bundle::{
-    delete_staged_bundle, detect_bundle_directory, list_staged_bundles,
-    prune_staged_bundles_older_than, stage_bundle_directory, BundleImportPolicy, DetectedBundle,
-    StagedBundle,
+    create_manual_bundle_directory, delete_staged_bundle, detect_bundle_directory,
+    list_staged_bundles, prune_staged_bundles_older_than, stage_bundle_directory,
+    BundleImportPolicy, DetectedBundle, ManualBundleCreateRequest, StagedBundle,
 };
 pub use checksum::{sha256_file, verify_sha256_file, Checksum, ChecksumAlgorithm};
 pub use chunk::{ChunkPlan, ChunkRange};
