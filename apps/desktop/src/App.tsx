@@ -23,6 +23,7 @@ import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
   shouldRunDiagnosticsRefresh,
   REALTIME_REFRESH_INTERVAL_MS,
+  shouldRefreshDirectoryForMode,
   shouldRunDirectoryRefresh
 } from "./refreshSchedule";
 import {
@@ -81,8 +82,6 @@ type ComposerMode =
   | "receive"
   | "devices"
   | "transfers"
-  | "bundles"
-  | "integrations"
   | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
 
@@ -97,8 +96,6 @@ const NAV_ITEMS: Array<{ mode: ComposerMode; label: string; icon: IconName }> = 
   { mode: "receive", label: "收件", icon: "inbox" },
   { mode: "devices", label: "设备", icon: "devices" },
   { mode: "transfers", label: "传输", icon: "clock" },
-  { mode: "bundles", label: "资料包", icon: "package" },
-  { mode: "integrations", label: "集成", icon: "plug" },
   { mode: "settings", label: "设置", icon: "settings" }
 ];
 
@@ -185,6 +182,7 @@ export function App() {
   const localPlatform = snapshot?.device_identity.platform ?? null;
   const trimmedConnectionCode = connectionCode.trim();
   const canSend = transferPaths.length > 0 && !busy && (Boolean(selectedDevice) || trimmedConnectionCode.length > 0);
+  const hasActiveTransfer = Boolean(transferStatus && shouldShowActiveTransferBar(transferStatus));
   const receiveState = receiveSession
     ? pendingPairingRequest
       ? "等待配对"
@@ -218,13 +216,16 @@ export function App() {
 
   useEffect(() => {
     const timer = window.setInterval(() => {
+      const shouldRefreshDirectory =
+        shouldRefreshDirectoryForMode(mode, hasActiveTransfer) &&
+        shouldRunDirectoryRefresh(Date.now(), lastDirectoryRefreshAt.current);
       refreshReceiveState({
         includeDiagnostics: shouldRunDiagnosticsRefresh(Date.now(), lastDiagnosticsRefreshAt.current),
-        includeDirectoryState: shouldRunDirectoryRefresh(Date.now(), lastDirectoryRefreshAt.current)
+        includeDirectoryState: shouldRefreshDirectory
       }).catch(() => undefined);
     }, REALTIME_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
-  }, []);
+  }, [hasActiveTransfer, mode]);
 
   useEffect(() => {
     let active = true;
@@ -364,13 +365,13 @@ export function App() {
         invokeCommand<TransferStatusDto | null>("get_transfer_status"),
         invokeCommand<DiscoveryStatusDto>("get_discovery_status")
       ]);
-      setReceiveStatus(status);
-      setReceiveSession(session);
-      setReceiveReport(report);
-      setPendingReceiveOffer(pendingOffer);
-      setPendingPairingRequest(pairingRequest);
-      setTransferStatus(nextTransferStatus);
-      setDiscoveryStatus(discovery);
+      setReceiveStatus((current) => keepIfEqual(current, status));
+      setReceiveSession((current) => keepIfEqual(current, session));
+      setReceiveReport((current) => keepIfEqual(current, report));
+      setPendingReceiveOffer((current) => keepIfEqual(current, pendingOffer));
+      setPendingPairingRequest((current) => keepIfEqual(current, pairingRequest));
+      setTransferStatus((current) => keepIfEqual(current, nextTransferStatus));
+      setDiscoveryStatus((current) => keepIfEqual(current, discovery));
       if (pendingOffer || pairingRequest) setMode("receive");
     } finally {
       realtimeRefreshInFlight.current = false;
@@ -382,7 +383,7 @@ export function App() {
     diagnosticsRefreshInFlight.current = true;
     try {
       const diagnostics = await invokeCommand<ReceivePortDiagnosticsDto>("get_receive_port_diagnostics");
-      setReceiveDiagnostics(diagnostics);
+      setReceiveDiagnostics((current) => keepIfEqual(current, diagnostics));
       lastDiagnosticsRefreshAt.current = Date.now();
     } finally {
       diagnosticsRefreshInFlight.current = false;
@@ -398,9 +399,9 @@ export function App() {
         invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
         invokeCommand<TransferDto[]>("list_transfers")
       ]);
-      setNearbyDevices(devices);
-      setTrustedDevices(trusted);
-      setTransfers(nextTransfers);
+      setNearbyDevices((current) => keepIfEqual(current, devices));
+      setTrustedDevices((current) => keepIfEqual(current, trusted));
+      setTransfers((current) => keepIfEqual(current, nextTransfers));
       lastDirectoryRefreshAt.current = Date.now();
     } finally {
       directoryRefreshInFlight.current = false;
@@ -1015,15 +1016,14 @@ export function App() {
   });
   const pageSubtitle = buildPageSubtitle({
     composerSubtitle,
+    discoveryLabel: discoveryCopy.label,
     mode,
     nearbyDeviceCount: nearbyDevices.length,
-    receiveBundleSummary: receiveReport?.bundle ? receiveBundleSummaryLine(receiveReport) : null,
     receiveSessionBindAddr: receiveSession?.bind_addr ?? null,
     receiveState,
     selectedTargetSubtitle: selectedTargetCopy?.subtitle ?? null,
     snapshotDeviceName: snapshot?.device_name ?? null,
-    transferCount: transfers.length,
-    trustedDeviceCount: trustedDevices.length
+    transferCount: transfers.length
   });
 
   return (
@@ -1248,6 +1248,20 @@ export function App() {
                 </button>
               </div>
 
+              <ManualBundleComposer
+                busy={busy}
+                createdManualBundle={createdManualBundle}
+                manualBundleDisplayName={manualBundleDisplayName}
+                manualBundleSourceApp={manualBundleSourceApp}
+                manualBundleSourcePath={manualBundleSourcePath}
+                manualBundleType={manualBundleType}
+                setManualBundleDisplayName={setManualBundleDisplayName}
+                setManualBundleSourceApp={setManualBundleSourceApp}
+                setManualBundleType={setManualBundleType}
+                onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
+                onCreateManualBundle={createManualBundleForSend}
+              />
+
               <div className="send-bar">
                 <div className="send-bar-target">
                   <span className="send-bar-label">发送到</span>
@@ -1418,28 +1432,6 @@ export function App() {
                   }
                   onUseFallbackCode={openFallbackCode}
                 />
-              ) : null}
-
-              {mode === "bundles" ? (
-                <BundlePanel
-                  busy={busy}
-                  createdManualBundle={createdManualBundle}
-                  manualBundleDisplayName={manualBundleDisplayName}
-                  manualBundleSourceApp={manualBundleSourceApp}
-                  manualBundleSourcePath={manualBundleSourcePath}
-                  manualBundleType={manualBundleType}
-                  receiveReport={receiveReport}
-                  setManualBundleDisplayName={setManualBundleDisplayName}
-                  setManualBundleSourceApp={setManualBundleSourceApp}
-                  setManualBundleType={setManualBundleType}
-                  onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
-                  onCreateManualBundle={createManualBundleForSend}
-                  onDeleteStagedBundle={deleteCurrentStagedBundle}
-                />
-              ) : null}
-
-              {mode === "integrations" ? (
-                <IntegrationPanel />
               ) : null}
 
               {mode === "settings" ? (
@@ -1693,6 +1685,8 @@ function DevicePanel({
   onSelectTrustedDevice: (device: TrustedDeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
+
   return (
     <section className="device-panel">
       <div className="device-overview">
@@ -1700,9 +1694,9 @@ function DevicePanel({
           <strong>{trustedDevices.length}</strong>
           <span>可信设备</span>
         </div>
-        <div>
-          <strong>{nearbyDevices.length}</strong>
-          <span>附近在线</span>
+        <div className={discoveryCopy.isError ? "is-warning" : undefined}>
+          <strong>{nearbyDevices.length > 0 ? nearbyDevices.length : discoveryCopy.label}</strong>
+          <span>{nearbyDevices.length > 0 ? "附近在线" : discoveryCopy.targetLabel}</span>
         </div>
       </div>
 
@@ -1833,7 +1827,7 @@ function OverviewPanel({
           <strong>{trustedDevices.length}</strong>
           <span>可信设备</span>
         </button>
-        <button className="overview-status-item" type="button" onClick={() => onSelectMode("bundles")}>
+        <button className="overview-status-item" type="button" onClick={() => onSelectMode("receive")}>
           <strong>{latestBundle ? "1" : "0"}</strong>
           <span>待处理资料包</span>
         </button>
@@ -1879,12 +1873,6 @@ function OverviewPanel({
           <button className="tool-button" type="button" onClick={() => onSelectMode("receive")}>
             查看收件
           </button>
-          <button className="tool-button" type="button" onClick={() => onSelectMode("bundles")}>
-            资料包
-          </button>
-          <button className="tool-button" type="button" onClick={() => onSelectMode("integrations")}>
-            集成
-          </button>
         </div>
       </section>
 
@@ -1896,7 +1884,7 @@ function OverviewPanel({
           </div>
           <div className="console-row">
             <span>{receiveBundleSummaryLine(receiveReport!)}</span>
-            <button className="text-button" type="button" onClick={() => onSelectMode("bundles")}>
+            <button className="text-button" type="button" onClick={() => onSelectMode("receive")}>
               查看
             </button>
           </div>
@@ -1919,20 +1907,18 @@ function OverviewPanel({
   );
 }
 
-function BundlePanel({
+function ManualBundleComposer({
   busy,
   createdManualBundle,
   manualBundleDisplayName,
   manualBundleSourceApp,
   manualBundleSourcePath,
   manualBundleType,
-  receiveReport,
   setManualBundleDisplayName,
   setManualBundleSourceApp,
   setManualBundleType,
   onChooseManualBundleSourceDir,
-  onCreateManualBundle,
-  onDeleteStagedBundle
+  onCreateManualBundle
 }: {
   busy: BusyMode | null;
   createdManualBundle: ManualBundleCreateDto | null;
@@ -1940,138 +1926,79 @@ function BundlePanel({
   manualBundleSourceApp: string;
   manualBundleSourcePath: string;
   manualBundleType: string;
-  receiveReport: ReceiveReportDto | null;
   setManualBundleDisplayName: (value: string) => void;
   setManualBundleSourceApp: (value: string) => void;
   setManualBundleType: (value: string) => void;
   onChooseManualBundleSourceDir: () => void;
   onCreateManualBundle: () => void;
-  onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
 }) {
-  const bundle = receiveReport?.bundle ?? null;
-
   return (
-    <section className="bundle-page">
-      <section className="console-section">
-        <div className="console-section-head">
-          <strong>创建资料包</strong>
-          <span>{manualBundleSourcePath ? lastPathSegment(manualBundleSourcePath) : "选择来源目录"}</span>
+    <section className="bundle-create-section">
+      <div className="section-head">
+        <strong>资料包目录</strong>
+        <span>{manualBundleSourcePath ? lastPathSegment(manualBundleSourcePath) : "把一个目录打包后发送"}</span>
+      </div>
+      <div className="bundle-create">
+        <label>
+          <span>类型</span>
+          <select
+            value={manualBundleType}
+            onChange={(event) => setManualBundleType(event.target.value)}
+          >
+            <option value="workspace">Workspace</option>
+            <option value="session">Session</option>
+            <option value="skill">Skill</option>
+            <option value="agent_profile">Agent profile</option>
+            <option value="config_snapshot">Config</option>
+          </select>
+        </label>
+        <label>
+          <span>名称</span>
+          <input
+            value={manualBundleDisplayName}
+            onChange={(event) => setManualBundleDisplayName(event.target.value)}
+            placeholder="资料包名称"
+          />
+        </label>
+        <label>
+          <span>来源</span>
+          <input
+            value={manualBundleSourceApp}
+            onChange={(event) => setManualBundleSourceApp(event.target.value)}
+            placeholder="NekoDrop"
+          />
+        </label>
+        <button className="tool-button" disabled={busy === "pick-folders"} type="button" onClick={onChooseManualBundleSourceDir}>
+          选目录
+        </button>
+        <button className="primary-button" disabled={!manualBundleSourcePath || busy === "scan"} type="button" onClick={onCreateManualBundle}>
+          加入发送
+        </button>
+      </div>
+      {createdManualBundle ? (
+        <div className="console-row">
+          <span>
+            {createdManualBundle.display_name} · {bundleTypeLabel(createdManualBundle.bundle_type)} · {createdManualBundle.file_count} 个文件 · {formatBytes(createdManualBundle.total_bytes)}
+          </span>
         </div>
-        <div className="bundle-create">
-          <label>
-            <span>类型</span>
-            <select
-              value={manualBundleType}
-              onChange={(event) => setManualBundleType(event.target.value)}
-            >
-              <option value="workspace">Workspace</option>
-              <option value="session">Session</option>
-              <option value="skill">Skill</option>
-              <option value="agent_profile">Agent profile</option>
-              <option value="config_snapshot">Config</option>
-            </select>
-          </label>
-          <label>
-            <span>名称</span>
-            <input
-              value={manualBundleDisplayName}
-              onChange={(event) => setManualBundleDisplayName(event.target.value)}
-              placeholder="资料包名称"
-            />
-          </label>
-          <label>
-            <span>来源</span>
-            <input
-              value={manualBundleSourceApp}
-              onChange={(event) => setManualBundleSourceApp(event.target.value)}
-              placeholder="NekoDrop"
-            />
-          </label>
-          <button className="tool-button" disabled={busy === "pick-folders"} type="button" onClick={onChooseManualBundleSourceDir}>
-            选目录
-          </button>
-          <button className="primary-button" disabled={!manualBundleSourcePath || busy === "scan"} type="button" onClick={onCreateManualBundle}>
-            创建并加入发送
-          </button>
-        </div>
-        {createdManualBundle ? (
-          <div className="console-row">
-            <span>
-              {createdManualBundle.display_name} · {bundleTypeLabel(createdManualBundle.bundle_type)} · {createdManualBundle.file_count} 个文件 · {formatBytes(createdManualBundle.total_bytes)}
-            </span>
-          </div>
-        ) : null}
-      </section>
-
-      <section className="console-section">
-        <div className="console-section-head">
-          <strong>暂存区</strong>
-          <span>{bundle ? receiveBundleStatusLabel(receiveReport!) : "暂无资料包"}</span>
-        </div>
-        {bundle ? (
-          <div className="bundle-record">
-            <div>
-              <strong>{bundle.display_name}</strong>
-              <span>
-                {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {bundle.file_count} 个文件 · {formatBytes(bundle.total_bytes)}
-              </span>
-              <small>{bundle.can_import_now ? "等待导入确认" : bundle.import_allowed ? "已保存到暂存区" : "仅保存，不可导入"}</small>
-            </div>
-            <div className="bundle-record-actions">
-              <button className="tool-button" disabled type="button">
-                预览
-              </button>
-              <button className="primary-button is-muted" disabled={!bundle.can_import_now} type="button">
-                导入
-              </button>
-              <button
-                className="text-button"
-                disabled={busy === "receive"}
-                onClick={() => onDeleteStagedBundle(bundle)}
-                type="button"
-              >
-                删除
-              </button>
-            </div>
-          </div>
-        ) : (
-          <div className="console-empty">收到的 session、skill、workspace 会先进入这里，确认后再导入。</div>
-        )}
-      </section>
+      ) : null}
     </section>
   );
 }
 
-function IntegrationPanel() {
+function IntegrationSettings() {
   return (
-    <section className="integration-page">
-      <section className="console-section">
-        <div className="console-section-head">
-          <strong>本机桥接</strong>
-          <span>内部 handler 就绪</span>
-        </div>
-        <div className="console-row">
-          <span>可读取设备、资料包和传输状态。发送、导入和授权仍需确认。</span>
-        </div>
-      </section>
-
-      <section className="console-section">
-        <div className="console-section-head">
-          <strong>授权请求</strong>
-          <span>暂无待处理</span>
-        </div>
-        <div className="console-empty">本机应用请求 device.read、bundle.send 等权限时，会进入这里。</div>
-      </section>
-
-      <section className="console-section">
-        <div className="console-section-head">
-          <strong>适配边界</strong>
-        </div>
-        <div className="console-row">
-          <span>协议层只认通用能力，具体应用通过 adapter 接入。</span>
-        </div>
-      </section>
-    </section>
+    <SettingsGroup title="本机接入" note="本机应用只能通过受控请求读取设备、发送资料包或申请导入">
+      <SettingsRow label="桥接状态">
+        <SettingsValue>内部处理器就绪，localhost 服务未开放</SettingsValue>
+      </SettingsRow>
+      <SettingsRow label="授权请求">
+        <SettingsValue>暂无待处理</SettingsValue>
+      </SettingsRow>
+      <SettingsRow label="权限范围">
+        <SettingsValue>读取设备、发送资料包、查看传输、申请导入</SettingsValue>
+      </SettingsRow>
+    </SettingsGroup>
   );
 }
 
@@ -2535,6 +2462,8 @@ function SettingsPanel({
           <SettingsValue>{model.trayLabel}</SettingsValue>
         </SettingsRow>
       </SettingsGroup>
+
+      <IntegrationSettings />
     </section>
   );
 }
@@ -3042,6 +2971,14 @@ function uniquePaths(paths: string[]) {
   return Array.from(new Set(paths.map((path) => path.trim()).filter(Boolean)));
 }
 
+function keepIfEqual<T>(current: T, next: T): T {
+  return stableJson(current) === stableJson(next) ? current : next;
+}
+
+function stableJson(value: unknown) {
+  return JSON.stringify(value);
+}
+
 function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
   return {
     id: device.device_id,
@@ -3076,45 +3013,39 @@ function buildPageTitle({
   if (mode === "receive") return "收件";
   if (mode === "devices") return "设备";
   if (mode === "transfers") return "传输";
-  if (mode === "bundles") return "资料包";
-  if (mode === "integrations") return "集成";
   return "设置";
 }
 
 function buildPageSubtitle({
   composerSubtitle,
+  discoveryLabel,
   mode,
   nearbyDeviceCount,
-  receiveBundleSummary,
   receiveSessionBindAddr,
   receiveState,
   selectedTargetSubtitle,
   snapshotDeviceName,
-  transferCount,
-  trustedDeviceCount
+  transferCount
 }: {
   composerSubtitle: string;
+  discoveryLabel: string;
   mode: ComposerMode;
   nearbyDeviceCount: number;
-  receiveBundleSummary: string | null;
   receiveSessionBindAddr: string | null;
   receiveState: string;
   selectedTargetSubtitle: string | null;
   snapshotDeviceName: string | null;
   transferCount: number;
-  trustedDeviceCount: number;
 }) {
   if (mode === "overview") return `${receiveState} · ${nearbyDeviceCount} 台附近设备`;
   if (mode === "send") return selectedTargetSubtitle ?? composerSubtitle;
   if (mode === "receive") return receiveSessionBindAddr ?? receiveState;
   if (mode === "devices") {
-    return trustedDeviceCount > 0 ? `${trustedDeviceCount} 台可信设备` : "暂无可信设备";
+    return nearbyDeviceCount > 0 ? `${nearbyDeviceCount} 台附近设备` : discoveryLabel;
   }
   if (mode === "transfers") {
     return transferCount > 0 ? `${transferCount} 条真实记录` : "暂无记录";
   }
-  if (mode === "bundles") return receiveBundleSummary ?? "暂无暂存资料包";
-  if (mode === "integrations") return "本机应用接入与授权请求";
   return snapshotDeviceName ?? "这台电脑";
 }
 

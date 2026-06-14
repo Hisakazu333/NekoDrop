@@ -27,3 +27,11 @@ test("slow refresh helpers use elapsed time checks", () => {
   const elapsedCheckCount = (refreshScheduleSource.match(/lastRefreshMs <= 0 \|\| nowMs - lastRefreshMs >= intervalMs/g) ?? []).length;
   assert.equal(elapsedCheckCount, 2);
 });
+
+test("directory refresh is scoped to pages that need device or transfer lists", () => {
+  assert.match(refreshScheduleSource, /export function shouldRefreshDirectoryForMode/);
+  assert.match(refreshScheduleSource, /mode === "send"/);
+  assert.match(refreshScheduleSource, /mode === "devices"/);
+  assert.match(refreshScheduleSource, /mode === "transfers"/);
+  assert.match(refreshScheduleSource, /hasActiveTransfer/);
+});

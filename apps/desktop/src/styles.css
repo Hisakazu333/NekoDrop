@@ -1342,6 +1342,11 @@ button:disabled {
   font-size: 13px;
 }
 
+.device-overview .is-warning strong,
+.device-overview .is-warning span {
+  color: var(--danger);
+}
+
 .target-block {
   display: grid;
   gap: 12px;
@@ -1788,6 +1793,12 @@ input:focus {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
+}
+
+.bundle-create-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 2px;
 }
 
 .bundle-create {
