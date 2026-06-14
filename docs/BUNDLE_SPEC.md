@@ -63,6 +63,44 @@ files/
 
 未知类型必须拒绝导入，但可以保存为普通 bundle 文件。
 
+## v1 覆盖范围
+
+bundle v1 要支撑下一阶段的本地多端协作，但不把完整生态一次做完。
+
+v1 必须够用来做：
+
+- CCS / OpenNeko 发送 `skill`
+- CCS / OpenNeko 发送 `session`
+- 发送 `workspace` 片段
+- 发送 `agent_profile`
+- 接收端预览 bundle
+- 校验文件大小和 SHA-256
+- 展示权限请求
+- 保存到 staging
+- 等用户或上层应用确认后再导入
+
+v1 的判断标准是：多端可以传上层数据，但不会因为收到一个包就自动修改本机配置、执行指令或同步隐私文件。
+
+## 长期缺口
+
+完整 NekoLink / OpenNeko 生态还需要这些能力。它们不进入 bundle v1 的实现范围，但 v1 不能把后续路线堵死。
+
+| 能力 | 为什么需要 | 当前策略 |
+| --- | --- | --- |
+| 加密文件流 | bundle 可能包含 session、workspace 或 agent profile，payload 不能长期依赖明文 TCP | 先完成 bundle manifest 和 staging，敏感 bundle 等文件流加密后再开放 |
+| 长期身份密钥认证 | 当前 encrypted control 还不是完整长期设备身份认证 | sender 字段只用于展示，真实身份以后绑定 verified session |
+| replay protection | 防止旧 bundle 或旧控制帧被重放 | v1 记录 `bundle_id` 和 `created_at`，后续加 nonce / replay window |
+| bundle 版本迁移 | v1、v2 需要可兼容演进 | `schema` 固定为 `nekolink.bundle.v1`，未知 schema 拒绝导入 |
+| bundle 签名 | 公开分发 skill 或跨设备转发时，不能只依赖传输 session | v1 不做签名，但保留 source app、sender、checksum 边界 |
+| 权限模型细化 | Agent、workspace、session 的风险不同 | v1 只做粗粒度 scope，后续扩展到资源级权限 |
+| local bridge 鉴权 | CCS/OpenNeko 调本机 NekoLink 不能让任意进程滥用 | v1 只定义权限文件，bridge 阶段做授权码和 client id |
+| staging 生命周期 | 收到的 bundle 需要过期、删除和审计 | v1 只要求 staging，不定义清理策略 |
+| 导入回滚 | 导入失败不能留下半套配置 | v1 禁止自动导入，回滚放到上层导入器 |
+| 多端冲突处理 | 两台设备可能有同名 workspace、session 或 skill | v1 只做保存和预览，不自动合并 |
+| iroh / relay / P2P | 不同网络下传 bundle | transport 阶段接入，不改变 bundle 语义 |
+
+这些缺口不应该现在全部塞进 v1。v1 先把“可识别、可校验、可保存、不可自动导入”的闭环做稳。
+
 ## `bundle.json`
 
 `bundle.json` 是接收端预览和兼容判断的入口。
@@ -272,10 +310,12 @@ bundle
 建议按这个顺序实现：
 
 1. `nekolink-protocol` 增加 bundle manifest 类型和校验
-2. `nekodrop-storage` 增加 bundle 目录识别和 staging 校验
-3. `nekodrop-service` 在接收完成后产生 bundle detected 事件
-4. 桌面 UI 只展示 bundle 预览和保存状态
-5. CCS/OpenNeko local bridge 再接导入动作
+2. `nekodrop-storage` 增加 bundle 目录识别
+3. `nekodrop-storage` 增加 staging 保存和校验
+4. `nekodrop-service` 在接收完成后产生 bundle detected 事件
+5. 桌面 UI 只展示 bundle 预览和保存状态
+6. CCS/OpenNeko local bridge 增加 bundle 发送和接收通知
+7. CCS/OpenNeko local bridge 再接导入动作
 
 第一版测试必须覆盖：
 
@@ -299,3 +339,17 @@ bundle
 - 不要求 iroh / relay / P2P
 
 这些条件满足后，才进入 CCS/OpenNeko local bridge。
+
+## 下一步顺序
+
+当前不要继续扩大 bundle spec。实现顺序固定为：
+
+```text
+BundleManifest 校验
+-> bundle 目录识别
+-> staging 保存
+-> UI 预览
+-> local bridge 发送/接收
+```
+
+等这个闭环跑起来，再根据真实 CCS/OpenNeko 使用场景补 `nekolink.bundle.v2`。
