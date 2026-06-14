@@ -1,6 +1,6 @@
 /* =========================================================================
    NekoDrop — open / flat product shell
-   无卡片包裹 · 无分割线 · 居中 Hero · 侧栏标签导航
+   无卡片包裹 · 无分割线 · 平面控制台 · 侧栏标签导航
    ========================================================================= */
 
 :root {
@@ -822,44 +822,36 @@ button:disabled {
 }
 
 /* =========================================================================
-   Send home — 居中 Hero
+   Send page
    ========================================================================= */
 
-.drop-home {
+.send-page {
   display: grid;
-  gap: 32px;
+  gap: 22px;
   width: 100%;
 }
 
 .send-hero {
   display: grid;
-  gap: 10px;
-  text-align: center;
-  padding-top: 28px;
-}
-
-.send-hero-brand {
-  color: var(--accent);
-  font-size: 12px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  gap: 6px;
+  max-width: 760px;
+  padding-top: 4px;
+  text-align: left;
 }
 
 .send-hero-title {
   margin: 0;
-  font-size: 34px;
+  font-size: 24px;
   font-weight: 600;
-  letter-spacing: -0.04em;
-  line-height: 1.12;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
 }
 
 .send-hero-subtitle {
-  max-width: 36em;
-  margin: 0 auto;
+  max-width: 44em;
   color: var(--text-3);
-  font-size: 15px;
-  line-height: 1.55;
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .composer {
@@ -872,10 +864,10 @@ button:disabled {
   gap: 14px;
   place-items: center;
   width: 100%;
-  min-height: 196px;
-  padding: 36px 28px;
+  min-height: 152px;
+  padding: 26px 24px;
   border: 1.5px dashed #d2d2d7;
-  border-radius: var(--r-lg);
+  border-radius: var(--r-md);
   text-align: center;
   color: inherit;
   background: var(--surface-elevated);
@@ -964,7 +956,7 @@ button:disabled {
 .composer-pills {
   display: flex;
   flex-wrap: wrap;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 10px;
 }
 
@@ -1668,6 +1660,168 @@ input:focus {
 .path-list {
   max-height: 180px;
   overflow: auto;
+}
+
+/* =========================================================================
+   Console pages — flat operational surfaces
+   ========================================================================= */
+
+.overview-page,
+.bundle-page,
+.integration-page {
+  display: grid;
+  gap: 22px;
+  width: 100%;
+  max-width: 980px;
+}
+
+.overview-status {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--r-md);
+  background: var(--surface-sidebar);
+}
+
+.overview-status button {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: transparent;
+  text-align: left;
+}
+
+.overview-status button:hover {
+  background: var(--surface-hover);
+}
+
+.overview-status strong {
+  overflow: hidden;
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.overview-status span {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-section {
+  display: grid;
+  gap: 10px;
+}
+
+.console-section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.console-section-head strong {
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.console-section-head span {
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.console-row,
+.console-empty {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 44px;
+  padding: 0 8px;
+  border-radius: var(--r-sm);
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.console-row:hover {
+  background: var(--surface-hover);
+}
+
+.console-row.is-attention {
+  background: var(--surface-offer);
+}
+
+.console-row span,
+.console-empty {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.console-empty {
+  justify-content: flex-start;
+  color: var(--text-3);
+  background: transparent;
+}
+
+.overview-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.bundle-record {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 16px;
+  align-items: center;
+  min-height: 76px;
+  padding: 10px 8px;
+  border-radius: var(--r-sm);
+}
+
+.bundle-record:hover {
+  background: var(--surface-hover);
+}
+
+.bundle-record > div:first-child {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.bundle-record strong {
+  overflow: hidden;
+  font-size: 14px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-record span,
+.bundle-record small {
+  overflow: hidden;
+  color: var(--text-3);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-record-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 /* =========================================================================
