@@ -1399,14 +1399,23 @@ pub enum LocalBridgeRequest {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeClientIdentity {
+    pub client_id: String,
+    pub display_name: String,
+    pub app_kind: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgeListDevicesRequest {
     pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
     pub trusted_only: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgeSendBundleRequest {
     pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
     pub target_device_id: Option<String>,
     pub bundle_root: String,
     pub bundle_type: BundleType,
@@ -1416,12 +1425,14 @@ pub struct LocalBridgeSendBundleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgeBundleDetailRequest {
     pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
     pub staged_bundle_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgeImportBundleRequest {
     pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
     pub staged_bundle_id: String,
     pub expected_bundle_type: Option<BundleType>,
 }
@@ -1429,6 +1440,7 @@ pub struct LocalBridgeImportBundleRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgeTransferStatusRequest {
     pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
     pub transfer_id: Option<String>,
 }
 
@@ -1488,13 +1500,15 @@ impl LocalBridgeRequest {
 
 impl LocalBridgeListDevicesRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
-        validate_non_empty("request_id", &self.request_id)
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())
     }
 }
 
 impl LocalBridgeSendBundleRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
         validate_optional_non_empty("target_device_id", self.target_device_id.as_deref())?;
         validate_bridge_bundle_root(&self.bundle_root)
     }
@@ -1503,6 +1517,7 @@ impl LocalBridgeSendBundleRequest {
 impl LocalBridgeBundleDetailRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
         validate_staged_bundle_id(&self.staged_bundle_id)
     }
 }
@@ -1510,6 +1525,7 @@ impl LocalBridgeBundleDetailRequest {
 impl LocalBridgeImportBundleRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
         validate_staged_bundle_id(&self.staged_bundle_id)
     }
 }
@@ -1517,7 +1533,16 @@ impl LocalBridgeImportBundleRequest {
 impl LocalBridgeTransferStatusRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
         validate_optional_non_empty("transfer_id", self.transfer_id.as_deref())
+    }
+}
+
+impl LocalBridgeClientIdentity {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_bridge_client_id(&self.client_id)?;
+        validate_non_empty("client display_name", &self.display_name)?;
+        validate_optional_non_empty("client app_kind", self.app_kind.as_deref())
     }
 }
 
@@ -1795,6 +1820,32 @@ fn validate_bridge_bundle_root(path: &str) -> Result<(), ProtocolError> {
             ),
         )
     })
+}
+
+fn validate_optional_bridge_client(
+    client: Option<&LocalBridgeClientIdentity>,
+) -> Result<(), ProtocolError> {
+    if let Some(client) = client {
+        client.validate()?;
+    }
+    Ok(())
+}
+
+fn validate_bridge_client_id(client_id: &str) -> Result<(), ProtocolError> {
+    let trimmed = client_id.trim();
+    if trimmed.is_empty()
+        || trimmed != client_id
+        || client_id.len() > 80
+        || !client_id
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+    {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "client_id must use only ASCII letters, numbers, underscore, hyphen, or dot",
+        ));
+    }
+    Ok(())
 }
 
 fn validate_staged_bundle_id(bundle_id: &str) -> Result<(), ProtocolError> {
@@ -3663,6 +3714,7 @@ mod tests {
     fn local_bridge_send_bundle_request_uses_stable_json_shape() {
         let request = LocalBridgeRequest::SendBundle(LocalBridgeSendBundleRequest {
             request_id: "bridge-request-1".to_string(),
+            client: None,
             target_device_id: Some("device-b".to_string()),
             bundle_root: "bundle".to_string(),
             bundle_type: BundleType::Skill,
@@ -3685,9 +3737,55 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_request_accepts_optional_client_identity() {
+        let request = LocalBridgeRequest::ListDevices(LocalBridgeListDevicesRequest {
+            request_id: "bridge-request-1".to_string(),
+            client: Some(LocalBridgeClientIdentity {
+                client_id: "openneko-desktop".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            }),
+            trusted_only: true,
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "devices.list");
+        assert_eq!(json["payload"]["client"]["client_id"], "openneko-desktop");
+        assert_eq!(
+            json["payload"]["client"]["display_name"],
+            "OpenNeko Desktop"
+        );
+        assert_eq!(json["payload"]["client"]["app_kind"], "openneko");
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn local_bridge_request_rejects_unsafe_client_identity() {
+        let request = LocalBridgeRequest::ListDevices(LocalBridgeListDevicesRequest {
+            request_id: "bridge-request-1".to_string(),
+            client: Some(LocalBridgeClientIdentity {
+                client_id: "../openneko".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            }),
+            trusted_only: true,
+        });
+
+        let error = request.validate().unwrap_err();
+
+        assert!(error.message.contains("client_id"));
+    }
+
+    #[test]
     fn local_bridge_bundle_detail_request_uses_stable_json_shape() {
         let request = LocalBridgeRequest::BundleDetail(LocalBridgeBundleDetailRequest {
             request_id: "bridge-request-detail".to_string(),
+            client: None,
             staged_bundle_id: "bundle_1234567890".to_string(),
         });
 
@@ -3707,6 +3805,7 @@ mod tests {
     fn local_bridge_rejects_unsafe_bundle_roots() {
         let request = LocalBridgeRequest::SendBundle(LocalBridgeSendBundleRequest {
             request_id: "bridge-request-1".to_string(),
+            client: None,
             target_device_id: None,
             bundle_root: "../bundle".to_string(),
             bundle_type: BundleType::Skill,

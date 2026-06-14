@@ -297,6 +297,18 @@ bridge 可以做：
 
 这些只是本机 API 的稳定 JSON 模型，不代表 localhost server、鉴权、导入执行已经完成。
 
+bridge 请求可以带可选 `client`：
+
+```json
+{
+  "client_id": "openneko-desktop",
+  "display_name": "OpenNeko Desktop",
+  "app_kind": "openneko"
+}
+```
+
+`client` 只表示本机调用方自报身份，方便 UI 和日志说明来源。它不是授权凭证，不能证明调用方可信，也不能绕过用户确认。
+
 桌面端现在有一个内部 handler skeleton，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照，并让 `bundle.send` / `bundle.import` 返回明确的 `pending_auth`。响应会标记 `read_only` 或 `requires_user_confirmation`，方便后续接本机授权码和确认弹窗。它不是公开 localhost 服务，也不会绕过用户确认去发送或导入 bundle。
 
 bridge 不可以做：
