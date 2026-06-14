@@ -29,7 +29,7 @@ use nekodrop_storage::{
     list_staged_bundles as list_staged_bundles_storage, ResumeExpectedFile, ResumePlan,
     StagedBundle,
 };
-use nekolink_protocol::DeviceIdentity;
+use nekolink_protocol::{DeviceIdentity, LocalBridgeRequest};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
@@ -277,6 +277,16 @@ pub struct TransferStatusDto {
     pub progress: f32,
     pub message: String,
     pub updated_at_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgeResponseDto {
+    pub request_id: String,
+    pub status: String,
+    pub message: String,
+    pub devices: Vec<TrustedDeviceDto>,
+    pub staged_bundles: Vec<ReceivedBundleDto>,
+    pub transfer_status: Option<TransferStatusDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -540,6 +550,30 @@ pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
 pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
     let staging_root = bundle_staging_root()?;
     delete_staged_bundle_at(&staging_root, &bundle_id)
+}
+
+#[tauri::command]
+pub fn handle_local_bridge_request(
+    state: State<'_, AppState>,
+    request_json: String,
+) -> Result<LocalBridgeResponseDto, String> {
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let transfer_status = state
+        .transfer_status
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let staging_root = bundle_staging_root()?;
+    handle_local_bridge_request_at(
+        &request_json,
+        &trusted_devices,
+        transfer_status.as_ref(),
+        &staging_root,
+    )
 }
 
 #[tauri::command]
@@ -2066,6 +2100,53 @@ fn delete_staged_bundle_at(
     delete_staged_bundle_storage(staging_root, bundle_id).map_err(|error| error.to_string())
 }
 
+fn handle_local_bridge_request_at(
+    request_json: &str,
+    trusted_devices: &[TrustedDeviceRecord],
+    transfer_status: Option<&TransferStatusState>,
+    staging_root: &std::path::Path,
+) -> Result<LocalBridgeResponseDto, String> {
+    let request: LocalBridgeRequest = serde_json::from_str(request_json)
+        .map_err(|error| format!("invalid bridge request JSON: {error}"))?;
+    request.validate().map_err(|error| error.message)?;
+
+    match request {
+        LocalBridgeRequest::ListDevices(request) => Ok(LocalBridgeResponseDto {
+            request_id: request.request_id,
+            status: "ok".to_string(),
+            message: "local bridge read-only snapshot".to_string(),
+            devices: trusted_devices.iter().map(trusted_device_to_dto).collect(),
+            staged_bundles: list_staged_bundle_dtos_at(staging_root)?,
+            transfer_status: None,
+        }),
+        LocalBridgeRequest::TransferStatus(request) => Ok(LocalBridgeResponseDto {
+            request_id: request.request_id,
+            status: "ok".to_string(),
+            message: "local bridge transfer status snapshot".to_string(),
+            devices: Vec::new(),
+            staged_bundles: Vec::new(),
+            transfer_status: transfer_status.map(transfer_status_to_dto),
+        }),
+        LocalBridgeRequest::SendBundle(request) => {
+            Ok(local_bridge_pending_response(request.request_id))
+        }
+        LocalBridgeRequest::ImportBundle(request) => {
+            Ok(local_bridge_pending_response(request.request_id))
+        }
+    }
+}
+
+fn local_bridge_pending_response(request_id: String) -> LocalBridgeResponseDto {
+    LocalBridgeResponseDto {
+        request_id,
+        status: "pending_auth".to_string(),
+        message: "local bridge auth and runtime are not connected yet".to_string(),
+        devices: Vec::new(),
+        staged_bundles: Vec::new(),
+        transfer_status: None,
+    }
+}
+
 fn bundle_type_label(bundle_type: nekolink_protocol::BundleType) -> &'static str {
     match bundle_type {
         nekolink_protocol::BundleType::Skill => "skill",
@@ -3430,6 +3511,76 @@ mod tests {
 
         assert!(removed);
         assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_devices_list_returns_trusted_devices_and_staged_bundles() {
+        let dir = unique_bundle_temp_dir("local-bridge-devices");
+        let staging_root = dir.join("bundle_staging");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+        let request = serde_json::json!({
+            "kind": "devices.list",
+            "payload": {
+                "request_id": "bridge-request-1",
+                "trusted_only": true
+            }
+        })
+        .to_string();
+
+        let response =
+            handle_local_bridge_request_at(&request, &trusted, None, &staging_root).unwrap();
+
+        assert_eq!(response.request_id, "bridge-request-1");
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.devices.len(), 1);
+        assert_eq!(response.devices[0].device_id, "device-a");
+        assert_eq!(response.staged_bundles.len(), 1);
+        assert_eq!(response.staged_bundles[0].bundle_id, "bundle_1234567890");
+        assert!(response.transfer_status.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_mutations_are_pending_auth() {
+        let dir = unique_bundle_temp_dir("local-bridge-pending");
+        let staging_root = dir.join("bundle_staging");
+        let send_request = serde_json::json!({
+            "kind": "bundle.send",
+            "payload": {
+                "request_id": "bridge-request-send",
+                "target_device_id": "device-a",
+                "bundle_root": "bundle",
+                "bundle_type": "skill",
+                "require_trusted_device": true
+            }
+        })
+        .to_string();
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill"
+            }
+        })
+        .to_string();
+
+        let send_response =
+            handle_local_bridge_request_at(&send_request, &[], None, &staging_root).unwrap();
+        let import_response =
+            handle_local_bridge_request_at(&import_request, &[], None, &staging_root).unwrap();
+
+        assert_eq!(send_response.request_id, "bridge-request-send");
+        assert_eq!(send_response.status, "pending_auth");
+        assert!(send_response.message.contains("auth"));
+        assert_eq!(import_response.request_id, "bridge-request-import");
+        assert_eq!(import_response.status, "pending_auth");
+        assert!(import_response.message.contains("runtime"));
 
         fs::remove_dir_all(dir).unwrap();
     }

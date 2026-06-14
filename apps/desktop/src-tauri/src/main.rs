@@ -53,7 +53,8 @@ pub fn run() {
             commands::delete_transfer,
             commands::clear_transfer_history,
             commands::list_staged_bundles,
-            commands::delete_staged_bundle
+            commands::delete_staged_bundle,
+            commands::handle_local_bridge_request
         ])
         .setup(|app| {
             tray::setup_tray(app)?;
