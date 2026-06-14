@@ -2,6 +2,7 @@ use std::{
     collections::BTreeSet,
     fs,
     path::{Path, PathBuf},
+    time::SystemTime,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
@@ -121,6 +122,117 @@ pub fn stage_bundle_directory(
         staging_path,
         detected,
     })
+}
+
+pub fn list_staged_bundles(staging_root: &Path) -> NekoDropResult<Vec<StagedBundle>> {
+    if !staging_root.exists() {
+        return Ok(Vec::new());
+    }
+    let metadata = fs::symlink_metadata(staging_root).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to read bundle staging root {}: {error}",
+            staging_root.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(NekoDropError::Storage(format!(
+            "bundle staging root is not a directory: {}",
+            staging_root.display()
+        )));
+    }
+
+    let mut staged_bundles = Vec::new();
+    for entry in fs::read_dir(staging_root).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to read bundle staging root {}: {error}",
+            staging_root.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            NekoDropError::Storage(format!("failed to read staged bundle entry: {error}"))
+        })?;
+        let file_type = entry.file_type().map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to read staged bundle file type {}: {error}",
+                entry.path().display()
+            ))
+        })?;
+        if !file_type.is_dir() {
+            continue;
+        }
+
+        let bundle_id = entry.file_name().to_string_lossy().into_owned();
+        validate_bundle_id_for_staging(&bundle_id)?;
+        let detected = detect_bundle_directory(&entry.path())?.ok_or_else(|| {
+            NekoDropError::Storage(format!(
+                "staged bundle is missing bundle.json: {}",
+                entry.path().display()
+            ))
+        })?;
+        staged_bundles.push(StagedBundle {
+            staging_path: entry.path(),
+            detected,
+        });
+    }
+
+    staged_bundles.sort_by(|left, right| {
+        left.detected
+            .manifest
+            .bundle_id
+            .cmp(&right.detected.manifest.bundle_id)
+    });
+    Ok(staged_bundles)
+}
+
+pub fn delete_staged_bundle(staging_root: &Path, bundle_id: &str) -> NekoDropResult<bool> {
+    validate_bundle_id_for_staging(bundle_id)?;
+    let staging_path = staging_root.join(bundle_id);
+    if !staging_path.exists() {
+        return Ok(false);
+    }
+    let metadata = fs::symlink_metadata(&staging_path).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to read staged bundle {}: {error}",
+            staging_path.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(NekoDropError::Storage(format!(
+            "staged bundle is not a directory: {}",
+            staging_path.display()
+        )));
+    }
+
+    fs::remove_dir_all(&staging_path).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to delete staged bundle {}: {error}",
+            staging_path.display()
+        ))
+    })?;
+    Ok(true)
+}
+
+pub fn prune_staged_bundles_older_than(
+    staging_root: &Path,
+    cutoff: SystemTime,
+) -> NekoDropResult<Vec<String>> {
+    let mut pruned = Vec::new();
+    for staged in list_staged_bundles(staging_root)? {
+        let modified = fs::symlink_metadata(&staged.staging_path)
+            .and_then(|metadata| metadata.modified())
+            .map_err(|error| {
+                NekoDropError::Storage(format!(
+                    "failed to read staged bundle modified time {}: {error}",
+                    staged.staging_path.display()
+                ))
+            })?;
+        if modified < cutoff {
+            let bundle_id = staged.detected.manifest.bundle_id;
+            delete_staged_bundle(staging_root, &bundle_id)?;
+            pruned.push(bundle_id);
+        }
+    }
+    Ok(pruned)
 }
 
 fn read_json_file<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> NekoDropResult<T> {
@@ -353,7 +465,14 @@ fn copy_bundle_file(
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::PathBuf,
+        time::{Duration, SystemTime},
+    };
+
+    use filetime::FileTime;
 
     use nekolink_protocol::{
         BundleChecksums, BundleCompatibility, BundleFile, BundleManifest, BundlePermissionScope,
@@ -533,6 +652,111 @@ mod tests {
     }
 
     #[test]
+    fn list_staged_bundles_returns_empty_for_missing_root() {
+        let dir = unique_temp_dir("bundle-list-missing");
+
+        let bundles = list_staged_bundles(&dir.join("staging")).unwrap();
+
+        assert!(bundles.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn list_staged_bundles_returns_detected_bundles_sorted_by_id() {
+        let dir = unique_temp_dir("bundle-list-sorted");
+        let source_a = create_valid_bundle_with_id(&dir, "source-a", "bundle_b");
+        let source_b = create_valid_bundle_with_id(&dir, "source-b", "bundle_a");
+        let staging_root = dir.join("staging");
+        stage_bundle_directory(&source_a, &staging_root).unwrap();
+        stage_bundle_directory(&source_b, &staging_root).unwrap();
+        fs::write(staging_root.join("note.txt"), b"ignored").unwrap();
+
+        let bundles = list_staged_bundles(&staging_root).unwrap();
+
+        let ids = bundles
+            .iter()
+            .map(|bundle| bundle.detected.manifest.bundle_id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["bundle_a", "bundle_b"]);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn delete_staged_bundle_removes_only_requested_bundle() {
+        let dir = unique_temp_dir("bundle-delete-one");
+        let source_a = create_valid_bundle_with_id(&dir, "source-a", "bundle_a");
+        let source_b = create_valid_bundle_with_id(&dir, "source-b", "bundle_b");
+        let staging_root = dir.join("staging");
+        stage_bundle_directory(&source_a, &staging_root).unwrap();
+        stage_bundle_directory(&source_b, &staging_root).unwrap();
+
+        let removed = delete_staged_bundle(&staging_root, "bundle_a").unwrap();
+
+        assert!(removed);
+        assert!(!staging_root.join("bundle_a").exists());
+        assert!(staging_root.join("bundle_b").is_dir());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn delete_staged_bundle_rejects_unsafe_bundle_id() {
+        let dir = unique_temp_dir("bundle-delete-unsafe");
+
+        let error = delete_staged_bundle(&dir.join("staging"), "../bundle").unwrap_err();
+
+        assert!(error.to_string().contains("bundle_id"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn delete_staged_bundle_returns_false_for_missing_safe_id() {
+        let dir = unique_temp_dir("bundle-delete-missing");
+
+        let removed = delete_staged_bundle(&dir.join("staging"), "bundle_missing").unwrap();
+
+        assert!(!removed);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prune_staged_bundles_older_than_removes_only_expired_bundles() {
+        let dir = unique_temp_dir("bundle-prune-expired");
+        let source_old_b = create_valid_bundle_with_id(&dir, "source-old-b", "bundle_old_b");
+        let source_old_a = create_valid_bundle_with_id(&dir, "source-old-a", "bundle_old_a");
+        let source_new = create_valid_bundle_with_id(&dir, "source-new", "bundle_new");
+        let source_cutoff = create_valid_bundle_with_id(&dir, "source-cutoff", "bundle_cutoff");
+        let staging_root = dir.join("staging");
+        stage_bundle_directory(&source_old_b, &staging_root).unwrap();
+        stage_bundle_directory(&source_old_a, &staging_root).unwrap();
+        stage_bundle_directory(&source_new, &staging_root).unwrap();
+        stage_bundle_directory(&source_cutoff, &staging_root).unwrap();
+
+        let base = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+        let old = base - Duration::from_secs(60);
+        let cutoff = base;
+        let new = base + Duration::from_secs(60);
+        set_modified_time(&staging_root.join("bundle_old_b"), old);
+        set_modified_time(&staging_root.join("bundle_old_a"), old);
+        set_modified_time(&staging_root.join("bundle_cutoff"), cutoff);
+        set_modified_time(&staging_root.join("bundle_new"), new);
+
+        let pruned = prune_staged_bundles_older_than(&staging_root, cutoff).unwrap();
+
+        assert_eq!(pruned, vec!["bundle_old_a", "bundle_old_b"]);
+        assert!(!staging_root.join("bundle_old_a").exists());
+        assert!(!staging_root.join("bundle_old_b").exists());
+        assert!(staging_root.join("bundle_cutoff").is_dir());
+        assert!(staging_root.join("bundle_new").is_dir());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn rejects_staging_when_bundle_id_would_escape_staging_root() {
         let dir = unique_temp_dir("bundle-stage-bad-id");
         let root = create_valid_bundle(&dir, false);
@@ -548,7 +772,29 @@ mod tests {
     }
 
     fn create_valid_bundle(dir: &std::path::Path, contains_secrets: bool) -> PathBuf {
-        let root = dir.join("bundle");
+        create_valid_bundle_with_id_and_secrets(
+            dir,
+            "bundle",
+            "bundle_1234567890",
+            contains_secrets,
+        )
+    }
+
+    fn create_valid_bundle_with_id(
+        dir: &std::path::Path,
+        directory_name: &str,
+        bundle_id: &str,
+    ) -> PathBuf {
+        create_valid_bundle_with_id_and_secrets(dir, directory_name, bundle_id, false)
+    }
+
+    fn create_valid_bundle_with_id_and_secrets(
+        dir: &std::path::Path,
+        directory_name: &str,
+        bundle_id: &str,
+        contains_secrets: bool,
+    ) -> PathBuf {
+        let root = dir.join(directory_name);
         fs::create_dir_all(root.join("files")).unwrap();
         fs::write(
             root.join("files").join("manifest.json"),
@@ -556,7 +802,9 @@ mod tests {
         )
         .unwrap();
         fs::write(root.join("files").join("content.bin"), b"hello bundle").unwrap();
-        write_json(root.join("bundle.json"), &valid_bundle_manifest());
+        let mut manifest = valid_bundle_manifest();
+        manifest.bundle_id = bundle_id.to_string();
+        write_json(root.join("bundle.json"), &manifest);
         write_json(root.join("checksums.json"), &valid_bundle_checksums());
         write_json(
             root.join("permissions.json"),
@@ -637,6 +885,11 @@ mod tests {
 
     fn write_json(path: impl AsRef<std::path::Path>, value: &impl serde::Serialize) {
         fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    }
+
+    fn set_modified_time(path: &std::path::Path, time: SystemTime) {
+        let file_time = FileTime::from_system_time(time);
+        filetime::set_file_mtime(path, file_time).unwrap();
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {
