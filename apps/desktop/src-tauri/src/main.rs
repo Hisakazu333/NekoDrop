@@ -51,7 +51,9 @@ pub fn run() {
             commands::respond_pairing_request,
             commands::get_transfer_status,
             commands::delete_transfer,
-            commands::clear_transfer_history
+            commands::clear_transfer_history,
+            commands::list_staged_bundles,
+            commands::delete_staged_bundle
         ])
         .setup(|app| {
             tray::setup_tray(app)?;

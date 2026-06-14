@@ -24,7 +24,11 @@ use nekodrop_service::{
     ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport,
     TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
-use nekodrop_storage::{build_resume_plan_for_files, ResumeExpectedFile, ResumePlan};
+use nekodrop_storage::{
+    build_resume_plan_for_files, delete_staged_bundle as delete_staged_bundle_storage,
+    list_staged_bundles as list_staged_bundles_storage, ResumeExpectedFile, ResumePlan,
+    StagedBundle,
+};
 use nekolink_protocol::DeviceIdentity;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
@@ -203,6 +207,8 @@ pub struct ReceivedBundleDto {
     pub total_bytes: u64,
     pub staging_path: String,
     pub import_allowed: bool,
+    pub staging_status: String,
+    pub can_import_now: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -522,6 +528,18 @@ pub fn delete_transfer(state: State<'_, AppState>, transfer_id: String) -> Resul
 #[tauri::command]
 pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> {
     clear_transfer_history_records(&state.transfer_history)
+}
+
+#[tauri::command]
+pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
+    let staging_root = bundle_staging_root()?;
+    list_staged_bundle_dtos_at(&staging_root)
+}
+
+#[tauri::command]
+pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
+    let staging_root = bundle_staging_root()?;
+    delete_staged_bundle_at(&staging_root, &bundle_id)
 }
 
 #[tauri::command]
@@ -2011,7 +2029,41 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         total_bytes: bundle.total_bytes,
         staging_path: bundle.staging_path.display().to_string(),
         import_allowed: bundle.import_allowed,
+        staging_status: "saved".to_string(),
+        can_import_now: false,
     }
+}
+
+fn staged_bundle_to_dto(staged: &StagedBundle) -> ReceivedBundleDto {
+    let manifest = &staged.detected.manifest;
+    ReceivedBundleDto {
+        bundle_id: manifest.bundle_id.clone(),
+        bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
+        display_name: manifest.display_name.clone(),
+        source_app: manifest.source_app.clone(),
+        file_count: manifest.summary.file_count,
+        total_bytes: manifest.summary.total_bytes,
+        staging_path: staged.staging_path.display().to_string(),
+        import_allowed: staged.detected.import_policy
+            == nekodrop_storage::BundleImportPolicy::ImportAllowed,
+        staging_status: "saved".to_string(),
+        can_import_now: false,
+    }
+}
+
+fn list_staged_bundle_dtos_at(
+    staging_root: &std::path::Path,
+) -> Result<Vec<ReceivedBundleDto>, String> {
+    list_staged_bundles_storage(staging_root)
+        .map_err(|error| error.to_string())
+        .map(|bundles| bundles.iter().map(staged_bundle_to_dto).collect())
+}
+
+fn delete_staged_bundle_at(
+    staging_root: &std::path::Path,
+    bundle_id: &str,
+) -> Result<bool, String> {
+    delete_staged_bundle_storage(staging_root, bundle_id).map_err(|error| error.to_string())
 }
 
 fn bundle_type_label(bundle_type: nekolink_protocol::BundleType) -> &'static str {
@@ -2883,6 +2935,13 @@ fn friendly_transfer_error(error: &str) -> String {
 mod tests {
     use super::*;
     use nekodrop_service::TransferPlanScanPhase;
+    use nekolink_protocol::{
+        BundleChecksums, BundleCompatibility, BundleFile, BundleManifest, BundlePermissionScope,
+        BundlePermissions, BundleSecretsPolicy, BundleSender, BundleSummary, BundleType,
+        BundleWriteMode, BundleWritePermission, Capability, BUNDLE_CHECKSUM_SHA256,
+        BUNDLE_SCHEMA_V1, PROTOCOL_VERSION,
+    };
+    use std::collections::BTreeMap;
 
     #[test]
     fn friendly_transfer_error_explains_connection_failures() {
@@ -3344,6 +3403,38 @@ mod tests {
     }
 
     #[test]
+    fn staged_bundle_dto_marks_saved_status() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-list");
+        let staging_root = dir.join("bundle_staging");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+
+        let bundles = list_staged_bundle_dtos_at(&staging_root).unwrap();
+
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
+        assert_eq!(bundles[0].staging_status, "saved");
+        assert!(!bundles[0].can_import_now);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn delete_staged_bundle_at_removes_saved_bundle() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-delete");
+        let staging_root = dir.join("bundle_staging");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+
+        let removed = delete_staged_bundle_at(&staging_root, "bundle_1234567890").unwrap();
+
+        assert!(removed);
+        assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn receive_policy_block_all_rejects_offer_without_pending_prompt() {
         let pending = Arc::new(Mutex::new(None));
         let status = Arc::new(Mutex::new(None));
@@ -3472,6 +3563,117 @@ mod tests {
             "sha256:self",
             [],
         )
+    }
+
+    fn create_desktop_test_bundle(
+        dir: &std::path::Path,
+        directory_name: &str,
+        bundle_id: &str,
+    ) -> PathBuf {
+        let root = dir.join(directory_name);
+        fs::create_dir_all(root.join("files")).unwrap();
+        fs::write(
+            root.join("files").join("manifest.json"),
+            b"{\"kind\":\"skill\"}",
+        )
+        .unwrap();
+        fs::write(root.join("files").join("content.bin"), b"hello bundle").unwrap();
+        let mut manifest = desktop_test_bundle_manifest();
+        manifest.bundle_id = bundle_id.to_string();
+        write_json(root.join("bundle.json"), &manifest);
+        write_json(
+            root.join("checksums.json"),
+            &desktop_test_bundle_checksums(),
+        );
+        write_json(
+            root.join("permissions.json"),
+            &desktop_test_bundle_permissions(),
+        );
+        root
+    }
+
+    fn desktop_test_bundle_manifest() -> BundleManifest {
+        BundleManifest {
+            schema: BUNDLE_SCHEMA_V1.to_string(),
+            bundle_id: "bundle_1234567890".to_string(),
+            bundle_type: BundleType::Skill,
+            display_name: "voice_transcribe".to_string(),
+            source_app: "OpenNeko".to_string(),
+            created_at: "2026-06-14T10:30:00Z".to_string(),
+            sender: BundleSender {
+                device_id: "neko-device-1234567890".to_string(),
+                device_name: "MacBook".to_string(),
+                fingerprint: "sha256:0123456789abcdef".to_string(),
+            },
+            compatibility: BundleCompatibility {
+                min_nekolink_version: PROTOCOL_VERSION,
+                required_capabilities: vec![Capability::BundleTransfer],
+            },
+            summary: BundleSummary {
+                file_count: 2,
+                total_bytes: 28,
+            },
+            files: vec![
+                BundleFile {
+                    path: "files/manifest.json".to_string(),
+                    size: 16,
+                    sha256: "0bc3f835203da0c2bbb44658e66c6bc0449e7f00bd9bd8fecd5d12283baaf5c9"
+                        .to_string(),
+                    role: "manifest".to_string(),
+                },
+                BundleFile {
+                    path: "files/content.bin".to_string(),
+                    size: 12,
+                    sha256: "04cfecf64270c52b81da10bf6890b24fa73ee79715c44d1bc443dd9dd1de04d0"
+                        .to_string(),
+                    role: "payload".to_string(),
+                },
+            ],
+        }
+    }
+
+    fn desktop_test_bundle_checksums() -> BundleChecksums {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "files/manifest.json".to_string(),
+            "0bc3f835203da0c2bbb44658e66c6bc0449e7f00bd9bd8fecd5d12283baaf5c9".to_string(),
+        );
+        files.insert(
+            "files/content.bin".to_string(),
+            "04cfecf64270c52b81da10bf6890b24fa73ee79715c44d1bc443dd9dd1de04d0".to_string(),
+        );
+        BundleChecksums {
+            algorithm: BUNDLE_CHECKSUM_SHA256.to_string(),
+            files,
+        }
+    }
+
+    fn desktop_test_bundle_permissions() -> BundlePermissions {
+        BundlePermissions {
+            requested_scopes: vec![BundlePermissionScope::SkillInstall],
+            writes: vec![BundleWritePermission {
+                target: "openneko.skills".to_string(),
+                mode: BundleWriteMode::CreateOnly,
+            }],
+            secrets: BundleSecretsPolicy {
+                contains_secrets: false,
+                redacted_fields: Vec::new(),
+            },
+        }
+    }
+
+    fn write_json(path: impl AsRef<std::path::Path>, value: &impl serde::Serialize) {
+        fs::write(path, serde_json::to_vec_pretty(value).unwrap()).unwrap();
+    }
+
+    fn unique_bundle_temp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nekodrop-{name}-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&dir).unwrap();
+        dir
     }
 }
 
