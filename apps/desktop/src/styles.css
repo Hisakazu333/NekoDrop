@@ -1684,7 +1684,7 @@ input:focus {
   background: var(--surface-sidebar);
 }
 
-.overview-status button {
+.overview-status-item {
   display: grid;
   gap: 4px;
   min-height: 58px;
@@ -1694,8 +1694,13 @@ input:focus {
   text-align: left;
 }
 
-.overview-status button:hover {
+.overview-status-item:hover {
   background: var(--surface-hover);
+}
+
+.overview-status-item.is-warning {
+  color: var(--danger);
+  background: var(--danger-soft);
 }
 
 .overview-status strong {
@@ -1713,6 +1718,10 @@ input:focus {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.overview-status-item.is-warning span {
+  color: var(--danger);
 }
 
 .console-section {

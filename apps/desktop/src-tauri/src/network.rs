@@ -1,5 +1,17 @@
 use std::net::{IpAddr, Ipv4Addr, UdpSocket};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
+
+const LAN_IP_CACHE_TTL: Duration = Duration::from_secs(30);
+
+#[derive(Clone)]
+struct CachedLanIps {
+    checked_at: Instant,
+    ips: Vec<Ipv4Addr>,
+}
+
+static LAN_IP_CACHE: OnceLock<Mutex<Option<CachedLanIps>>> = OnceLock::new();
 
 pub fn primary_lan_ip() -> Option<IpAddr> {
     primary_lan_ipv4().map(IpAddr::V4)
@@ -14,6 +26,10 @@ fn primary_lan_ipv4() -> Option<Ipv4Addr> {
 }
 
 fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
+    if let Some(cached) = cached_lan_ipv4s() {
+        return cached;
+    }
+
     let mut ips = Vec::new();
     if let Some(ip) = probed_default_ipv4().filter(|ip| is_usable_lan_ipv4(*ip)) {
         push_unique_ipv4(&mut ips, ip);
@@ -24,7 +40,28 @@ fn local_lan_ipv4s() -> Vec<Ipv4Addr> {
     {
         push_unique_ipv4(&mut ips, ip);
     }
+    store_cached_lan_ipv4s(&ips);
     ips
+}
+
+fn cached_lan_ipv4s() -> Option<Vec<Ipv4Addr>> {
+    let cache = LAN_IP_CACHE.get_or_init(|| Mutex::new(None));
+    let cached = cache.lock().ok()?.clone()?;
+    if cached.checked_at.elapsed() <= LAN_IP_CACHE_TTL {
+        Some(cached.ips)
+    } else {
+        None
+    }
+}
+
+fn store_cached_lan_ipv4s(ips: &[Ipv4Addr]) {
+    let cache = LAN_IP_CACHE.get_or_init(|| Mutex::new(None));
+    if let Ok(mut cached) = cache.lock() {
+        *cached = Some(CachedLanIps {
+            checked_at: Instant::now(),
+            ips: ips.to_vec(),
+        });
+    }
 }
 
 fn push_unique_ipv4(ips: &mut Vec<Ipv4Addr>, ip: Ipv4Addr) {

@@ -21,6 +21,7 @@ import {
 } from "./networkPermissionHints";
 import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
+  shouldRunDiagnosticsRefresh,
   REALTIME_REFRESH_INTERVAL_MS,
   shouldRunDirectoryRefresh
 } from "./refreshSchedule";
@@ -144,7 +145,9 @@ export function App() {
   const autoReceiveStarted = useRef(false);
   const realtimeRefreshInFlight = useRef(false);
   const directoryRefreshInFlight = useRef(false);
+  const diagnosticsRefreshInFlight = useRef(false);
   const lastDirectoryRefreshAt = useRef(0);
+  const lastDiagnosticsRefreshAt = useRef(0);
   const [transferMetrics, setTransferMetrics] = useState<{
     speedBytesPerSecond: number | null;
     etaSeconds: number | null;
@@ -198,7 +201,7 @@ export function App() {
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
-    refreshReceiveState({ includeDirectoryState: true }).catch(() => undefined);
+    refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -216,6 +219,7 @@ export function App() {
   useEffect(() => {
     const timer = window.setInterval(() => {
       refreshReceiveState({
+        includeDiagnostics: shouldRunDiagnosticsRefresh(Date.now(), lastDiagnosticsRefreshAt.current),
         includeDirectoryState: shouldRunDirectoryRefresh(Date.now(), lastDirectoryRefreshAt.current)
       }).catch(() => undefined);
     }, REALTIME_REFRESH_INTERVAL_MS);
@@ -331,9 +335,10 @@ export function App() {
     setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
 
-  async function refreshReceiveState(options: { includeDirectoryState?: boolean } = {}) {
+  async function refreshReceiveState(options: { includeDiagnostics?: boolean; includeDirectoryState?: boolean } = {}) {
     await Promise.all([
       refreshRealtimeState(),
+      options.includeDiagnostics ? refreshDiagnosticsState() : Promise.resolve(),
       options.includeDirectoryState ? refreshDirectoryState() : Promise.resolve()
     ]);
   }
@@ -349,7 +354,6 @@ export function App() {
         pendingOffer,
         pairingRequest,
         nextTransferStatus,
-        diagnostics,
         discovery
       ] = await Promise.all([
         invokeCommand<string | null>("get_receive_status"),
@@ -358,7 +362,6 @@ export function App() {
         invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
         invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
         invokeCommand<TransferStatusDto | null>("get_transfer_status"),
-        invokeCommand<ReceivePortDiagnosticsDto>("get_receive_port_diagnostics"),
         invokeCommand<DiscoveryStatusDto>("get_discovery_status")
       ]);
       setReceiveStatus(status);
@@ -367,11 +370,22 @@ export function App() {
       setPendingReceiveOffer(pendingOffer);
       setPendingPairingRequest(pairingRequest);
       setTransferStatus(nextTransferStatus);
-      setReceiveDiagnostics(diagnostics);
       setDiscoveryStatus(discovery);
       if (pendingOffer || pairingRequest) setMode("receive");
     } finally {
       realtimeRefreshInFlight.current = false;
+    }
+  }
+
+  async function refreshDiagnosticsState() {
+    if (diagnosticsRefreshInFlight.current) return;
+    diagnosticsRefreshInFlight.current = true;
+    try {
+      const diagnostics = await invokeCommand<ReceivePortDiagnosticsDto>("get_receive_port_diagnostics");
+      setReceiveDiagnostics(diagnostics);
+      lastDiagnosticsRefreshAt.current = Date.now();
+    } finally {
+      diagnosticsRefreshInFlight.current = false;
     }
   }
 
@@ -597,6 +611,7 @@ export function App() {
       setBindPort(String(portFromBindAddr(session.bind_addr) ?? requestedPort));
       setReceiveStatus("等待接收中");
       setToast(silent ? "已自动打开收件" : "收件已打开");
+      await refreshDiagnosticsState();
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -613,7 +628,7 @@ export function App() {
       setPendingReceiveOffer(null);
       setReceiveStatus("收件已关闭");
       setToast("收件已关闭");
-      await refreshReceiveState({ includeDirectoryState: true });
+      await refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true });
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -721,7 +736,7 @@ export function App() {
         await invokeCommand<void>("cancel_current_transfer");
         setToast("正在取消发送");
       }
-      await refreshReceiveState({ includeDirectoryState: true });
+      await refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true });
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -1306,6 +1321,8 @@ export function App() {
                 <OverviewPanel
                   busy={busy}
                   currentFailedTransfer={currentFailedTransfer}
+                  discoveryStatus={discoveryStatus}
+                  localPlatform={localPlatform}
                   nearbyDevices={nearbyDevices}
                   pendingOffer={pendingReceiveOffer}
                   receiveReport={receiveReport}
@@ -1745,6 +1762,8 @@ function DevicePanel({
 function OverviewPanel({
   busy,
   currentFailedTransfer,
+  discoveryStatus,
+  localPlatform,
   nearbyDevices,
   pendingOffer,
   receiveReport,
@@ -1766,6 +1785,8 @@ function OverviewPanel({
 }: {
   busy: BusyMode | null;
   currentFailedTransfer: TransferDto | null;
+  discoveryStatus: DiscoveryStatusDto | null;
+  localPlatform: string | null;
   nearbyDevices: DeviceDto[];
   pendingOffer: PendingReceiveOfferDto | null;
   receiveReport: ReceiveReportDto | null;
@@ -1790,23 +1811,29 @@ function OverviewPanel({
 }) {
   const latestBundle = receiveReport?.bundle ?? null;
   const activeTransfer = transferStatus && shouldShowActiveTransferBar(transferStatus);
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
 
   return (
     <section className="overview-page">
       <div className="overview-status">
-        <button type="button" onClick={() => onSelectMode("receive")}>
+        <button className="overview-status-item" type="button" onClick={() => onSelectMode("receive")}>
           <strong>{receiveState}</strong>
           <span>{receiveSession?.bind_addr ?? "收件未监听"}</span>
         </button>
-        <button type="button" onClick={() => onSelectMode("devices")}>
-          <strong>{nearbyDevices.length}</strong>
-          <span>附近在线</span>
+        <button
+          className={discoveryCopy.isError ? "overview-status-item is-warning" : "overview-status-item"}
+          type="button"
+          onClick={() => onSelectMode("devices")}
+          title={discoveryCopy.emptyBody || discoveryCopy.subtitle}
+        >
+          <strong>{nearbyDevices.length > 0 ? nearbyDevices.length : discoveryCopy.label}</strong>
+          <span>{nearbyDevices.length > 0 ? "附近在线" : discoveryCopy.targetLabel}</span>
         </button>
-        <button type="button" onClick={() => onSelectMode("devices")}>
+        <button className="overview-status-item" type="button" onClick={() => onSelectMode("devices")}>
           <strong>{trustedDevices.length}</strong>
           <span>可信设备</span>
         </button>
-        <button type="button" onClick={() => onSelectMode("bundles")}>
+        <button className="overview-status-item" type="button" onClick={() => onSelectMode("bundles")}>
           <strong>{latestBundle ? "1" : "0"}</strong>
           <span>待处理资料包</span>
         </button>
