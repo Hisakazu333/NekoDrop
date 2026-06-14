@@ -8,7 +8,8 @@ pub mod resume;
 pub mod space;
 
 pub use bundle::{
-    detect_bundle_directory, stage_bundle_directory, BundleImportPolicy, DetectedBundle,
+    delete_staged_bundle, detect_bundle_directory, list_staged_bundles,
+    prune_staged_bundles_older_than, stage_bundle_directory, BundleImportPolicy, DetectedBundle,
     StagedBundle,
 };
 pub use checksum::{sha256_file, verify_sha256_file, Checksum, ChecksumAlgorithm};
