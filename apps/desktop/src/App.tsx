@@ -47,6 +47,7 @@ import type {
   DesktopRealtimeSnapshotDto,
   DeviceDto,
   DiscoveryStatusDto,
+  LocalBridgeResponseDto,
   ManualBundleCreateDto,
   PendingPairingRequestDto,
   PendingReceiveOfferDto,
@@ -143,6 +144,7 @@ export function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
+  const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [mode, setMode] = useState<ComposerMode>("overview");
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
@@ -826,6 +828,32 @@ export function App() {
     }
   }
 
+  async function runLocalBridgeSelfCheck() {
+    setBusy("open");
+    setError(null);
+    try {
+      const response = await invokeCommand<LocalBridgeResponseDto>("handle_local_bridge_request", {
+        requestJson: JSON.stringify({
+          "kind": "devices.list",
+          request_id: `settings-self-check-${Date.now()}`,
+          trusted_only: true,
+          client: {
+            client_id: "nekodrop.settings",
+            display_name: "NekoDrop Settings"
+          }
+        })
+      });
+      setLocalBridgeCheck(
+        `${localBridgeStatusLabel(response.status)} · ${response.devices.length} 台可信设备 · ${response.staged_bundles.length} 个暂存资料包`
+      );
+    } catch (nextError) {
+      setLocalBridgeCheck("自测失败");
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function chooseManualBundleSourceDir() {
     setBusy("pick-folders");
     setError(null);
@@ -1446,6 +1474,7 @@ export function App() {
                   busy={busy}
                   deviceNameInput={deviceNameInput}
                   discoveryStatus={discoveryStatus}
+                  localBridgeCheck={localBridgeCheck}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
@@ -1455,6 +1484,7 @@ export function App() {
                   snapshot={snapshot}
                   onChooseReceiveDir={chooseReceiveDir}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onRunLocalBridgeSelfCheck={runLocalBridgeSelfCheck}
                   onSaveReceiveDir={saveReceiveDir}
                   onSaveReceivePort={saveReceivePort}
                   onSaveDeviceName={saveDeviceName}
@@ -1989,11 +2019,25 @@ function ManualBundleComposer({
   );
 }
 
-function IntegrationSettings() {
+function IntegrationSettings({
+  busy,
+  localBridgeCheck,
+  onRunLocalBridgeSelfCheck
+}: {
+  busy: BusyMode | null;
+  localBridgeCheck: string | null;
+  onRunLocalBridgeSelfCheck: () => void;
+}) {
   return (
     <SettingsGroup title="本机接入" note="本机应用只能通过受控请求读取设备、发送资料包或申请导入">
       <SettingsRow label="桥接状态">
         <SettingsValue>内部处理器就绪，localhost 服务未开放</SettingsValue>
+      </SettingsRow>
+      <SettingsRow label="只读自测">
+        <SettingsValue>{localBridgeCheck ?? "尚未运行"}</SettingsValue>
+        <button className="text-button" disabled={busy === "open"} onClick={onRunLocalBridgeSelfCheck} type="button">
+          运行
+        </button>
       </SettingsRow>
       <SettingsRow label="授权请求">
         <SettingsValue>暂无待处理</SettingsValue>
@@ -2330,6 +2374,7 @@ function SettingsPanel({
   busy,
   deviceNameInput,
   discoveryStatus,
+  localBridgeCheck,
   receiveDir,
   receivePolicy,
   receiveSession,
@@ -2339,6 +2384,7 @@ function SettingsPanel({
   snapshot,
   onChooseReceiveDir,
   onOpenReceiveDir,
+  onRunLocalBridgeSelfCheck,
   onSaveDeviceName,
   onSaveReceiveDir,
   onSaveReceivePort,
@@ -2348,6 +2394,7 @@ function SettingsPanel({
   busy: BusyMode | null;
   deviceNameInput: string;
   discoveryStatus: DiscoveryStatusDto | null;
+  localBridgeCheck: string | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
@@ -2357,6 +2404,7 @@ function SettingsPanel({
   snapshot: AppSnapshot | null;
   onChooseReceiveDir: () => void;
   onOpenReceiveDir: () => void;
+  onRunLocalBridgeSelfCheck: () => void;
   onSaveDeviceName: () => void;
   onSaveReceiveDir: () => void;
   onSaveReceivePort: () => void;
@@ -2468,7 +2516,11 @@ function SettingsPanel({
         </SettingsRow>
       </SettingsGroup>
 
-      <IntegrationSettings />
+      <IntegrationSettings
+        busy={busy}
+        localBridgeCheck={localBridgeCheck}
+        onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
+      />
     </section>
   );
 }
@@ -3125,6 +3177,13 @@ function bundleTypeLabel(type: string) {
     default:
       return type;
   }
+}
+
+function localBridgeStatusLabel(status: string) {
+  if (status === "ok") return "可读取";
+  if (status === "pending_auth") return "等待确认";
+  if (status === "unsupported") return "不支持";
+  return status;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {
