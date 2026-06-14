@@ -2950,17 +2950,15 @@ function uniquePaths(paths: string[]) {
 }
 
 function keepIfEqual<T>(current: T, next: T): T {
+  if (Object.is(current, next)) return current;
+  if (current == null || next == null) return next;
   return stableJson(current) === stableJson(next) ? current : next;
 }
 
 function resetTransferMetrics(
   setTransferMetrics: (updater: (current: TransferMetrics) => TransferMetrics) => void
 ) {
-  setTransferMetrics((current) =>
-    current === EMPTY_TRANSFER_METRICS || stableJson(current) === stableJson(EMPTY_TRANSFER_METRICS)
-      ? current
-      : EMPTY_TRANSFER_METRICS
-  );
+  setTransferMetrics((current) => keepIfEqual(current, EMPTY_TRANSFER_METRICS));
 }
 
 function stableJson(value: unknown) {
