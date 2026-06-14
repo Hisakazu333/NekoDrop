@@ -80,7 +80,7 @@
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
-| NekoLink bundle spec | 规格已写 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；代码还没有实现 bundle manifest、接收检测、staging 或 local bridge 导入。 |
+| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验。接收检测、staging、UI 预览和 local bridge 导入还没有接入。 |
 
 ## 当前不能宣传为已完成
 
