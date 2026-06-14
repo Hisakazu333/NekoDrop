@@ -18,11 +18,12 @@ use nekodrop_network::{
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, check_receive_space, create_source_plan_from_paths,
-    create_source_plan_from_paths_with_progress, write_received_file_with_resume_and_cancel,
-    ReceivedFile, ResumeExpectedFile, ResumePlan,
+    create_source_plan_from_paths_with_progress, safe_join_receive_path, stage_bundle_directory,
+    write_received_file_with_resume_and_cancel, BundleImportPolicy, ReceivedFile,
+    ResumeExpectedFile, ResumePlan, StagedBundle,
 };
 use nekolink_protocol::{
-    default_session_cipher_preference, Capability, DeviceIdentity, ProtocolError,
+    default_session_cipher_preference, BundleType, Capability, DeviceIdentity, ProtocolError,
     SessionEphemeralKeyPair, SessionFrameKind, SessionHelloPayload, SessionKeyMaterial,
     SessionReadyPayload, SessionTrafficCounters, SessionTrafficFrameHeader,
     VerifiedSessionHandshake,
@@ -46,6 +47,19 @@ pub struct TransferReceiveReport {
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<ReceivedFile>,
+    pub bundle: Option<ReceivedBundleReport>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceivedBundleReport {
+    pub bundle_id: String,
+    pub bundle_type: BundleType,
+    pub display_name: String,
+    pub source_app: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub staging_path: PathBuf,
+    pub import_allowed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -257,6 +271,20 @@ pub fn accept_transfer(
     accept_transfer_with_decision(listener, receive_dir, |_| true, |_| {})
 }
 
+pub fn accept_transfer_with_bundle_staging(
+    listener: &TcpListener,
+    receive_dir: &Path,
+    bundle_staging_root: &Path,
+) -> NekoDropResult<TransferReceiveReport> {
+    accept_transfer_with_decision_and_bundle_staging(
+        listener,
+        receive_dir,
+        bundle_staging_root,
+        |_| true,
+        |_| {},
+    )
+}
+
 pub fn accept_transfer_with_decision<D, P>(
     listener: &TcpListener,
     receive_dir: &Path,
@@ -271,6 +299,29 @@ where
         NekoDropError::Network(format!("failed to accept TCP connection: {error}"))
     })?;
     accept_transfer_stream_with_decision(&mut stream, receive_dir, decide, on_progress)
+}
+
+pub fn accept_transfer_with_decision_and_bundle_staging<D, P>(
+    listener: &TcpListener,
+    receive_dir: &Path,
+    bundle_staging_root: &Path,
+    decide: D,
+    on_progress: P,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+{
+    let (mut stream, _) = listener.accept().map_err(|error| {
+        NekoDropError::Network(format!("failed to accept TCP connection: {error}"))
+    })?;
+    accept_transfer_stream_with_decision_and_bundle_staging(
+        &mut stream,
+        receive_dir,
+        bundle_staging_root,
+        decide,
+        on_progress,
+    )
 }
 
 pub fn accept_transfer_stream_with_decision<D, P>(
@@ -291,6 +342,40 @@ where
             decide,
             on_progress,
         ),
+        IncomingControlFrame::SessionHello(_) => Err(NekoDropError::Network(
+            "session hello requires encrypted control receive entry".into(),
+        )),
+        IncomingControlFrame::DeviceHello(_) => Err(NekoDropError::Network(
+            "device hello is not a transfer offer".into(),
+        )),
+        IncomingControlFrame::PairingRequest(_) => Err(NekoDropError::Network(
+            "pairing request is not a transfer offer".into(),
+        )),
+    }
+}
+
+pub fn accept_transfer_stream_with_decision_and_bundle_staging<D, P>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    bundle_staging_root: &Path,
+    decide: D,
+    on_progress: P,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+{
+    match read_incoming_control_frame(stream)? {
+        IncomingControlFrame::FileOffer(offer) => {
+            accept_transfer_offer_stream_with_decision_and_bundle_staging(
+                stream,
+                receive_dir,
+                bundle_staging_root,
+                offer,
+                decide,
+                on_progress,
+            )
+        }
         IncomingControlFrame::SessionHello(_) => Err(NekoDropError::Network(
             "session hello requires encrypted control receive entry".into(),
         )),
@@ -343,6 +428,7 @@ where
     accept_plain_incoming_frame_with_cancel(
         stream,
         receive_dir,
+        None,
         frame,
         decide,
         handle_pairing,
@@ -373,6 +459,7 @@ where
             accept_transfer_offer_stream_with_encrypted_decision_and_cancel(
                 stream,
                 receive_dir,
+                None,
                 offer,
                 session,
                 decide,
@@ -384,6 +471,52 @@ where
         frame => accept_plain_incoming_frame_with_cancel(
             stream,
             receive_dir,
+            None,
+            frame,
+            decide,
+            handle_pairing,
+            on_progress,
+            || should_cancel(),
+        ),
+    }
+}
+
+pub fn accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel<D, H, P, C>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    bundle_staging_root: &Path,
+    receiver_identity: &DeviceIdentity,
+    decide: D,
+    handle_pairing: H,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<IncomingSessionReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
+    match read_incoming_control_frame(stream)? {
+        IncomingControlFrame::SessionHello(hello) => {
+            let session = accept_responder_session(stream, receiver_identity, hello)?;
+            let offer = read_session_transfer_offer(stream, &session.keys)?;
+            accept_transfer_offer_stream_with_encrypted_decision_and_cancel(
+                stream,
+                receive_dir,
+                Some(bundle_staging_root),
+                offer,
+                session,
+                decide,
+                on_progress,
+                || should_cancel(),
+            )
+            .map(IncomingSessionReport::Transfer)
+        }
+        frame => accept_plain_incoming_frame_with_cancel(
+            stream,
+            receive_dir,
+            Some(bundle_staging_root),
             frame,
             decide,
             handle_pairing,
@@ -396,6 +529,7 @@ where
 fn accept_plain_incoming_frame_with_cancel<D, H, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
+    bundle_staging_root: Option<&Path>,
     frame: IncomingControlFrame,
     decide: D,
     handle_pairing: H,
@@ -419,6 +553,7 @@ where
             accept_transfer_offer_stream_with_decision_and_cancel(
                 stream,
                 receive_dir,
+                bundle_staging_root,
                 offer,
                 decide,
                 on_progress,
@@ -448,6 +583,7 @@ where
     accept_transfer_offer_stream_with_decision_and_cancel(
         stream,
         receive_dir,
+        None,
         offer,
         decide,
         on_progress,
@@ -458,6 +594,7 @@ where
 fn accept_transfer_offer_stream_with_decision_and_cancel<D, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
+    bundle_staging_root: Option<&Path>,
     offer: TransferOffer,
     decide: D,
     on_progress: P,
@@ -471,6 +608,7 @@ where
     accept_transfer_offer_stream_with_decision_writer_and_cancel(
         stream,
         receive_dir,
+        bundle_staging_root,
         offer,
         decide,
         on_progress,
@@ -481,9 +619,36 @@ where
     )
 }
 
+fn accept_transfer_offer_stream_with_decision_and_bundle_staging<D, P>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    bundle_staging_root: &Path,
+    offer: TransferOffer,
+    decide: D,
+    on_progress: P,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+{
+    accept_transfer_offer_stream_with_decision_writer_and_cancel(
+        stream,
+        receive_dir,
+        Some(bundle_staging_root),
+        offer,
+        decide,
+        on_progress,
+        || false,
+        |stream, offer, decision| {
+            write_transfer_decision_for_transfer(stream, &offer.transfer_id, decision)
+        },
+    )
+}
+
 fn accept_transfer_offer_stream_with_encrypted_decision_and_cancel<D, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
+    bundle_staging_root: Option<&Path>,
     offer: TransferOffer,
     mut session: ActiveSessionControl,
     decide: D,
@@ -499,6 +664,7 @@ where
     accept_transfer_offer_stream_with_decision_writer_and_cancel(
         stream,
         receive_dir,
+        bundle_staging_root,
         offer,
         decide,
         on_progress,
@@ -521,6 +687,7 @@ where
 fn accept_transfer_offer_stream_with_decision_writer_and_cancel<D, P, C, W>(
     stream: &mut TcpStream,
     receive_dir: &Path,
+    bundle_staging_root: Option<&Path>,
     offer: TransferOffer,
     decide: D,
     on_progress: P,
@@ -648,6 +815,7 @@ where
             offer.file_count
         )));
     }
+    let bundle = maybe_stage_received_bundle(receive_dir, &offer.root_name, bundle_staging_root)?;
 
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
@@ -656,7 +824,39 @@ where
         sender_device_name: offer.sender_device_name,
         sender_public_key_fingerprint: offer.sender_public_key_fingerprint,
         files,
+        bundle,
     })
+}
+
+fn maybe_stage_received_bundle(
+    receive_dir: &Path,
+    root_name: &str,
+    bundle_staging_root: Option<&Path>,
+) -> NekoDropResult<Option<ReceivedBundleReport>> {
+    let Some(bundle_staging_root) = bundle_staging_root else {
+        return Ok(None);
+    };
+    let received_root = safe_join_receive_path(receive_dir, root_name)?;
+    if !received_root.join("bundle.json").exists() {
+        return Ok(None);
+    }
+    stage_bundle_directory(&received_root, bundle_staging_root)
+        .map(staged_bundle_to_report)
+        .map(Some)
+}
+
+fn staged_bundle_to_report(staged: StagedBundle) -> ReceivedBundleReport {
+    let manifest = staged.detected.manifest;
+    ReceivedBundleReport {
+        bundle_id: manifest.bundle_id,
+        bundle_type: manifest.bundle_type,
+        display_name: manifest.display_name,
+        source_app: manifest.source_app,
+        file_count: manifest.summary.file_count,
+        total_bytes: manifest.summary.total_bytes,
+        staging_path: staged.staging_path,
+        import_allowed: staged.detected.import_policy == BundleImportPolicy::ImportAllowed,
+    }
 }
 
 fn validate_offer_sender_identity_matches_session(
@@ -894,7 +1094,7 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    use nekolink_protocol::{DeviceKind, PlatformKind};
+    use nekolink_protocol::{BundleType, DeviceKind, PlatformKind};
 
     use super::*;
 
@@ -932,6 +1132,7 @@ mod tests {
         assert_eq!(send_report.plan.file_count(), 2);
         assert_eq!(send_report.sent_files.len(), 2);
         assert_eq!(receive_report.files.len(), 2);
+        assert_eq!(receive_report.bundle, None);
         assert!(receive_report.files.iter().all(|file| file.verified));
         assert_eq!(
             fs::read_to_string(receive_dir.join("drop/nested/one.txt")).unwrap(),
@@ -941,6 +1142,39 @@ mod tests {
             fs::read_to_string(receive_dir.join("drop/two.txt")).unwrap(),
             "two"
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn service_reports_staged_bundle_after_receive_completes() {
+        let dir = unique_temp_dir("service-bundle-detected");
+        let source_root = create_valid_bundle_source(&dir);
+        let receive_dir = dir.join("receive");
+        let staging_root = dir.join("staging");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let staging_root = staging_root.clone();
+            move || accept_transfer_with_bundle_staging(&listener, &receive_dir, &staging_root)
+        });
+
+        send_paths(&endpoint, &[source_root]).unwrap();
+        let receive_report = receiver.join().unwrap().unwrap();
+        let bundle = receive_report.bundle.expect("bundle should be reported");
+
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.bundle_type, BundleType::Skill);
+        assert_eq!(bundle.display_name, "voice_transcribe");
+        assert_eq!(bundle.source_app, "OpenNeko");
+        assert_eq!(bundle.file_count, 2);
+        assert_eq!(bundle.total_bytes, 28);
+        assert_eq!(bundle.staging_path, staging_root.join("bundle_1234567890"));
+        assert!(bundle.import_allowed);
+        assert!(bundle.staging_path.join("bundle.json").is_file());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1302,5 +1536,84 @@ mod tests {
                 Capability::EncryptedSession,
             ],
         )
+    }
+
+    fn create_valid_bundle_source(dir: &Path) -> PathBuf {
+        let root = dir.join("source").join("bundle");
+        fs::create_dir_all(root.join("files")).unwrap();
+        fs::write(
+            root.join("files").join("manifest.json"),
+            b"{\"kind\":\"skill\"}",
+        )
+        .unwrap();
+        fs::write(root.join("files").join("content.bin"), b"hello bundle").unwrap();
+        fs::write(
+            root.join("bundle.json"),
+            r#"{
+  "schema": "nekolink.bundle.v1",
+  "bundle_id": "bundle_1234567890",
+  "bundle_type": "skill",
+  "display_name": "voice_transcribe",
+  "source_app": "OpenNeko",
+  "created_at": "2026-06-14T10:30:00Z",
+  "sender": {
+    "device_id": "neko-device-1234567890",
+    "device_name": "MacBook",
+    "fingerprint": "sha256:0123456789abcdef"
+  },
+  "compatibility": {
+    "min_nekolink_version": 1,
+    "required_capabilities": ["bundle_transfer"]
+  },
+  "summary": {
+    "file_count": 2,
+    "total_bytes": 28
+  },
+  "files": [
+    {
+      "path": "files/manifest.json",
+      "size": 16,
+      "sha256": "0bc3f835203da0c2bbb44658e66c6bc0449e7f00bd9bd8fecd5d12283baaf5c9",
+      "role": "manifest"
+    },
+    {
+      "path": "files/content.bin",
+      "size": 12,
+      "sha256": "04cfecf64270c52b81da10bf6890b24fa73ee79715c44d1bc443dd9dd1de04d0",
+      "role": "payload"
+    }
+  ]
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("checksums.json"),
+            r#"{
+  "algorithm": "sha256",
+  "files": {
+    "files/manifest.json": "0bc3f835203da0c2bbb44658e66c6bc0449e7f00bd9bd8fecd5d12283baaf5c9",
+    "files/content.bin": "04cfecf64270c52b81da10bf6890b24fa73ee79715c44d1bc443dd9dd1de04d0"
+  }
+}"#,
+        )
+        .unwrap();
+        fs::write(
+            root.join("permissions.json"),
+            r#"{
+  "requested_scopes": ["skill.install"],
+  "writes": [
+    {
+      "target": "openneko.skills",
+      "mode": "create_only"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": []
+  }
+}"#,
+        )
+        .unwrap();
+        root
     }
 }
