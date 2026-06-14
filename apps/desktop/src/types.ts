@@ -81,6 +81,16 @@ export interface DiscoveryStatusDto {
   last_error: string | null;
 }
 
+export interface DesktopRealtimeSnapshotDto {
+  receive_status: string | null;
+  receive_session: ReceiveSessionDto | null;
+  receive_report: ReceiveReportDto | null;
+  pending_receive_offer: PendingReceiveOfferDto | null;
+  pending_pairing_request: PendingPairingRequestDto | null;
+  transfer_status: TransferStatusDto | null;
+  discovery_status: DiscoveryStatusDto;
+}
+
 export interface TransferDto {
   id: string;
   root_name: string;

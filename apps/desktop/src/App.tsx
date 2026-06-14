@@ -42,6 +42,7 @@ import {
 } from "./transferProgress";
 import type {
   AppSnapshot,
+  DesktopRealtimeSnapshotDto,
   DeviceDto,
   DiscoveryStatusDto,
   ManualBundleCreateDto,
@@ -348,31 +349,15 @@ export function App() {
     if (realtimeRefreshInFlight.current) return;
     realtimeRefreshInFlight.current = true;
     try {
-      const [
-        status,
-        session,
-        report,
-        pendingOffer,
-        pairingRequest,
-        nextTransferStatus,
-        discovery
-      ] = await Promise.all([
-        invokeCommand<string | null>("get_receive_status"),
-        invokeCommand<ReceiveSessionDto | null>("get_receive_session"),
-        invokeCommand<ReceiveReportDto | null>("get_last_receive_report"),
-        invokeCommand<PendingReceiveOfferDto | null>("get_pending_receive_offer"),
-        invokeCommand<PendingPairingRequestDto | null>("get_pending_pairing_request"),
-        invokeCommand<TransferStatusDto | null>("get_transfer_status"),
-        invokeCommand<DiscoveryStatusDto>("get_discovery_status")
-      ]);
-      setReceiveStatus((current) => keepIfEqual(current, status));
-      setReceiveSession((current) => keepIfEqual(current, session));
-      setReceiveReport((current) => keepIfEqual(current, report));
-      setPendingReceiveOffer((current) => keepIfEqual(current, pendingOffer));
-      setPendingPairingRequest((current) => keepIfEqual(current, pairingRequest));
-      setTransferStatus((current) => keepIfEqual(current, nextTransferStatus));
-      setDiscoveryStatus((current) => keepIfEqual(current, discovery));
-      if (pendingOffer || pairingRequest) setMode("receive");
+      const nextSnapshot = await invokeCommand<DesktopRealtimeSnapshotDto>("get_desktop_realtime_snapshot");
+      setReceiveStatus((current) => keepIfEqual(current, nextSnapshot.receive_status));
+      setReceiveSession((current) => keepIfEqual(current, nextSnapshot.receive_session));
+      setReceiveReport((current) => keepIfEqual(current, nextSnapshot.receive_report));
+      setPendingReceiveOffer((current) => keepIfEqual(current, nextSnapshot.pending_receive_offer));
+      setPendingPairingRequest((current) => keepIfEqual(current, nextSnapshot.pending_pairing_request));
+      setTransferStatus((current) => keepIfEqual(current, nextSnapshot.transfer_status));
+      setDiscoveryStatus((current) => keepIfEqual(current, nextSnapshot.discovery_status));
+      if (nextSnapshot.pending_receive_offer || nextSnapshot.pending_pairing_request) setMode("receive");
     } finally {
       realtimeRefreshInFlight.current = false;
     }
