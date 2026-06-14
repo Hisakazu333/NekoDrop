@@ -194,6 +194,7 @@ bundle 规格看 [docs/BUNDLE_SPEC.md](docs/BUNDLE_SPEC.md)。为什么按这个
 - [下一阶段分析](docs/NEXT_PHASE_ANALYSIS.md)
 - [模块边界](docs/MODULES.md)
 - [测试矩阵](docs/testing/LARGE_FILE_TRANSFER_MATRIX.md)
+- [贡献指南](CONTRIBUTING.md)
 
 ## 许可
 
