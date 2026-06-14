@@ -18,11 +18,11 @@ use nekodrop_network::{
     TransferProgress,
 };
 use nekodrop_service::{
-    accept_incoming_stream_with_encrypted_control_and_cancel,
+    accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel,
     create_transfer_plan as create_service_transfer_plan, create_transfer_plan_with_scan_progress,
     send_pairing_request, send_plan_with_encrypted_control_and_cancel, IncomingSessionReport,
-    TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport, TransferSendReport,
-    TransferSourceFile, TransferSourcePlan,
+    ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport,
+    TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
 use nekodrop_storage::{build_resume_plan_for_files, ResumeExpectedFile, ResumePlan};
 use nekolink_protocol::DeviceIdentity;
@@ -34,6 +34,7 @@ use crate::app_state::{
     ActiveReceiveSession, AppState, PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer,
     PendingReceiveResumeSummary, ReceiveDecision, TransferStatusState,
 };
+use crate::device_identity::app_config_dir;
 use crate::network::{local_lan_ips, primary_lan_ip};
 use crate::transfer_history::{
     clear_transfer_history_records, delete_transfer_history_record, new_transfer_history_record,
@@ -193,6 +194,18 @@ pub struct ReceivedFileDto {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct ReceivedBundleDto {
+    pub bundle_id: String,
+    pub bundle_type: String,
+    pub display_name: String,
+    pub source_app: String,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub staging_path: String,
+    pub import_allowed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ReceiveReportDto {
     pub transfer_id: String,
     pub root_name: String,
@@ -200,6 +213,7 @@ pub struct ReceiveReportDto {
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
     pub file_count: usize,
+    pub bundle: Option<ReceivedBundleDto>,
     pub files: Vec<ReceivedFileDto>,
 }
 
@@ -1155,6 +1169,13 @@ pub fn start_receive_once(
     listener
         .set_nonblocking(true)
         .map_err(|error| format!("无法设置收件监听状态: {error}"))?;
+    let bundle_staging_root = bundle_staging_root()?;
+    fs::create_dir_all(&bundle_staging_root).map_err(|error| {
+        format!(
+            "无法创建 bundle 暂存目录 {}: {error}",
+            bundle_staging_root.display()
+        )
+    })?;
     let local_addr = listener
         .local_addr()
         .map_err(|error| format!("无法读取监听地址: {error}"))?;
@@ -1230,6 +1251,7 @@ pub fn start_receive_once(
     let active_receive_cancel = state.active_receive_cancel.clone();
     let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
+    let bundle_staging_root_for_thread = bundle_staging_root.clone();
     thread::spawn(move || loop {
         if cancel.load(Ordering::SeqCst) {
             if let Ok(mut status) = receive_status.lock() {
@@ -1294,41 +1316,44 @@ pub fn start_receive_once(
                 if let Ok(mut active_cancel) = active_receive_cancel.lock() {
                     *active_cancel = Some(current_receive_cancel.clone());
                 }
-                let result = accept_incoming_stream_with_encrypted_control_and_cancel(
-                    &mut stream,
-                    &receive_dir_for_thread,
-                    &local_identity,
-                    move |offer| {
-                        let resume_summary =
-                            pending_resume_summary_from_offer(&receive_dir_for_decision, offer);
-                        wait_for_receive_decision(
-                            offer,
-                            &pending_for_decision,
-                            &status_for_decision,
-                            receive_policy,
-                            &trusted_for_decision,
-                            resume_summary,
-                        )
-                    },
-                    move |request| {
-                        wait_for_pairing_decision(
-                            request,
-                            &peer_host_for_pairing,
-                            &pending_for_pairing,
-                            &trusted_for_pairing,
-                            &local_for_pairing,
-                        )
-                    },
-                    move |event| {
-                        if let Some(status) = status_from_progress_event("receive", None, event) {
-                            set_transfer_status(&status_for_progress, status);
-                        }
-                    },
-                    || {
-                        cancel.load(Ordering::SeqCst)
-                            || current_receive_cancel.load(Ordering::SeqCst)
-                    },
-                );
+                let result =
+                    accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel(
+                        &mut stream,
+                        &receive_dir_for_thread,
+                        &bundle_staging_root_for_thread,
+                        &local_identity,
+                        move |offer| {
+                            let resume_summary =
+                                pending_resume_summary_from_offer(&receive_dir_for_decision, offer);
+                            wait_for_receive_decision(
+                                offer,
+                                &pending_for_decision,
+                                &status_for_decision,
+                                receive_policy,
+                                &trusted_for_decision,
+                                resume_summary,
+                            )
+                        },
+                        move |request| {
+                            wait_for_pairing_decision(
+                                request,
+                                &peer_host_for_pairing,
+                                &pending_for_pairing,
+                                &trusted_for_pairing,
+                                &local_for_pairing,
+                            )
+                        },
+                        move |event| {
+                            if let Some(status) = status_from_progress_event("receive", None, event)
+                            {
+                                set_transfer_status(&status_for_progress, status);
+                            }
+                        },
+                        || {
+                            cancel.load(Ordering::SeqCst)
+                                || current_receive_cancel.load(Ordering::SeqCst)
+                        },
+                    );
                 clear_active_receive_cancel(&active_receive_cancel, &current_receive_cancel);
                 if let Ok(mut status) = receive_status.lock() {
                     *status = Some(match &result {
@@ -1960,6 +1985,7 @@ fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
         sender_device_name: report.sender_device_name.clone(),
         sender_public_key_fingerprint: report.sender_public_key_fingerprint.clone(),
         file_count: report.files.len(),
+        bundle: report.bundle.as_ref().map(received_bundle_to_dto),
         files: report
             .files
             .iter()
@@ -1972,6 +1998,29 @@ fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
                 verified: file.verified,
             })
             .collect(),
+    }
+}
+
+fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
+    ReceivedBundleDto {
+        bundle_id: bundle.bundle_id.clone(),
+        bundle_type: bundle_type_label(bundle.bundle_type).to_string(),
+        display_name: bundle.display_name.clone(),
+        source_app: bundle.source_app.clone(),
+        file_count: bundle.file_count,
+        total_bytes: bundle.total_bytes,
+        staging_path: bundle.staging_path.display().to_string(),
+        import_allowed: bundle.import_allowed,
+    }
+}
+
+fn bundle_type_label(bundle_type: nekolink_protocol::BundleType) -> &'static str {
+    match bundle_type {
+        nekolink_protocol::BundleType::Skill => "skill",
+        nekolink_protocol::BundleType::Session => "session",
+        nekolink_protocol::BundleType::Workspace => "workspace",
+        nekolink_protocol::BundleType::AgentProfile => "agent_profile",
+        nekolink_protocol::BundleType::ConfigSnapshot => "config_snapshot",
     }
 }
 
@@ -1992,6 +2041,10 @@ fn received_root_name(report: &TransferReceiveReport) -> String {
     } else {
         root.to_string()
     }
+}
+
+fn bundle_staging_root() -> Result<PathBuf, String> {
+    Ok(app_config_dir()?.join("bundle_staging"))
 }
 
 fn push_receive_failure_history(
@@ -3254,6 +3307,40 @@ mod tests {
         assert_eq!(dto.file_count, 100);
         assert_eq!(dto.files.len(), RECEIVE_FILE_PREVIEW_LIMIT);
         assert_eq!(dto.files[0].manifest_path, "drop/file-000.txt");
+    }
+
+    #[test]
+    fn receive_report_dto_includes_bundle_preview() {
+        let report = TransferReceiveReport {
+            transfer_id: "transfer-a".to_string(),
+            root_name: "bundle".to_string(),
+            sender_device_id: None,
+            sender_device_name: None,
+            sender_public_key_fingerprint: None,
+            bundle: Some(ReceivedBundleReport {
+                bundle_id: "bundle_1234567890".to_string(),
+                bundle_type: nekolink_protocol::BundleType::Skill,
+                display_name: "voice_transcribe".to_string(),
+                source_app: "OpenNeko".to_string(),
+                file_count: 2,
+                total_bytes: 28,
+                staging_path: PathBuf::from("/tmp/bundle_1234567890"),
+                import_allowed: true,
+            }),
+            files: Vec::new(),
+        };
+
+        let dto = receive_report_to_dto(&report);
+        let bundle = dto.bundle.expect("bundle preview should be exposed");
+
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.bundle_type, "skill");
+        assert_eq!(bundle.display_name, "voice_transcribe");
+        assert_eq!(bundle.source_app, "OpenNeko");
+        assert_eq!(bundle.file_count, 2);
+        assert_eq!(bundle.total_bytes, 28);
+        assert_eq!(bundle.staging_path, "/tmp/bundle_1234567890");
+        assert!(bundle.import_allowed);
     }
 
     #[test]
