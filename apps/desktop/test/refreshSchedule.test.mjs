@@ -35,3 +35,10 @@ test("directory refresh is scoped to pages that need device or transfer lists", 
   assert.match(refreshScheduleSource, /mode === "transfers"/);
   assert.match(refreshScheduleSource, /hasActiveTransfer/);
 });
+
+test("directory refresh can run immediately when entering a page that owns lists", () => {
+  assert.match(refreshScheduleSource, /export function shouldRefreshDirectoryOnModeActivation/);
+  assert.match(refreshScheduleSource, /previousMode !== null/);
+  assert.match(refreshScheduleSource, /mode !== previousMode/);
+  assert.match(refreshScheduleSource, /shouldRefreshDirectoryForMode\(mode, hasActiveTransfer\)/);
+});

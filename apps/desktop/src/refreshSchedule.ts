@@ -15,6 +15,18 @@ export function shouldRefreshDirectoryForMode(
   );
 }
 
+export function shouldRefreshDirectoryOnModeActivation(
+  mode: string,
+  previousMode: string | null,
+  hasActiveTransfer: boolean
+) {
+  return (
+    previousMode !== null &&
+    mode !== previousMode &&
+    shouldRefreshDirectoryForMode(mode, hasActiveTransfer)
+  );
+}
+
 export function shouldRunDirectoryRefresh(
   nowMs: number,
   lastRefreshMs: number,
