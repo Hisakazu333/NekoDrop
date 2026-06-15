@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     connect_endpoint, read_incoming_control_frame, read_pairing_decision,
-    read_session_control_envelope, read_session_transfer_offer, read_transfer_decision,
+    read_session_control_envelope, read_session_control_payload_kind_once, read_transfer_decision,
     read_verified_session_ready, receive_file_frames_with_expected_count,
     send_file_frames_with_resume_and_cancel, write_pairing_decision, write_pairing_request,
     write_session_hello, write_session_ready, write_session_transfer_decision,
@@ -454,8 +454,8 @@ where
 {
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::SessionHello(hello) => {
-            let session = accept_responder_session(stream, receiver_identity, hello)?;
-            let offer = read_session_transfer_offer(stream, &session.keys)?;
+            let mut session = accept_responder_session(stream, receiver_identity, hello)?;
+            let offer = session.read_transfer_offer(stream)?;
             accept_transfer_offer_stream_with_encrypted_decision_and_cancel(
                 stream,
                 receive_dir,
@@ -499,8 +499,8 @@ where
 {
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::SessionHello(hello) => {
-            let session = accept_responder_session(stream, receiver_identity, hello)?;
-            let offer = read_session_transfer_offer(stream, &session.keys)?;
+            let mut session = accept_responder_session(stream, receiver_identity, hello)?;
+            let offer = session.read_transfer_offer(stream)?;
             accept_transfer_offer_stream_with_encrypted_decision_and_cancel(
                 stream,
                 receive_dir,
@@ -942,6 +942,20 @@ impl ActiveSessionControl {
         }
         Ok(decision)
     }
+
+    fn read_transfer_offer<S>(&mut self, stream: &mut S) -> NekoDropResult<TransferOffer>
+    where
+        S: Read,
+    {
+        let offer: TransferOffer = read_session_control_payload_kind_once(
+            stream,
+            &self.keys,
+            &mut self.receive_window,
+            nekolink_protocol::MessageKind::FileOffer,
+        )?;
+        offer.validate().map_err(protocol_error_to_service)?;
+        Ok(offer)
+    }
 }
 
 fn start_initiator_session<S>(
@@ -1358,6 +1372,63 @@ mod tests {
         );
         let error = session
             .read_transfer_decision(&mut std::io::Cursor::new(second_buffer))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("replayed session frame"));
+    }
+
+    #[test]
+    fn active_session_control_rejects_replayed_encrypted_offer() {
+        let mut session = ActiveSessionControl {
+            session_id: "session-1".to_string(),
+            cipher: nekolink_protocol::SESSION_CIPHER_XCHACHA20POLY1305.to_string(),
+            keys: SessionKeyMaterial {
+                send_key: [23_u8; nekolink_protocol::SESSION_TRAFFIC_KEY_LEN],
+                receive_key: [23_u8; nekolink_protocol::SESSION_TRAFFIC_KEY_LEN],
+            },
+            counters: SessionTrafficCounters::default(),
+            receive_window: SessionReplayWindow::default(),
+            message_counter: 0,
+            peer_identity: test_identity("neko-device-peer", "Peer"),
+        };
+        let offer = TransferOffer::new(
+            "transfer-1",
+            "drop",
+            vec![TransferOfferFile {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 5,
+                sha256: "abc123".to_string(),
+            }],
+        );
+        let header = nekolink_protocol::SessionTrafficFrameHeader::new(
+            nekolink_protocol::SESSION_CIPHER_XCHACHA20POLY1305,
+            nekolink_protocol::SessionFrameKind::Control,
+            nekolink_protocol::SessionFrameDirection::Send,
+            6,
+        )
+        .unwrap();
+        let envelope = nekolink_protocol::EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:offer-1",
+            &session.keys,
+            header,
+            nekolink_protocol::MessageKind::FileOffer,
+            &offer,
+        )
+        .unwrap();
+        let mut first_buffer = Vec::new();
+        let mut second_buffer = Vec::new();
+        nekodrop_network::write_session_control_envelope(&mut first_buffer, &envelope).unwrap();
+        nekodrop_network::write_session_control_envelope(&mut second_buffer, &envelope).unwrap();
+
+        assert_eq!(
+            session
+                .read_transfer_offer(&mut std::io::Cursor::new(first_buffer))
+                .unwrap(),
+            offer
+        );
+        let error = session
+            .read_transfer_offer(&mut std::io::Cursor::new(second_buffer))
             .unwrap_err();
 
         assert!(error.to_string().contains("replayed session frame"));
