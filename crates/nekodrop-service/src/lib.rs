@@ -275,21 +275,48 @@ pub fn send_plan_with_authenticated_session_and_cancel<S, F, C>(
     sender_identity: &DeviceIdentity,
     sign_identity_binding: S,
     on_progress: F,
-    mut should_cancel: C,
+    should_cancel: C,
 ) -> NekoDropResult<TransferSendReport>
 where
     S: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
     F: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
+    send_plan_with_authenticated_session_peer_verifier_and_cancel(
+        endpoint,
+        plan,
+        sender_identity,
+        sign_identity_binding,
+        |_, _| Ok(()),
+        on_progress,
+        should_cancel,
+    )
+}
+
+pub fn send_plan_with_authenticated_session_peer_verifier_and_cancel<S, V, F, C>(
+    endpoint: &Endpoint,
+    plan: TransferSourcePlan,
+    sender_identity: &DeviceIdentity,
+    sign_identity_binding: S,
+    verify_peer_identity: V,
+    on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<TransferSendReport>
+where
+    S: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
+    V: FnMut(&DeviceIdentity, &SignedSessionIdentityBinding) -> NekoDropResult<()>,
+    F: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+{
     let outgoing = outgoing_frames_from_plan(&plan);
     let offer = offer_from_plan_with_sender_identity(&plan, Some(sender_identity));
     let mut stream = connect_endpoint(endpoint)?;
-    let mut session = start_authenticated_initiator_session(
+    let mut session = start_authenticated_initiator_session_with_peer_verifier(
         &mut stream,
         sender_identity,
         &offer.transfer_id,
         sign_identity_binding,
+        verify_peer_identity,
     )?;
     let offer_message_id = session.next_message_id("offer");
     let offer_header = session.next_send_control_header()?;
@@ -618,7 +645,7 @@ pub fn accept_incoming_stream_with_authenticated_control_bundle_staging_and_canc
     decide: D,
     handle_pairing: H,
     on_progress: P,
-    mut should_cancel: C,
+    should_cancel: C,
 ) -> NekoDropResult<IncomingSessionReport>
 where
     D: FnOnce(&TransferOffer) -> bool,
@@ -627,13 +654,55 @@ where
     S: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
     C: FnMut() -> bool,
 {
+    accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel(
+        stream,
+        receive_dir,
+        bundle_staging_root,
+        receiver_identity,
+        sign_identity_binding,
+        |_, _| Ok(()),
+        decide,
+        handle_pairing,
+        on_progress,
+        should_cancel,
+    )
+}
+
+pub fn accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel<
+    D,
+    H,
+    P,
+    S,
+    V,
+    C,
+>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    bundle_staging_root: &Path,
+    receiver_identity: &DeviceIdentity,
+    sign_identity_binding: S,
+    verify_peer_identity: V,
+    decide: D,
+    handle_pairing: H,
+    on_progress: P,
+    mut should_cancel: C,
+) -> NekoDropResult<IncomingSessionReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    H: FnOnce(&PairingRequestPayload) -> PairingDecisionPayload,
+    P: FnMut(TransferProgressEvent),
+    S: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
+    V: FnMut(&DeviceIdentity, &SignedSessionIdentityBinding) -> NekoDropResult<()>,
+    C: FnMut() -> bool,
+{
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::SessionHello(hello) => {
-            let mut session = accept_authenticated_responder_session(
+            let mut session = accept_authenticated_responder_session_with_peer_verifier(
                 stream,
                 receiver_identity,
                 hello,
                 sign_identity_binding,
+                verify_peer_identity,
             )?;
             let offer = session.read_transfer_offer(stream)?;
             accept_transfer_offer_stream_with_encrypted_decision_and_cancel(
@@ -1237,15 +1306,17 @@ where
     )
 }
 
-fn start_authenticated_initiator_session<S, F>(
+fn start_authenticated_initiator_session_with_peer_verifier<S, F, V>(
     stream: &mut S,
     sender_identity: &DeviceIdentity,
     transfer_id: &str,
     sign_identity_binding: F,
+    verify_peer_identity: V,
 ) -> NekoDropResult<ActiveSessionControl>
 where
     S: Read + Write,
     F: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
+    V: FnMut(&DeviceIdentity, &SignedSessionIdentityBinding) -> NekoDropResult<()>,
 {
     require_encrypted_session_identity(sender_identity)?;
     let key_pair = SessionEphemeralKeyPair::generate().map_err(protocol_error_to_service)?;
@@ -1258,7 +1329,12 @@ where
     let ready = read_verified_session_ready(stream, &hello)?;
     let handshake =
         VerifiedSessionHandshake::from_ready(&hello, &ready).map_err(protocol_error_to_service)?;
-    exchange_initiator_identity_binding(stream, &handshake, sign_identity_binding)?;
+    exchange_initiator_identity_binding(
+        stream,
+        &handshake,
+        sign_identity_binding,
+        verify_peer_identity,
+    )?;
     active_session_from_verified_handshake(
         handshake,
         sender_identity,
@@ -1293,14 +1369,16 @@ fn accept_responder_session(
     )
 }
 
-fn accept_authenticated_responder_session<F>(
+fn accept_authenticated_responder_session_with_peer_verifier<F, V>(
     stream: &mut TcpStream,
     receiver_identity: &DeviceIdentity,
     hello: SessionHelloPayload,
     sign_identity_binding: F,
+    verify_peer_identity: V,
 ) -> NekoDropResult<ActiveSessionControl>
 where
     F: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
+    V: FnMut(&DeviceIdentity, &SignedSessionIdentityBinding) -> NekoDropResult<()>,
 {
     require_encrypted_session_identity(receiver_identity)?;
     let key_pair = SessionEphemeralKeyPair::generate().map_err(protocol_error_to_service)?;
@@ -1314,7 +1392,12 @@ where
     write_session_ready(stream, &ready)?;
     let handshake =
         VerifiedSessionHandshake::from_ready(&hello, &ready).map_err(protocol_error_to_service)?;
-    exchange_responder_identity_binding(stream, &handshake, sign_identity_binding)?;
+    exchange_responder_identity_binding(
+        stream,
+        &handshake,
+        sign_identity_binding,
+        verify_peer_identity,
+    )?;
     active_session_from_verified_handshake(
         handshake,
         receiver_identity,
@@ -1375,6 +1458,10 @@ fn exchange_initiator_identity_binding<S, F>(
     stream: &mut S,
     handshake: &VerifiedSessionHandshake,
     mut sign_identity_binding: F,
+    mut verify_peer_identity: impl FnMut(
+        &DeviceIdentity,
+        &SignedSessionIdentityBinding,
+    ) -> NekoDropResult<()>,
 ) -> NekoDropResult<()>
 where
     S: Read + Write,
@@ -1388,13 +1475,18 @@ where
     let signed_peer = read_session_identity_binding(stream)?;
     let expected_peer =
         SessionIdentityBinding::for_responder(handshake).map_err(protocol_error_to_service)?;
-    verify_signed_session_identity_binding(&signed_peer, &expected_peer, &handshake.responder)
+    verify_signed_session_identity_binding(&signed_peer, &expected_peer, &handshake.responder)?;
+    verify_peer_identity(&handshake.responder, &signed_peer)
 }
 
 fn exchange_responder_identity_binding<F>(
     stream: &mut TcpStream,
     handshake: &VerifiedSessionHandshake,
     mut sign_identity_binding: F,
+    mut verify_peer_identity: impl FnMut(
+        &DeviceIdentity,
+        &SignedSessionIdentityBinding,
+    ) -> NekoDropResult<()>,
 ) -> NekoDropResult<()>
 where
     F: FnMut(SessionIdentityBinding) -> NekoDropResult<SignedSessionIdentityBinding>,
@@ -1403,6 +1495,7 @@ where
     let expected_peer =
         SessionIdentityBinding::for_initiator(handshake).map_err(protocol_error_to_service)?;
     verify_signed_session_identity_binding(&signed_peer, &expected_peer, &handshake.initiator)?;
+    verify_peer_identity(&handshake.initiator, &signed_peer)?;
 
     let local_binding =
         SessionIdentityBinding::for_responder(handshake).map_err(protocol_error_to_service)?;
@@ -1814,7 +1907,7 @@ mod tests {
                 let IncomingControlFrame::SessionHello(hello) = frame else {
                     panic!("expected encrypted session hello");
                 };
-                accept_authenticated_responder_session(
+                accept_authenticated_responder_session_with_peer_verifier(
                     &mut stream,
                     &receiver_identity,
                     hello,
@@ -1825,13 +1918,14 @@ mod tests {
                         )
                         .map_err(protocol_error_to_service)
                     },
+                    |_, _| Ok(()),
                 )
             }
         });
 
         let sender_result = {
             let mut stream = connect_endpoint(&endpoint).unwrap();
-            start_authenticated_initiator_session(
+            start_authenticated_initiator_session_with_peer_verifier(
                 &mut stream,
                 &sender,
                 "transfer-auth-fail",
@@ -1842,6 +1936,7 @@ mod tests {
                     )
                     .map_err(protocol_error_to_service)
                 },
+                |_, _| Ok(()),
             )
         };
         let receiver_result = receiver.join().unwrap();
@@ -1852,6 +1947,138 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("public key mismatch"));
+    }
+
+    #[test]
+    fn authenticated_responder_session_applies_peer_policy_after_signature_verification() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender_key = DeviceIdentitySigningKey::from_seed([21_u8; 32]);
+        let receiver_key = DeviceIdentitySigningKey::from_seed([22_u8; 32]);
+        let sender =
+            test_identity_with_signing_key("neko-device-sender", "Sender Mac", &sender_key);
+        let receiver_identity = test_identity_with_signing_key(
+            "neko-device-receiver",
+            "Receiver Windows",
+            &receiver_key,
+        );
+
+        let receiver = thread::spawn({
+            let receiver_identity = receiver_identity.clone();
+            let receiver_key = receiver_key.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let frame = read_incoming_control_frame(&mut stream).unwrap();
+                let IncomingControlFrame::SessionHello(hello) = frame else {
+                    panic!("expected encrypted session hello");
+                };
+                accept_authenticated_responder_session_with_peer_verifier(
+                    &mut stream,
+                    &receiver_identity,
+                    hello,
+                    |binding| {
+                        nekolink_protocol::SignedSessionIdentityBinding::sign(
+                            binding,
+                            &receiver_key,
+                        )
+                        .map_err(protocol_error_to_service)
+                    },
+                    |_identity, _signed_binding| {
+                        Err(NekoDropError::Network("peer key is not trusted".into()))
+                    },
+                )
+            }
+        });
+
+        let sender_result = {
+            let mut stream = connect_endpoint(&endpoint).unwrap();
+            start_authenticated_initiator_session_with_peer_verifier(
+                &mut stream,
+                &sender,
+                "transfer-peer-policy-fail",
+                |binding| {
+                    nekolink_protocol::SignedSessionIdentityBinding::sign(binding, &sender_key)
+                        .map_err(protocol_error_to_service)
+                },
+                |_, _| Ok(()),
+            )
+        };
+        let receiver_result = receiver.join().unwrap();
+
+        assert!(sender_result.is_err());
+        assert!(receiver_result.is_err());
+        assert!(receiver_result
+            .unwrap_err()
+            .to_string()
+            .contains("peer key is not trusted"));
+    }
+
+    #[test]
+    fn authenticated_responder_session_peer_policy_can_check_signed_public_key() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender_key = DeviceIdentitySigningKey::from_seed([23_u8; 32]);
+        let receiver_key = DeviceIdentitySigningKey::from_seed([24_u8; 32]);
+        let sender =
+            test_identity_with_signing_key("neko-device-sender", "Sender Mac", &sender_key);
+        let receiver_identity = test_identity_with_signing_key(
+            "neko-device-receiver",
+            "Receiver Windows",
+            &receiver_key,
+        );
+        let sender_public_key = sender_key.public_key().public_key;
+
+        let receiver = thread::spawn({
+            let receiver_identity = receiver_identity.clone();
+            let receiver_key = receiver_key.clone();
+            let expected_public_key = sender_public_key.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let frame = read_incoming_control_frame(&mut stream).unwrap();
+                let IncomingControlFrame::SessionHello(hello) = frame else {
+                    panic!("expected encrypted session hello");
+                };
+                accept_authenticated_responder_session_with_peer_verifier(
+                    &mut stream,
+                    &receiver_identity,
+                    hello,
+                    |binding| {
+                        nekolink_protocol::SignedSessionIdentityBinding::sign(
+                            binding,
+                            &receiver_key,
+                        )
+                        .map_err(protocol_error_to_service)
+                    },
+                    |_identity, signed_binding| {
+                        if signed_binding.public_key == expected_public_key {
+                            Ok(())
+                        } else {
+                            Err(NekoDropError::Network(
+                                "peer public key does not match trusted record".into(),
+                            ))
+                        }
+                    },
+                )
+            }
+        });
+
+        let sender_result = {
+            let mut stream = connect_endpoint(&endpoint).unwrap();
+            start_authenticated_initiator_session_with_peer_verifier(
+                &mut stream,
+                &sender,
+                "transfer-peer-public-key-policy",
+                |binding| {
+                    nekolink_protocol::SignedSessionIdentityBinding::sign(binding, &sender_key)
+                        .map_err(protocol_error_to_service)
+                },
+                |_, _| Ok(()),
+            )
+        };
+        let receiver_result = receiver.join().unwrap();
+
+        assert!(sender_result.is_ok());
+        assert!(receiver_result.is_ok());
     }
 
     #[test]
