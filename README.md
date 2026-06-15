@@ -220,7 +220,7 @@ scripts/                打包和审计脚本
 
 短期优先级：
 
-1. 明文兼容策略：收口什么时候允许 `legacy_plain`，什么时候必须走 authenticated encrypted session
+1. authenticated trusted auto-accept：只在身份和长期 public key 都确认后，才考虑可信设备自动接收
 2. bundle 生命周期：补过期清理、删除状态和导入失败回滚的 UI 闭环
 3. local bridge runtime：让本机应用通过受控 API 请求发送和导入 bundle，不直接碰网络协议
 4. local bridge 授权持久化：列出、撤销、过期清理已授权应用
