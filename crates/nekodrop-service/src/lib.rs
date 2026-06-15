@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     connect_endpoint, read_incoming_control_frame, read_pairing_decision,
-    read_session_control_envelope, read_session_control_payload_kind_once, read_transfer_decision,
+    read_session_transfer_decision_once, read_session_transfer_offer_once, read_transfer_decision,
     read_verified_session_ready, receive_file_frames_with_expected_count,
     send_file_frames_with_resume_and_cancel, write_pairing_decision, write_pairing_request,
     write_session_hello, write_session_ready, write_session_transfer_decision,
@@ -907,54 +907,14 @@ impl ActiveSessionControl {
     where
         S: Read,
     {
-        let envelope = read_session_control_envelope(stream)?;
-        if !matches!(
-            envelope.payload.inner_kind,
-            nekolink_protocol::MessageKind::FileAccept
-                | nekolink_protocol::MessageKind::FileDecline
-        ) {
-            return Err(NekoDropError::Network(format!(
-                "unexpected encrypted transfer decision kind: {}",
-                envelope.payload.inner_kind.as_str()
-            )));
-        }
-        let decision: TransferDecision =
-            nekolink_protocol::EncryptedSessionPayload::open_control_once(
-                &envelope,
-                &self.keys,
-                &mut self.receive_window,
-            )
-            .map_err(protocol_error_to_service)?;
-        decision.validate().map_err(protocol_error_to_service)?;
-        if decision.accepted
-            && envelope.payload.inner_kind != nekolink_protocol::MessageKind::FileAccept
-        {
-            return Err(NekoDropError::Network(
-                "accepted encrypted transfer decision must use file.accept".into(),
-            ));
-        }
-        if !decision.accepted
-            && envelope.payload.inner_kind != nekolink_protocol::MessageKind::FileDecline
-        {
-            return Err(NekoDropError::Network(
-                "declined encrypted transfer decision must use file.decline".into(),
-            ));
-        }
-        Ok(decision)
+        read_session_transfer_decision_once(stream, &self.keys, &mut self.receive_window)
     }
 
     fn read_transfer_offer<S>(&mut self, stream: &mut S) -> NekoDropResult<TransferOffer>
     where
         S: Read,
     {
-        let offer: TransferOffer = read_session_control_payload_kind_once(
-            stream,
-            &self.keys,
-            &mut self.receive_window,
-            nekolink_protocol::MessageKind::FileOffer,
-        )?;
-        offer.validate().map_err(protocol_error_to_service)?;
-        Ok(offer)
+        read_session_transfer_offer_once(stream, &self.keys, &mut self.receive_window)
     }
 }
 
