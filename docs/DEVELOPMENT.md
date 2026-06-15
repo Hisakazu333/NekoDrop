@@ -57,24 +57,30 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 ## GitHub 开发流程
 
-本项目使用 `develop -> main` 的开发流程。
+本项目使用 `main / develop / topic branch` 的开发流程。
 
 ```text
-日常分支 -> develop -> main -> tag / release
+个人 topic branch -> develop -> main -> tag / release
 ```
 
 `main` 是发布主线，必须始终保持可构建、可测试、可打包。日常功能、修复、安全收口、UI、文档和测试 PR 默认合到 `develop`。`develop` 验证稳定后，再开 release / rollup PR 合到 `main`。
 
+`develop` 是集成分支，不是个人开发分支。不要把没完成的代码直接推到 `develop`。每个人都从 `develop` 开自己的短分支，做完后通过 PR 合回 `develop`。
+
 不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`。
+
+每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。
 
 分支命名示例：
 
 ```text
-fix/windows-path-encoding
-hardening/security-reliability
-feat/large-file-scan-status
-ui/desktop-style-refresh
-docs/release-checklist
+fix/hisakazu/windows-path-encoding
+hardening/hisakazu/security-reliability
+feat/hisakazu/large-file-scan-status
+ui/hisakazu/desktop-style-refresh
+bridge/hisakazu/localhost-runtime
+bundle/hisakazu/import-rollback
+docs/hisakazu/release-checklist
 ```
 
 从 `develop` 开分支：
@@ -82,7 +88,7 @@ docs/release-checklist
 ```bash
 git checkout develop
 git pull --ff-only
-git checkout -b security/device-identity-signing
+git checkout -b security/hisakazu/device-identity-signing
 ```
 
 每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
@@ -93,6 +99,16 @@ feat: show large file scan status
 security: harden transfer frame validation
 docs: add release checklist
 ```
+
+合并规则：
+
+- 日常 PR 合到 `develop`
+- 发布 PR 从 `develop` 合到 `main`
+- 合并前必须通过 CI
+- 日常 PR 默认 squash merge
+- 合并后的 topic branch 要删除
+- 不允许 force push 到 `main` 或 `develop`
+- 如果 `develop -> main` 使用 rebase 合并，合并后把 `develop` 同步到 `main` 的发布点
 
 合并前至少跑：
 
