@@ -91,6 +91,29 @@ export interface LocalBridgeAuthorizationRevokeDto {
   authorizations: LocalBridgeAuthorizationDto[];
 }
 
+export interface LocalBridgePendingActionDto {
+  request_id: string;
+  action_kind: "bundle.send" | "bundle.import" | string;
+  client_id: string;
+  client_display_name: string;
+  bundle_type: string | null;
+  target_device_id: string | null;
+  staged_bundle_id: string | null;
+  expected_bundle_type: string | null;
+  require_trusted_device: boolean | null;
+  requested_at_ms: number;
+  bundle_root: string | null;
+}
+
+export interface LocalBridgePendingActionListDto {
+  actions: LocalBridgePendingActionDto[];
+}
+
+export interface LocalBridgePendingActionRemoveDto {
+  removed: boolean;
+  actions: LocalBridgePendingActionDto[];
+}
+
 export interface LocalBridgeRuntimeStatusDto {
   active: boolean;
   bind_host: string;
