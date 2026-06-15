@@ -84,7 +84,7 @@
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
 | NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录；桌面端会清理过期暂存，删除和导入失败状态会留在收件流程里。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
-| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测。授权申请响应会带回 scope、reason、ttl 和短授权码；用户确认授权码后，进程内 runtime 会记录该 client 的临时权限，并让已授权 client 通过发送/导入门控，但真实 send/import runtime 仍未接。localhost server、授权持久化和外部应用接入还没有接入。 |
+| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测。桌面端启动时会开启只绑定 `127.0.0.1` 的 localhost runtime，只接受 `POST /bridge/request`，请求体有大小上限；只读请求和授权申请走同一套 handler。用户确认授权码后，进程内 runtime 会记录该 client 的临时权限，并让已授权 client 通过发送/导入门控，但真实 send/import 执行仍未接。授权持久化、事件订阅和外部应用真实导入/发送还没有接入。 |
 
 ## 当前不能宣传为已完成
 
@@ -95,7 +95,7 @@
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - 上层应用自动导出和直接写入 NekoLink bundle
-- 本机 local bridge localhost server
+- 本机 local bridge 事件订阅、授权持久化和真实发送/导入执行
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储

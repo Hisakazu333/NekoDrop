@@ -689,24 +689,11 @@ pub fn handle_local_bridge_request(
     state: State<'_, AppState>,
     request_json: String,
 ) -> Result<LocalBridgeResponseDto, String> {
-    let trusted_devices = state
-        .trusted_devices
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clone();
-    let transfer_status = state
-        .transfer_status
-        .lock()
-        .map_err(|error| error.to_string())?
-        .clone();
-    let staging_root = bundle_staging_root()?;
-    handle_local_bridge_request_with_runtime_at(
-        &request_json,
-        &trusted_devices,
-        transfer_status.as_ref(),
-        &staging_root,
+    handle_local_bridge_request_for_runtime(
+        &state.trusted_devices,
+        &state.transfer_status,
         &state.local_bridge_runtime,
-        now_ms(),
+        &request_json,
     )
 }
 
@@ -2549,6 +2536,31 @@ fn handle_local_bridge_request_at(
         transfer_status,
         staging_root,
         &[],
+        now_ms(),
+    )
+}
+
+pub(crate) fn handle_local_bridge_request_for_runtime(
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
+    runtime: &LocalBridgeRuntimeState,
+    request_json: &str,
+) -> Result<LocalBridgeResponseDto, String> {
+    let trusted_devices = trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let transfer_status = transfer_status
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    let staging_root = bundle_staging_root()?;
+    handle_local_bridge_request_with_runtime_at(
+        request_json,
+        &trusted_devices,
+        transfer_status.as_ref(),
+        &staging_root,
+        runtime,
         now_ms(),
     )
 }
