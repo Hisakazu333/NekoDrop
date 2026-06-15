@@ -4,7 +4,7 @@ use std::time::Instant;
 
 use nekodrop_core::{AppConfig, Device};
 use nekodrop_service::TransferReceiveReport;
-use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgePermissionScope};
+use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope};
 
 use crate::app_config::load_app_config;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
@@ -135,6 +135,7 @@ pub struct PendingLocalBridgeAuthorization {
 pub struct LocalBridgeRuntimeState {
     pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
     pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
+    pub events: Mutex<Vec<LocalBridgeEvent>>,
     pub status: Mutex<LocalBridgeRuntimeStatusState>,
 }
 
