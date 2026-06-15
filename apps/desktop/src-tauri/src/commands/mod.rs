@@ -3185,6 +3185,25 @@ fn wait_for_receive_decision(
         return false;
     }
 
+    if legacy_plain_offer_matches_trusted_device(offer, trusted_devices) {
+        set_transfer_status(
+            transfer_status,
+            TransferStatusState {
+                direction: "receive".to_string(),
+                phase: "blocked".to_string(),
+                root_name: Some(offer.root_name.clone()),
+                file_count: offer.file_count,
+                file_index: 0,
+                current_file: None,
+                bytes_transferred: 0,
+                total_bytes: offer.total_bytes,
+                message: "可信设备必须使用已认证加密传输，已拒绝兼容明文请求".to_string(),
+                updated_at_ms: now_ms(),
+            },
+        );
+        return false;
+    }
+
     if should_auto_accept_receive_offer(offer, receive_policy, trusted_devices) {
         set_transfer_status(
             transfer_status,
@@ -3277,6 +3296,24 @@ fn wait_for_receive_decision(
     }
 
     matches!(*guard, Some(ReceiveDecision::Accept))
+}
+
+fn legacy_plain_offer_matches_trusted_device(
+    offer: &TransferOffer,
+    trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+) -> bool {
+    let Some(sender_device_id) = offer.sender_device_id.as_deref() else {
+        return false;
+    };
+    let Some(sender_fingerprint) = offer.sender_public_key_fingerprint.as_deref() else {
+        return false;
+    };
+    let Ok(trusted_devices) = trusted_devices.lock() else {
+        return false;
+    };
+    trusted_devices.iter().any(|record| {
+        record.device_id == sender_device_id && record.public_key_fingerprint == sender_fingerprint
+    })
 }
 
 fn should_auto_accept_receive_offer(
@@ -5109,6 +5146,54 @@ mod tests {
             should_auto_accept_receive_offer(&offer, ReceivePolicy::AutoAcceptTrusted, &trusted);
 
         assert!(!accepted);
+    }
+
+    #[test]
+    fn legacy_plain_offer_from_trusted_device_identity_is_rejected_before_prompt() {
+        let public_key = test_public_key("device-a");
+        let pending = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(None));
+        let trusted = Arc::new(Mutex::new(vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            public_key.public_key.as_str(),
+            public_key.fingerprint.as_str(),
+        )]));
+        let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-a".to_string());
+        offer.sender_public_key_fingerprint = Some(public_key.fingerprint);
+
+        let accepted = wait_for_receive_decision(
+            &offer,
+            &pending,
+            &status,
+            ReceivePolicy::AlwaysAsk,
+            &trusted,
+            None,
+        );
+
+        assert!(!accepted);
+        assert!(pending.lock().unwrap().is_none());
+        let status = status.lock().unwrap().clone().unwrap();
+        assert_eq!(status.phase, "blocked");
+        assert!(status.message.contains("明文"));
+    }
+
+    #[test]
+    fn legacy_plain_offer_from_unknown_identity_remains_manual_compatibility() {
+        let trusted_public_key = test_public_key("device-a");
+        let unknown_public_key = test_public_key("device-b");
+        let trusted = Arc::new(Mutex::new(vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            trusted_public_key.public_key.as_str(),
+            trusted_public_key.fingerprint.as_str(),
+        )]));
+        let mut offer = TransferOffer::new("transfer-b", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-b".to_string());
+        offer.sender_public_key_fingerprint = Some(unknown_public_key.fingerprint);
+
+        assert!(!legacy_plain_offer_matches_trusted_device(&offer, &trusted));
     }
 
     #[test]
