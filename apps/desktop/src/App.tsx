@@ -3479,7 +3479,8 @@ function localBridgeRuntimeStatusLine(status: LocalBridgeRuntimeStatusDto | null
     : status.authorization_count > 0
       ? ` · 已授权 ${status.authorization_count}`
       : "";
-  return `${status.bind_host}:${status.port}${status.request_path}${auth}`;
+  const actions = status.pending_action_count > 0 ? ` · 待执行 ${status.pending_action_count}` : "";
+  return `${status.bind_host}:${status.port}${status.request_path}${auth}${actions}`;
 }
 
 function localBridgeScopeLabel(scope: LocalBridgePermissionScope) {

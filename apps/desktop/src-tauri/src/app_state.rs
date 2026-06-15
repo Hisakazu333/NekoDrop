@@ -4,7 +4,9 @@ use std::time::Instant;
 
 use nekodrop_core::{AppConfig, Device};
 use nekodrop_service::TransferReceiveReport;
-use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope};
+use nekolink_protocol::{
+    BundleType, LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope,
+};
 
 use crate::app_config::load_app_config;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
@@ -131,10 +133,37 @@ pub struct PendingLocalBridgeAuthorization {
     pub expires_at_ms: u128,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalBridgePendingAction {
+    SendBundle(LocalBridgePendingSendBundleAction),
+    ImportBundle(LocalBridgePendingImportBundleAction),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgePendingSendBundleAction {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub target_device_id: Option<String>,
+    pub bundle_root: String,
+    pub bundle_type: BundleType,
+    pub require_trusted_device: bool,
+    pub requested_at_ms: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgePendingImportBundleAction {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub staged_bundle_id: String,
+    pub expected_bundle_type: Option<BundleType>,
+    pub requested_at_ms: u128,
+}
+
 #[derive(Debug, Default)]
 pub struct LocalBridgeRuntimeState {
     pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
     pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
+    pub pending_actions: Mutex<Vec<LocalBridgePendingAction>>,
     pub events: Mutex<Vec<LocalBridgeEvent>>,
     pub status: Mutex<LocalBridgeRuntimeStatusState>,
 }

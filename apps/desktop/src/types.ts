@@ -99,6 +99,7 @@ export interface LocalBridgeRuntimeStatusDto {
   max_request_bytes: number;
   pending_authorization_client: string | null;
   authorization_count: number;
+  pending_action_count: number;
   last_error: string | null;
 }
 
