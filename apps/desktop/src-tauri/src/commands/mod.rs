@@ -44,9 +44,11 @@ use tauri::{AppHandle, Emitter, State};
 
 use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
-    ActiveReceiveSession, AppState, LocalBridgeAuthorizationRecord, LocalBridgeRuntimeState,
-    PendingLocalBridgeAuthorization, PendingPairingRequest, PendingReceiveFile,
-    PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision, TransferStatusState,
+    ActiveReceiveSession, AppState, LocalBridgeAuthorizationRecord, LocalBridgePendingAction,
+    LocalBridgePendingImportBundleAction, LocalBridgePendingSendBundleAction,
+    LocalBridgeRuntimeState, PendingLocalBridgeAuthorization, PendingPairingRequest,
+    PendingReceiveFile, PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision,
+    TransferStatusState,
 };
 use crate::device_identity::app_config_dir;
 use crate::local_bridge_authorizations::{
@@ -69,6 +71,7 @@ const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
 const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
 const LOCAL_BRIDGE_EVENT_QUEUE_LIMIT: usize = 256;
+const LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReceiveTrustContext {
@@ -378,6 +381,7 @@ pub struct LocalBridgeRuntimeStatusDto {
     pub max_request_bytes: usize,
     pub pending_authorization_client: Option<String>,
     pub authorization_count: usize,
+    pub pending_action_count: usize,
     pub last_error: Option<String>,
 }
 
@@ -2726,6 +2730,49 @@ fn handle_local_bridge_request_with_runtime_at(
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+
+    if let LocalBridgeRequest::SendBundle(request) = &request {
+        if local_bridge_client_has_scope(
+            request.client.as_ref(),
+            &authorizations,
+            LocalBridgePermissionScope::BundleSend,
+            now_ms,
+        ) {
+            push_local_bridge_pending_action(
+                runtime,
+                LocalBridgePendingAction::SendBundle(
+                    local_bridge_pending_send_action_from_request(request, now_ms)?,
+                ),
+            )?;
+            return Ok(local_bridge_authorized_runtime_pending_response(
+                request.request_id.clone(),
+                request.client.clone(),
+                "local bridge bundle send is authorized and waiting for the desktop runtime",
+            ));
+        }
+    }
+
+    if let LocalBridgeRequest::ImportBundle(request) = &request {
+        if local_bridge_client_has_scope(
+            request.client.as_ref(),
+            &authorizations,
+            LocalBridgePermissionScope::BundleImportRequest,
+            now_ms,
+        ) {
+            push_local_bridge_pending_action(
+                runtime,
+                LocalBridgePendingAction::ImportBundle(
+                    local_bridge_pending_import_action_from_request(request, now_ms)?,
+                ),
+            )?;
+            return Ok(local_bridge_authorized_runtime_pending_response(
+                request.request_id.clone(),
+                request.client.clone(),
+                "local bridge bundle import is authorized and waiting for the desktop runtime",
+            ));
+        }
+    }
+
     handle_validated_local_bridge_request_with_auth_at(
         request,
         trusted_devices,
@@ -2735,6 +2782,58 @@ fn handle_local_bridge_request_with_runtime_at(
         &events,
         now_ms,
     )
+}
+
+fn push_local_bridge_pending_action(
+    runtime: &LocalBridgeRuntimeState,
+    action: LocalBridgePendingAction,
+) -> Result<(), String> {
+    let mut actions = runtime
+        .pending_actions
+        .lock()
+        .map_err(|error| error.to_string())?;
+    actions.push(action);
+    if actions.len() > LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT {
+        let excess = actions.len() - LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT;
+        actions.drain(0..excess);
+    }
+    Ok(())
+}
+
+fn local_bridge_pending_send_action_from_request(
+    request: &nekolink_protocol::LocalBridgeSendBundleRequest,
+    now_ms: u128,
+) -> Result<LocalBridgePendingSendBundleAction, String> {
+    let client = request
+        .client
+        .clone()
+        .ok_or_else(|| "authorized local bridge send requires a client identity".to_string())?;
+    Ok(LocalBridgePendingSendBundleAction {
+        request_id: request.request_id.clone(),
+        client,
+        target_device_id: request.target_device_id.clone(),
+        bundle_root: request.bundle_root.clone(),
+        bundle_type: request.bundle_type,
+        require_trusted_device: request.require_trusted_device,
+        requested_at_ms: now_ms,
+    })
+}
+
+fn local_bridge_pending_import_action_from_request(
+    request: &nekolink_protocol::LocalBridgeImportBundleRequest,
+    now_ms: u128,
+) -> Result<LocalBridgePendingImportBundleAction, String> {
+    let client = request
+        .client
+        .clone()
+        .ok_or_else(|| "authorized local bridge import requires a client identity".to_string())?;
+    Ok(LocalBridgePendingImportBundleAction {
+        request_id: request.request_id.clone(),
+        client,
+        staged_bundle_id: request.staged_bundle_id.clone(),
+        expected_bundle_type: request.expected_bundle_type,
+        requested_at_ms: now_ms,
+    })
 }
 
 fn handle_local_bridge_request_with_auth_at(
@@ -3519,6 +3618,7 @@ fn local_bridge_runtime_status_to_dto(
         max_request_bytes: status.max_request_bytes,
         pending_authorization_client: status.pending_authorization_client,
         authorization_count: status.authorization_count,
+        pending_action_count: status.pending_action_count,
         last_error: status.last_error,
     }
 }
@@ -5943,6 +6043,160 @@ mod tests {
         assert!(!response.requires_user_confirmation);
         assert!(runtime.pending_authorization.lock().unwrap().is_none());
         assert_eq!(runtime.authorizations.lock().unwrap().len(), 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_bundle_send_is_queued_as_pending_action() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-send-action");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ));
+        let send_request = serde_json::json!({
+            "kind": "bundle.send",
+            "payload": {
+                "request_id": "bridge-request-send",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "target_device_id": "device-a",
+                "bundle_root": "bundle",
+                "bundle_type": "skill",
+                "require_trusted_device": true
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &send_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_runtime");
+        let actions = runtime.pending_actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::app_state::LocalBridgePendingAction::SendBundle(action) => {
+                assert_eq!(action.request_id, "bridge-request-send");
+                assert_eq!(action.client.client_id, "local-agent-app");
+                assert_eq!(action.target_device_id.as_deref(), Some("device-a"));
+                assert_eq!(action.bundle_root, "bundle");
+                assert_eq!(action.bundle_type, BundleType::Skill);
+                assert!(action.require_trusted_device);
+                assert_eq!(action.requested_at_ms, 1_500);
+            }
+            other => panic!("expected send bundle action, got {other:?}"),
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_bundle_import_is_queued_as_pending_action() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-import-action");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_runtime");
+        let actions = runtime.pending_actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::app_state::LocalBridgePendingAction::ImportBundle(action) => {
+                assert_eq!(action.request_id, "bridge-request-import");
+                assert_eq!(action.client.client_id, "local-agent-app");
+                assert_eq!(action.staged_bundle_id, "bundle_1234567890");
+                assert_eq!(action.expected_bundle_type, Some(BundleType::Skill));
+                assert_eq!(action.requested_at_ms, 1_500);
+            }
+            other => panic!("expected import bundle action, got {other:?}"),
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn unauthorized_local_bridge_bundle_mutation_is_not_queued() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-no-pending-action");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_auth");
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
 
         fs::remove_dir_all(dir).unwrap();
     }

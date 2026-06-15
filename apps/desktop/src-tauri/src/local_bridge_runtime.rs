@@ -367,6 +367,11 @@ pub(crate) fn local_bridge_runtime_status(
         .lock()
         .map(|authorizations| authorizations.len())
         .unwrap_or_default();
+    let pending_action_count = runtime
+        .pending_actions
+        .lock()
+        .map(|actions| actions.len())
+        .unwrap_or_default();
 
     LocalBridgeRuntimeStatusSnapshot {
         active: status.active,
@@ -376,6 +381,7 @@ pub(crate) fn local_bridge_runtime_status(
         max_request_bytes: status.max_request_bytes,
         pending_authorization_client,
         authorization_count,
+        pending_action_count,
         last_error: status.last_error,
     }
 }
@@ -389,6 +395,7 @@ pub(crate) struct LocalBridgeRuntimeStatusSnapshot {
     pub max_request_bytes: usize,
     pub pending_authorization_client: Option<String>,
     pub authorization_count: usize,
+    pub pending_action_count: usize,
     pub last_error: Option<String>,
 }
 
@@ -521,7 +528,9 @@ mod tests {
 
         assert_eq!(response.status, "pending_runtime");
         assert_eq!(response.security_state, "authorized");
-        assert!(response.message.contains("not connected yet"));
+        assert!(response.message.contains("waiting for the desktop runtime"));
+        let actions = context.runtime.pending_actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
     }
 
     #[test]
@@ -543,6 +552,21 @@ mod tests {
                 expires_at_ms: 2_000,
             },
         );
+        runtime.pending_actions.lock().unwrap().push(
+            crate::app_state::LocalBridgePendingAction::ImportBundle(
+                crate::app_state::LocalBridgePendingImportBundleAction {
+                    request_id: "bridge-import".to_string(),
+                    client: nekolink_protocol::LocalBridgeClientIdentity {
+                        client_id: "local-app".to_string(),
+                        display_name: "Local App".to_string(),
+                        app_kind: Some("generic".to_string()),
+                    },
+                    staged_bundle_id: "bundle_1234567890".to_string(),
+                    expected_bundle_type: Some(nekolink_protocol::BundleType::Skill),
+                    requested_at_ms: 1_500,
+                },
+            ),
+        );
 
         let status = local_bridge_runtime_status(&runtime);
 
@@ -554,5 +578,6 @@ mod tests {
             status.pending_authorization_client.as_deref(),
             Some("Local App")
         );
+        assert_eq!(status.pending_action_count, 1);
     }
 }
