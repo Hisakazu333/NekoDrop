@@ -57,7 +57,15 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 ## GitHub 开发流程
 
-本项目使用 GitHub Flow。`main` 必须始终保持可构建、可测试、可打包；功能、修复、安全收口、UI 改动和发布打包都必须开短分支，通过 PR 合并。
+本项目使用 `develop -> main` 的开发流程。
+
+```text
+日常分支 -> develop -> main -> tag / release
+```
+
+`main` 是发布主线，必须始终保持可构建、可测试、可打包。日常功能、修复、安全收口、UI、文档和测试 PR 默认合到 `develop`。`develop` 验证稳定后，再开 release / rollup PR 合到 `main`。
+
+不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`。
 
 分支命名示例：
 
@@ -67,6 +75,14 @@ hardening/security-reliability
 feat/large-file-scan-status
 ui/desktop-style-refresh
 docs/release-checklist
+```
+
+从 `develop` 开分支：
+
+```bash
+git checkout develop
+git pull --ff-only
+git checkout -b security/device-identity-signing
 ```
 
 每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
