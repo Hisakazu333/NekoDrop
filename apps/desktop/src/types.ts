@@ -69,6 +69,7 @@ export interface LocalBridgeResponseDto {
   devices: TrustedDeviceDto[];
   staged_bundles: ReceivedBundleDto[];
   transfer_status: TransferStatusDto | null;
+  events: unknown[];
 }
 
 export interface LocalBridgeAuthorizationDto {
@@ -78,6 +79,56 @@ export interface LocalBridgeAuthorizationDto {
   scopes: LocalBridgePermissionScope[];
   granted_at_ms: number;
   expires_at_ms: number | null;
+}
+
+export interface LocalBridgeAuthorizationListDto {
+  authorizations: LocalBridgeAuthorizationDto[];
+  pruned_count: number;
+}
+
+export interface LocalBridgeAuthorizationRevokeDto {
+  revoked: boolean;
+  authorizations: LocalBridgeAuthorizationDto[];
+}
+
+export interface LocalBridgePendingActionDto {
+  request_id: string;
+  action_kind: "bundle.send" | "bundle.import" | string;
+  client_id: string;
+  client_display_name: string;
+  bundle_type: string | null;
+  target_device_id: string | null;
+  staged_bundle_id: string | null;
+  expected_bundle_type: string | null;
+  require_trusted_device: boolean | null;
+  requested_at_ms: number;
+  bundle_root: string | null;
+}
+
+export interface LocalBridgePendingActionListDto {
+  actions: LocalBridgePendingActionDto[];
+}
+
+export interface LocalBridgePendingActionRemoveDto {
+  removed: boolean;
+  actions: LocalBridgePendingActionDto[];
+}
+
+export interface LocalBridgePendingActionTakeDto {
+  action: LocalBridgePendingActionDto | null;
+  remaining_count: number;
+}
+
+export interface LocalBridgeRuntimeStatusDto {
+  active: boolean;
+  bind_host: string;
+  port: number;
+  request_path: string;
+  max_request_bytes: number;
+  pending_authorization_client: string | null;
+  authorization_count: number;
+  pending_action_count: number;
+  last_error: string | null;
 }
 
 export interface DiscoveryStatusDto {

@@ -1937,6 +1937,8 @@ pub enum LocalBridgeRequest {
     AuthorizationRequest(LocalBridgeAuthorizationRequest),
     #[serde(rename = "transfer.status")]
     TransferStatus(LocalBridgeTransferStatusRequest),
+    #[serde(rename = "events.poll")]
+    PollEvents(LocalBridgePollEventsRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1983,6 +1985,14 @@ pub struct LocalBridgeTransferStatusRequest {
     pub request_id: String,
     pub client: Option<LocalBridgeClientIdentity>,
     pub transfer_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgePollEventsRequest {
+    pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
+    pub after_event_id: Option<String>,
+    pub limit: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2059,6 +2069,7 @@ impl LocalBridgeRequest {
             Self::ImportBundle(request) => request.validate(),
             Self::AuthorizationRequest(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
+            Self::PollEvents(request) => request.validate(),
         }
     }
 }
@@ -2100,6 +2111,23 @@ impl LocalBridgeTransferStatusRequest {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
         validate_optional_non_empty("transfer_id", self.transfer_id.as_deref())
+    }
+}
+
+impl LocalBridgePollEventsRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
+        validate_optional_non_empty("after_event_id", self.after_event_id.as_deref())?;
+        if let Some(limit) = self.limit {
+            if limit == 0 || limit > 100 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "event poll limit must be between 1 and 100",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 
@@ -4736,9 +4764,9 @@ mod tests {
         let request = LocalBridgeRequest::ListDevices(LocalBridgeListDevicesRequest {
             request_id: "bridge-request-1".to_string(),
             client: Some(LocalBridgeClientIdentity {
-                client_id: "openneko-desktop".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             }),
             trusted_only: true,
         });
@@ -4747,12 +4775,9 @@ mod tests {
 
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["kind"], "devices.list");
-        assert_eq!(json["payload"]["client"]["client_id"], "openneko-desktop");
-        assert_eq!(
-            json["payload"]["client"]["display_name"],
-            "OpenNeko Desktop"
-        );
-        assert_eq!(json["payload"]["client"]["app_kind"], "openneko");
+        assert_eq!(json["payload"]["client"]["client_id"], "local-agent-app");
+        assert_eq!(json["payload"]["client"]["display_name"], "Local Agent App");
+        assert_eq!(json["payload"]["client"]["app_kind"], "agent");
         assert_eq!(
             serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
             request
@@ -4764,9 +4789,9 @@ mod tests {
         let request = LocalBridgeRequest::ListDevices(LocalBridgeListDevicesRequest {
             request_id: "bridge-request-1".to_string(),
             client: Some(LocalBridgeClientIdentity {
-                client_id: "../openneko".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "../local-agent".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             }),
             trusted_only: true,
         });
@@ -4781,9 +4806,9 @@ mod tests {
         let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
             request_id: "bridge-auth-1".to_string(),
             client: LocalBridgeClientIdentity {
-                client_id: "openneko-desktop".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             },
             requested_scopes: vec![
                 LocalBridgePermissionScope::DeviceRead,
@@ -4798,7 +4823,7 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["kind"], "authorization.request");
         assert_eq!(json["payload"]["request_id"], "bridge-auth-1");
-        assert_eq!(json["payload"]["client"]["client_id"], "openneko-desktop");
+        assert_eq!(json["payload"]["client"]["client_id"], "local-agent-app");
         assert_eq!(json["payload"]["requested_scopes"][0], "device.read");
         assert_eq!(json["payload"]["requested_scopes"][1], "bundle.send");
         assert_eq!(
@@ -4817,9 +4842,9 @@ mod tests {
         let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
             request_id: "bridge-auth-1".to_string(),
             client: LocalBridgeClientIdentity {
-                client_id: "openneko-desktop".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             },
             requested_scopes: Vec::new(),
             reason: " ".to_string(),
@@ -4836,9 +4861,9 @@ mod tests {
         let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
             request_id: "bridge-auth-1".to_string(),
             client: LocalBridgeClientIdentity {
-                client_id: "openneko-desktop".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             },
             requested_scopes: vec![LocalBridgePermissionScope::BundleRead],
             reason: "Read staged bundle metadata".to_string(),
@@ -4871,6 +4896,32 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_poll_events_request_uses_stable_json_shape() {
+        let request = LocalBridgeRequest::PollEvents(LocalBridgePollEventsRequest {
+            request_id: "bridge-events-1".to_string(),
+            client: Some(LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            }),
+            after_event_id: Some("bridge-event-1".to_string()),
+            limit: Some(10),
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "events.poll");
+        assert_eq!(json["payload"]["request_id"], "bridge-events-1");
+        assert_eq!(json["payload"]["after_event_id"], "bridge-event-1");
+        assert_eq!(json["payload"]["limit"], 10);
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
     fn local_bridge_rejects_unsafe_bundle_roots() {
         let request = LocalBridgeRequest::SendBundle(LocalBridgeSendBundleRequest {
             request_id: "bridge-request-1".to_string(),
@@ -4894,7 +4945,7 @@ mod tests {
             bundle_id: "bundle_1234567890".to_string(),
             bundle_type: BundleType::Skill,
             display_name: "voice_transcribe".to_string(),
-            source_app: "OpenNeko".to_string(),
+            source_app: "Generic Agent App".to_string(),
             file_count: 2,
             total_bytes: 28,
             import_allowed: true,
@@ -4912,13 +4963,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn documented_bundle_samples_validate_against_protocol_types() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root");
+        let samples_root = repo_root.join("docs").join("bundle-samples");
+        for sample in [
+            "skill-basic",
+            "session-summary",
+            "workspace-fragment",
+            "agent-profile",
+            "config-snapshot",
+        ] {
+            let sample_root = samples_root.join(sample);
+            let manifest = std::fs::read_to_string(sample_root.join("bundle.json")).unwrap();
+            let checksums = std::fs::read_to_string(sample_root.join("checksums.json")).unwrap();
+            let permissions =
+                std::fs::read_to_string(sample_root.join("permissions.json")).unwrap();
+
+            let manifest = serde_json::from_str::<BundleManifest>(&manifest).unwrap();
+            let checksums = serde_json::from_str::<BundleChecksums>(&checksums).unwrap();
+            let permissions = serde_json::from_str::<BundlePermissions>(&permissions).unwrap();
+
+            manifest.validate().unwrap();
+            checksums.validate_against(&manifest).unwrap();
+            assert!(permissions.can_import().unwrap());
+        }
+    }
+
     fn valid_bundle_manifest() -> BundleManifest {
         BundleManifest {
             schema: BUNDLE_SCHEMA_V1.to_string(),
             bundle_id: "bundle_1234567890".to_string(),
             bundle_type: BundleType::Skill,
             display_name: "voice_transcribe".to_string(),
-            source_app: "OpenNeko".to_string(),
+            source_app: "Generic Agent App".to_string(),
             created_at: "2026-06-14T10:30:00Z".to_string(),
             sender: BundleSender {
                 device_id: "neko-device-1234567890".to_string(),
@@ -4975,7 +5056,7 @@ mod tests {
                 BundlePermissionScope::WorkspaceImport,
             ],
             writes: vec![BundleWritePermission {
-                target: "openneko.skills".to_string(),
+                target: "agent.skills".to_string(),
                 mode: BundleWriteMode::CreateOnly,
             }],
             secrets: BundleSecretsPolicy {

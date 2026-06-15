@@ -43,7 +43,7 @@
 | 发送端瞬时网络失败自动重试 | 已接入 | 连接拒绝、连接重置、超时等短暂网络错误会自动重试 1 次；用户取消、对方拒绝、校验失败、权限和路径错误不会自动重试。 |
 | TCP partial offset 断点续传基础 | 已接入 | 接收端可以基于 `.nekodrop-part` 生成 resume files，发送端按 offset 只补传剩余 payload，接收端追加后做 SHA-256 校验。 |
 | 接收端 resume 明细 UI | 已接入 | 接收确认卡片会在存在可续传内容时显示可继续文件数、可跳过已完成文件数和已接收字节数。 |
-| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会在 authenticated session 已验签且长期 public key 命中可信设备记录时自动接收，旧明文和未配对签名 session 仍按人工确认处理。 |
+| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会在 authenticated session 已验签且长期 public key 命中可信设备记录时自动接收。旧明文只能走手动兼容；如果明文请求声明了已配对设备的 device_id，会在弹出确认前拒绝。 |
 | 接收目录持久化 | 已接入 | 选择或启动收件时会写入 `app_config.json`，重启后继续使用。 |
 | 失败/取消历史进度 | 已接入 | 发送失败或取消时，历史记录会保留最后一次真实已传字节数；未传完的发送记录会显示已传和剩余大小，主操作为“继续发送”，普通失败和不可续传取消显示“重试”，当前失败/取消状态、最近记录和历史详情都会保留下一步提示或备用码兜底入口；重试结果会更新同一条历史记录。 |
 | 网络/传输错误提示和地址预检 | 已接入 | 连接阶段有短超时保护；连接拒绝、超时、127.0.0.1、0.0.0.0、169.254.x.x、198.18/198.19、未接入 transport、checksum 等问题会在发送/配对前或失败后转成人能看懂的提示；当前失败状态和历史详情会给一条短的下一步建议。 |
@@ -74,7 +74,7 @@
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
 | Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256、配对和加密 session 能力，不声明未完成的 Agent host。 |
-| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。桌面真实发送/接收路径已交换并验签 `session.identity`，签名不匹配会拒绝 session；如果对方已经在可信设备记录里，authenticated session 还会钉到记录里保存的长期 public key。旧明文路径现在标记为 `legacy_plain`，只能手动确认；明文请求如果带有已配对可信设备身份会直接拒绝，不会自动接受，也不会刷新可信设备状态。 |
+| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。桌面真实发送/接收路径已交换并验签 `session.identity`，签名不匹配会拒绝 session；如果对方已经在可信设备记录里，authenticated session 还会钉到记录里保存的长期 public key。旧明文路径现在标记为 `legacy_plain`，只能手动确认；明文请求只要声明了已配对设备的 device_id 就会拒绝，不会自动接受，也不会刷新可信设备状态。 |
 | Session identity binding 签名模型 | 已接入 | `nekolink-protocol` 已能从 verified handshake 生成 initiator / responder identity binding，并提供稳定 canonical payload hash，把 session_id、设备 ID、fingerprint、session ephemeral key 和 handshake_hash 绑定到签名材料；协议层已有 Ed25519 `SignedSessionIdentityBinding`，桌面 `device_identity.json` schema v2 会持久化本机签名 seed 并迁移旧 schema v1。`session.identity` 会在 `session.ready` 后、encrypted control 前交换，双方验签通过后才继续传输。 |
 | Encrypted file stream | 部分接入 | encrypted session 发送/接收路径已经把文件 payload 切成加密 file frames，frame AAD 绑定 transfer_id、manifest_path、offset 和 plain_size；接收端会按 reader 读取逐帧解密，不再先把单文件 payload 全部解密进内存；旧明文文件流路径仍保留给 plain offer 兼容，但已经从可信设备状态更新和自动接收路径隔离。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
@@ -83,8 +83,9 @@
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
-| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录；桌面端会清理过期暂存，删除和导入失败状态会留在收件流程里。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
-| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测。授权申请响应会带回 scope、reason、ttl 和短授权码；用户确认授权码后，进程内 runtime 会记录该 client 的临时权限，并让已授权 client 通过发送/导入门控，但真实 send/import runtime 仍未接。localhost server、授权持久化和外部应用接入还没有接入。 |
+| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录；桌面端会清理过期暂存，删除和导入失败状态会留在收件流程里。上层应用自动导出 session / skill / workspace、local bridge 真实发送执行和真实导入执行还没有接入。 |
+| Adapter 规范和 bundle 样例 | 部分接入 | [ADAPTER_SPEC.md](ADAPTER_SPEC.md) 已定义上层应用导出/导入 bundle 的边界；[bundle-samples](bundle-samples/) 提供 `skill`、`session`、`workspace`、`agent_profile`、`config_snapshot` 五类可校验样例。真实上层应用 adapter 还没有接入。 |
+| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入、查询传输状态和 `events.poll` 事件轮询；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测，并显示 localhost runtime 的真实监听状态、地址、待确认授权、已授权数量和待执行动作数量。桌面端启动时会开启只绑定 `127.0.0.1` 的 localhost runtime，只接受 `POST /bridge/request`，请求体有大小上限；只读请求和授权申请走同一套 handler。用户确认授权码后，runtime 会记录该 client 的限时权限并写入本机授权文件；下次启动会恢复未过期授权。已授权 client 调用 `bundle.send` / `bundle.import` 时，runtime 会把请求写入内存待执行队列，设置页可以查看概要并移除这些待执行动作；内部 consumer 可以按 FIFO 取出下一条动作，但仍不直接发送或导入。runtime 现在有内存事件队列，真实发送/接收主流程会写入 `transfer.updated`，收到 staged bundle 会写入 `bundle.received`；已授权 client 可用 `events.poll` 轮询快照。但真实 send/import 执行、长连接事件流和外部应用真实导入/发送还没有接入。 |
 
 ## 当前不能宣传为已完成
 
@@ -95,7 +96,7 @@
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - 上层应用自动导出和直接写入 NekoLink bundle
-- 本机 local bridge localhost server
+- 本机 local bridge 长连接事件流和真实发送/导入执行
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储

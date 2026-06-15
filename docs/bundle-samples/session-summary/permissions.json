@@ -1,0 +1,13 @@
+{
+  "requested_scopes": ["session.import"],
+  "writes": [
+    {
+      "target": "agent.sessions",
+      "mode": "manual_import"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": ["provider_tokens", "account_ids"]
+  }
+}

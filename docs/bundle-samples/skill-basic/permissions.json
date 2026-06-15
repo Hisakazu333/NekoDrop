@@ -1,0 +1,13 @@
+{
+  "requested_scopes": ["skill.install"],
+  "writes": [
+    {
+      "target": "agent.skills",
+      "mode": "create_only"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": []
+  }
+}

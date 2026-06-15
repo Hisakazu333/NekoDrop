@@ -1,0 +1,12 @@
+{
+  "profile_id": "sample-agent-profile",
+  "display_name": "Research helper",
+  "capabilities": [
+    "summarize",
+    "organize_notes"
+  ],
+  "preferences": {
+    "tone": "concise",
+    "language": "zh-CN"
+  }
+}

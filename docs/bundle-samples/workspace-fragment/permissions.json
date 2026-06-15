@@ -1,0 +1,13 @@
+{
+  "requested_scopes": ["workspace.import"],
+  "writes": [
+    {
+      "target": "agent.workspaces",
+      "mode": "manual_import"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": []
+  }
+}

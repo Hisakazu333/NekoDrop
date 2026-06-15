@@ -785,6 +785,13 @@ button:disabled {
   gap: 8px;
 }
 
+.local-bridge-auth-list {
+  display: grid;
+  gap: 4px;
+  width: 100%;
+  min-width: 0;
+}
+
 .connection-code-row {
   display: flex;
   flex-wrap: wrap;

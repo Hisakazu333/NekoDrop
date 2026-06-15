@@ -1,0 +1,10 @@
+{
+  "workspace_id": "sample-workspace",
+  "name": "Draft workspace",
+  "entries": [
+    {
+      "path": "notes.md",
+      "kind": "document"
+    }
+  ]
+}

@@ -4,10 +4,13 @@ use std::time::Instant;
 
 use nekodrop_core::{AppConfig, Device};
 use nekodrop_service::TransferReceiveReport;
-use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgePermissionScope};
+use nekolink_protocol::{
+    BundleType, LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope,
+};
 
 use crate::app_config::load_app_config;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
+use crate::local_bridge_authorizations::load_local_bridge_authorizations;
 use crate::transfer_history::{load_transfer_history, TransferHistoryRecord};
 use crate::trusted_devices::{load_trusted_devices, TrustedDeviceRecord};
 
@@ -130,10 +133,62 @@ pub struct PendingLocalBridgeAuthorization {
     pub expires_at_ms: u128,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LocalBridgePendingAction {
+    SendBundle(LocalBridgePendingSendBundleAction),
+    ImportBundle(LocalBridgePendingImportBundleAction),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgePendingSendBundleAction {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub target_device_id: Option<String>,
+    pub bundle_root: String,
+    pub bundle_type: BundleType,
+    pub require_trusted_device: bool,
+    pub requested_at_ms: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgePendingImportBundleAction {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub staged_bundle_id: String,
+    pub expected_bundle_type: Option<BundleType>,
+    pub requested_at_ms: u128,
+}
+
 #[derive(Debug, Default)]
 pub struct LocalBridgeRuntimeState {
     pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
     pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
+    pub pending_actions: Mutex<Vec<LocalBridgePendingAction>>,
+    pub events: Mutex<Vec<LocalBridgeEvent>>,
+    pub status: Mutex<LocalBridgeRuntimeStatusState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgeRuntimeStatusState {
+    pub active: bool,
+    pub bind_host: String,
+    pub port: u16,
+    pub request_path: String,
+    pub max_request_bytes: usize,
+    pub last_error: Option<String>,
+}
+
+impl Default for LocalBridgeRuntimeStatusState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            bind_host: "127.0.0.1".to_string(),
+            port: 45921,
+            request_path: "/bridge/request".to_string(),
+            max_request_bytes: 64 * 1024,
+            last_error: None,
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -162,6 +217,7 @@ impl AppState {
         let trusted_devices = load_trusted_devices()?;
         let transfer_history = load_transfer_history()?;
         let config = load_app_config(&device_identity.device_name())?;
+        let local_bridge_authorizations = load_local_bridge_authorizations(now_ms())?;
 
         Ok(Self {
             config: Arc::new(Mutex::new(config)),
@@ -179,7 +235,10 @@ impl AppState {
             active_receive_cancel: Arc::new(Mutex::new(None)),
             transfer_status: Arc::new(Mutex::new(None)),
             last_receive_report: Arc::new(Mutex::new(None)),
-            local_bridge_runtime: Arc::new(LocalBridgeRuntimeState::default()),
+            local_bridge_runtime: Arc::new(LocalBridgeRuntimeState {
+                authorizations: Mutex::new(local_bridge_authorizations),
+                ..LocalBridgeRuntimeState::default()
+            }),
         })
     }
 }
@@ -188,4 +247,11 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new().expect("failed to initialize NekoDrop app state")
     }
+}
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }

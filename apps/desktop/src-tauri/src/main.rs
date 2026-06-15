@@ -3,6 +3,8 @@ mod app_state;
 mod commands;
 mod device_identity;
 mod discovery;
+mod local_bridge_authorizations;
+mod local_bridge_runtime;
 mod network;
 mod transfer_history;
 mod tray;
@@ -59,6 +61,13 @@ pub fn run() {
             commands::prune_staged_bundles,
             commands::delete_staged_bundle,
             commands::import_staged_bundle,
+            commands::get_local_bridge_runtime_status,
+            commands::list_local_bridge_authorizations,
+            commands::revoke_local_bridge_authorization,
+            commands::list_local_bridge_pending_actions,
+            commands::remove_local_bridge_pending_action,
+            commands::take_next_local_bridge_pending_action,
+            commands::prune_local_bridge_authorizations,
             commands::handle_local_bridge_request,
             commands::confirm_local_bridge_authorization
         ])
@@ -66,6 +75,7 @@ pub fn run() {
             tray::setup_tray(app)?;
             let state = app.state::<AppState>();
             discovery::start_discovery(&state);
+            local_bridge_runtime::start_local_bridge_runtime(&state);
             Ok(())
         })
         .run(tauri::generate_context!())

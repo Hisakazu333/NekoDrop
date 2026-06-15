@@ -105,7 +105,7 @@ Current desktop transfers have an encrypted session path:
 - desktop sessions exchange Ed25519 signed identity bindings after `session.ready`
 - each side verifies the peer owns the public key advertised by the session identity
 - if the peer is already trusted, the signed session public key must match the trusted-device record
-- the plain compatibility path is labeled `legacy_plain`, requires manual approval, rejects trusted-device identities, and cannot refresh trusted devices
+- the plain compatibility path is labeled `legacy_plain`, requires manual approval, rejects offers that claim a known trusted device ID, and cannot refresh trusted devices
 - the desktop UI shows the actual transfer mode after receive and in history when the record has it
 
 Remaining work:
@@ -193,6 +193,23 @@ Show clear transfer states from real wire modes:
 ```
 
 Avoid vague states such as "secure". Old history records may not have a recorded transfer mode; in that case the UI should show no security badge instead of guessing.
+
+## Local Bridge
+
+The desktop local bridge is a loopback API for local apps. It is not a LAN API and must not be advertised to nearby devices.
+
+Current desktop behavior:
+
+- binds only to `127.0.0.1`
+- accepts only `POST /bridge/request`
+- rejects oversized request bodies
+- allows read-only requests for devices, staged bundle details, and transfer status
+- lets local apps request scopes with a short authorization code
+- persists confirmed authorizations locally and restores only unexpired records on restart
+- lets the user list, revoke, and prune local bridge authorizations from Settings
+- keeps `bundle.send` and `bundle.import` behind authorization; authorized requests enter an in-memory pending-action queue that Settings can inspect and remove, and the bridge still does not execute those mutations directly
+
+Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.
 
 ## Dependency Audits
 

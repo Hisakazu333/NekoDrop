@@ -1,0 +1,8 @@
+{
+  "snapshot_id": "sample-config",
+  "settings": {
+    "theme": "system",
+    "receive_policy": "ask"
+  },
+  "redacted_fields": []
+}
