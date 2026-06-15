@@ -298,7 +298,7 @@ bridge 可以做：
   - `bundle.received`
   - `transfer.updated`
 
-这些是本机 API 的稳定 JSON 模型。桌面端已有只绑定 `127.0.0.1` 的 localhost runtime，可以处理只读请求、授权申请和授权后的事件轮询；已授权的 `bundle.send`、`bundle.import` 会进入桌面端内存待执行队列，设置页可以查看并移除这些待执行动作，但还不会执行真实发送或导入。
+这些是本机 API 的稳定 JSON 模型。桌面端已有只绑定 `127.0.0.1` 的 localhost runtime，可以处理只读请求、授权申请和授权后的事件轮询；已授权的 `bundle.send`、`bundle.import` 会进入桌面端内存待执行队列，设置页可以查看并移除这些待执行动作，内部 consumer 可以按 FIFO 取出下一条动作，但还不会执行真实发送或导入。
 
 bridge 请求可以带可选 `client`：
 
@@ -322,7 +322,7 @@ bridge 请求可以带可选 `client`：
 
 授权请求必须带 `client`、`requested_scopes`、`reason`，可以带 `ttl_seconds`。这一步只定义申请模型，不发 token，也不写入授权记录。
 
-桌面端现在有一个只绑定 `127.0.0.1` 的 localhost runtime，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；设置页可以确认授权码，runtime 会记录该 client 的限时权限并写入本机授权文件，下次启动只恢复未过期授权。设置页也可以查看、撤销和清理这些本机授权。真实发送/接收主流程会向 runtime 内存队列写入 `transfer.updated`，收到 staged bundle 时会写入 `bundle.received`。已授权 client 可以通过 `events.poll` 轮询这些事件：`bundle.read` 可读 `bundle.received`，`transfer.status.read` 可读 `transfer.updated`。已授权 client 调用 `bundle.send` / `bundle.import` 时，runtime 会把请求放入内存待执行队列；设置页可以查看概要并移除队列项；真实发送和导入 runtime 还没有开放给 bridge。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是局域网服务，也不会绕过用户确认去发送或导入 bundle。
+桌面端现在有一个只绑定 `127.0.0.1` 的 localhost runtime，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；设置页可以确认授权码，runtime 会记录该 client 的限时权限并写入本机授权文件，下次启动只恢复未过期授权。设置页也可以查看、撤销和清理这些本机授权。真实发送/接收主流程会向 runtime 内存队列写入 `transfer.updated`，收到 staged bundle 时会写入 `bundle.received`。已授权 client 可以通过 `events.poll` 轮询这些事件：`bundle.read` 可读 `bundle.received`，`transfer.status.read` 可读 `transfer.updated`。已授权 client 调用 `bundle.send` / `bundle.import` 时，runtime 会把请求放入内存待执行队列；设置页可以查看概要并移除队列项；内部 consumer 可以按 FIFO 取出下一条动作；真实发送和导入 runtime 还没有开放给 bridge。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是局域网服务，也不会绕过用户确认去发送或导入 bundle。
 
 上层应用和 bundle 的适配边界见 [ADAPTER_SPEC.md](ADAPTER_SPEC.md)。NekoLink bundle 保持通用，不绑定某个具体应用；具体应用只在 adapter 层处理自己的导出和导入。
 
