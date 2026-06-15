@@ -44,7 +44,8 @@ type CommandName =
   | "prune_staged_bundles"
   | "delete_staged_bundle"
   | "import_staged_bundle"
-  | "handle_local_bridge_request";
+  | "handle_local_bridge_request"
+  | "confirm_local_bridge_authorization";
 
 export async function invokeCommand<T>(
   command: CommandName,

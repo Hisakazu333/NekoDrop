@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use nekodrop_core::{AppConfig, Device};
 use nekodrop_service::TransferReceiveReport;
+use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgePermissionScope};
 
 use crate::app_config::load_app_config;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
@@ -108,6 +109,33 @@ pub struct TransferStatusState {
     pub updated_at_ms: u128,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgeAuthorizationRecord {
+    pub client_id: String,
+    pub display_name: String,
+    pub app_kind: Option<String>,
+    pub scopes: Vec<LocalBridgePermissionScope>,
+    pub granted_at_ms: u128,
+    pub expires_at_ms: Option<u128>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PendingLocalBridgeAuthorization {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub requested_scopes: Vec<LocalBridgePermissionScope>,
+    pub reason: String,
+    pub authorization_code: String,
+    pub requested_at_ms: u128,
+    pub expires_at_ms: u128,
+}
+
+#[derive(Debug, Default)]
+pub struct LocalBridgeRuntimeState {
+    pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
+    pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
+}
+
 #[derive(Debug)]
 pub struct AppState {
     pub config: Arc<Mutex<AppConfig>>,
@@ -125,6 +153,7 @@ pub struct AppState {
     pub active_receive_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
     pub transfer_status: Arc<Mutex<Option<TransferStatusState>>>,
     pub last_receive_report: Arc<Mutex<Option<TransferReceiveReport>>>,
+    pub local_bridge_runtime: Arc<LocalBridgeRuntimeState>,
 }
 
 impl AppState {
@@ -150,6 +179,7 @@ impl AppState {
             active_receive_cancel: Arc::new(Mutex::new(None)),
             transfer_status: Arc::new(Mutex::new(None)),
             last_receive_report: Arc::new(Mutex::new(None)),
+            local_bridge_runtime: Arc::new(LocalBridgeRuntimeState::default()),
         })
     }
 }
