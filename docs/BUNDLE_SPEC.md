@@ -297,7 +297,7 @@ bridge 可以做：
   - `bundle.received`
   - `transfer.updated`
 
-这些只是本机 API 的稳定 JSON 模型，不代表 localhost server、鉴权、导入执行已经完成。
+这些是本机 API 的稳定 JSON 模型。桌面端已有只绑定 `127.0.0.1` 的 localhost runtime，可以处理只读请求和授权申请；`bundle.send`、`bundle.import` 仍只返回授权或 runtime pending，不执行真实发送或导入。
 
 bridge 请求可以带可选 `client`：
 

@@ -3,6 +3,7 @@ mod app_state;
 mod commands;
 mod device_identity;
 mod discovery;
+mod local_bridge_runtime;
 mod network;
 mod transfer_history;
 mod tray;
@@ -66,6 +67,7 @@ pub fn run() {
             tray::setup_tray(app)?;
             let state = app.state::<AppState>();
             discovery::start_discovery(&state);
+            local_bridge_runtime::start_local_bridge_runtime(&state);
             Ok(())
         })
         .run(tauri::generate_context!())

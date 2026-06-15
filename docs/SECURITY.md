@@ -194,6 +194,21 @@ Show clear transfer states from real wire modes:
 
 Avoid vague states such as "secure". Old history records may not have a recorded transfer mode; in that case the UI should show no security badge instead of guessing.
 
+## Local Bridge
+
+The desktop local bridge is a loopback API for local apps. It is not a LAN API and must not be advertised to nearby devices.
+
+Current desktop behavior:
+
+- binds only to `127.0.0.1`
+- accepts only `POST /bridge/request`
+- rejects oversized request bodies
+- allows read-only requests for devices, staged bundle details, and transfer status
+- lets local apps request scopes with a short authorization code
+- keeps `bundle.send` and `bundle.import` behind authorization and returns `pending_runtime`; it does not execute those mutations yet
+
+Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.
+
 ## Dependency Audits
 
 Run the supported-platform audit before merging security-sensitive changes:
