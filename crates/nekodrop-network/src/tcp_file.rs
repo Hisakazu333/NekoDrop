@@ -515,6 +515,27 @@ pub fn read_session_control_payload_once<T: for<'de> Deserialize<'de>>(
         .map_err(protocol_error_to_network)
 }
 
+pub fn read_session_control_payload_kind_once<T: for<'de> Deserialize<'de>>(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    replay_window: &mut nekolink_protocol::SessionReplayWindow,
+    expected_inner_kind: MessageKind,
+) -> NekoDropResult<T> {
+    let envelope = read_session_control_envelope(stream)?;
+    if envelope.payload.inner_kind != expected_inner_kind {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!(
+                "unexpected encrypted control kind: expected {}, got {}",
+                expected_inner_kind.as_str(),
+                envelope.payload.inner_kind.as_str()
+            ),
+        )));
+    }
+    EncryptedSessionPayload::open_control_once(&envelope, keys, replay_window)
+        .map_err(protocol_error_to_network)
+}
+
 pub fn read_session_control_payload_kind<T: for<'de> Deserialize<'de>>(
     stream: &mut impl Read,
     keys: &nekolink_protocol::SessionKeyMaterial,
@@ -1597,6 +1618,53 @@ mod tests {
             &mut Cursor::new(second_buffer),
             &keys,
             &mut replay_window,
+        )
+        .unwrap_err();
+
+        assert_eq!(opened, TransferDecision::decline("busy"));
+        assert!(error.to_string().contains("replayed session frame"));
+    }
+
+    #[test]
+    fn encrypted_session_control_payload_kind_reader_rejects_replayed_frame() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            10,
+        )
+        .unwrap();
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:control-2",
+            &keys,
+            header,
+            MessageKind::FileDecline,
+            &TransferDecision::decline("busy"),
+        )
+        .unwrap();
+        let mut first_buffer = Vec::new();
+        let mut second_buffer = Vec::new();
+        write_session_control_envelope(&mut first_buffer, &envelope).unwrap();
+        write_session_control_envelope(&mut second_buffer, &envelope).unwrap();
+        let mut replay_window = nekolink_protocol::SessionReplayWindow::default();
+
+        let opened: TransferDecision = read_session_control_payload_kind_once(
+            &mut Cursor::new(first_buffer),
+            &keys,
+            &mut replay_window,
+            MessageKind::FileDecline,
+        )
+        .unwrap();
+        let error = read_session_control_payload_kind_once::<TransferDecision>(
+            &mut Cursor::new(second_buffer),
+            &keys,
+            &mut replay_window,
+            MessageKind::FileDecline,
         )
         .unwrap_err();
 
