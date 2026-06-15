@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -25,6 +25,7 @@ pub const SESSION_TRAFFIC_KEY_LEN: usize = 32;
 pub const SESSION_PUBLIC_KEY_BASE64_LEN: usize = 43;
 pub const SESSION_AES256GCM_NONCE_LEN: usize = 12;
 pub const SESSION_XCHACHA20POLY1305_NONCE_LEN: usize = 24;
+pub const SESSION_REPLAY_WINDOW_SIZE: u64 = 64;
 pub const BUNDLE_SCHEMA_V1: &str = "nekolink.bundle.v1";
 pub const BUNDLE_CHECKSUM_SHA256: &str = "sha256";
 
@@ -720,6 +721,13 @@ pub struct SessionTrafficCounters {
     receive_counter: u64,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionReplayWindow {
+    window_size: u64,
+    highest_counter: Option<u64>,
+    seen_counters: BTreeSet<u64>,
+}
+
 impl SessionTrafficCounters {
     pub fn new(send_counter: u64, receive_counter: u64) -> Self {
         Self {
@@ -744,6 +752,78 @@ impl SessionTrafficCounters {
     ) -> Result<SessionTrafficFrameHeader, ProtocolError> {
         let counter = next_session_counter(&mut self.receive_counter)?;
         SessionTrafficFrameHeader::new(cipher, kind, SessionFrameDirection::Receive, counter)
+    }
+}
+
+impl Default for SessionReplayWindow {
+    fn default() -> Self {
+        Self {
+            window_size: SESSION_REPLAY_WINDOW_SIZE,
+            highest_counter: None,
+            seen_counters: BTreeSet::new(),
+        }
+    }
+}
+
+impl SessionReplayWindow {
+    pub fn with_window_size(window_size: u64) -> Result<Self, ProtocolError> {
+        if window_size == 0 {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "session replay window size cannot be zero",
+            ));
+        }
+
+        Ok(Self {
+            window_size,
+            highest_counter: None,
+            seen_counters: BTreeSet::new(),
+        })
+    }
+
+    pub fn accept(&mut self, header: &SessionTrafficFrameHeader) -> Result<(), ProtocolError> {
+        if header.direction != SessionFrameDirection::Receive {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "replay window accepts receive frames only",
+            ));
+        }
+
+        if let Some(highest_counter) = self.highest_counter {
+            let minimum_counter =
+                highest_counter.saturating_sub(self.window_size.saturating_sub(1));
+            if header.counter < minimum_counter {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "session frame counter is outside replay window",
+                ));
+            }
+        }
+
+        if self.seen_counters.contains(&header.counter) {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "replayed session frame counter",
+            ));
+        }
+
+        self.seen_counters.insert(header.counter);
+        self.highest_counter = Some(
+            self.highest_counter
+                .map_or(header.counter, |highest| highest.max(header.counter)),
+        );
+        self.prune();
+
+        Ok(())
+    }
+
+    fn prune(&mut self) {
+        let Some(highest_counter) = self.highest_counter else {
+            return;
+        };
+        let minimum_counter = highest_counter.saturating_sub(self.window_size.saturating_sub(1));
+        self.seen_counters
+            .retain(|counter| *counter >= minimum_counter);
     }
 }
 
@@ -3397,6 +3477,51 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("counter exhausted"));
+    }
+
+    #[test]
+    fn session_replay_window_rejects_duplicate_receive_counters() {
+        let mut window = SessionReplayWindow::default();
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Receive,
+            7,
+        )
+        .unwrap();
+
+        window.accept(&header).unwrap();
+        let error = window.accept(&header).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("replayed session frame"));
+    }
+
+    #[test]
+    fn session_replay_window_rejects_counters_older_than_window() {
+        let mut window = SessionReplayWindow::with_window_size(4).unwrap();
+        for counter in 0..=4 {
+            let header = SessionTrafficFrameHeader::new(
+                SESSION_CIPHER_XCHACHA20POLY1305,
+                SessionFrameKind::Control,
+                SessionFrameDirection::Receive,
+                counter,
+            )
+            .unwrap();
+            window.accept(&header).unwrap();
+        }
+
+        let old_header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Receive,
+            0,
+        )
+        .unwrap();
+        let error = window.accept(&old_header).unwrap_err();
+
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("outside replay window"));
     }
 
     #[test]
