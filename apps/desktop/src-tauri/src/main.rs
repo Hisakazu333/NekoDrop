@@ -62,6 +62,9 @@ pub fn run() {
             commands::delete_staged_bundle,
             commands::import_staged_bundle,
             commands::get_local_bridge_runtime_status,
+            commands::list_local_bridge_authorizations,
+            commands::revoke_local_bridge_authorization,
+            commands::prune_local_bridge_authorizations,
             commands::handle_local_bridge_request,
             commands::confirm_local_bridge_authorization
         ])

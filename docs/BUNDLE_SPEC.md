@@ -321,7 +321,7 @@ bridge 请求可以带可选 `client`：
 
 授权请求必须带 `client`、`requested_scopes`、`reason`，可以带 `ttl_seconds`。这一步只定义申请模型，不发 token，也不写入授权记录。
 
-桌面端现在有一个只绑定 `127.0.0.1` 的 localhost runtime，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；设置页可以确认授权码，runtime 会记录该 client 的限时权限并写入本机授权文件，下次启动只恢复未过期授权。已授权 client 可以通过 `bundle.send` / `bundle.import` 的门控，但真实发送和导入 runtime 还没有开放给 bridge。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是局域网服务，也不会绕过用户确认去发送或导入 bundle。
+桌面端现在有一个只绑定 `127.0.0.1` 的 localhost runtime，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；设置页可以确认授权码，runtime 会记录该 client 的限时权限并写入本机授权文件，下次启动只恢复未过期授权。设置页也可以查看、撤销和清理这些本机授权。已授权 client 可以通过 `bundle.send` / `bundle.import` 的门控，但真实发送和导入 runtime 还没有开放给 bridge。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是局域网服务，也不会绕过用户确认去发送或导入 bundle。
 
 bridge 不可以做：
 
