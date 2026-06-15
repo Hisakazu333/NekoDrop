@@ -906,6 +906,10 @@ fn verify_signed_session_against_trusted_pin(
     expected_public_key: Option<&str>,
     expected_public_key_fingerprint: Option<&str>,
 ) -> Result<(), String> {
+    signed_binding
+        .binding
+        .verify_identity(identity)
+        .map_err(|error| format!("可信设备身份校验失败：binding 不匹配: {}", error.message))?;
     if let Some(expected_device_id) = expected_device_id {
         if identity.device_id != expected_device_id {
             return Err("可信设备身份校验失败：device_id 不匹配".to_string());
@@ -4350,6 +4354,33 @@ mod tests {
             verify_incoming_peer_against_trusted_devices(&trusted, &identity, &signed).unwrap_err();
 
         assert!(error.contains("可信设备身份校验失败"));
+    }
+
+    #[test]
+    fn trusted_session_pin_rejects_binding_identity_mismatch() {
+        let key = test_identity_signing_key("device-a");
+        let identity = test_identity_with_signing_key("device-a", &key);
+        let mismatched_identity = test_identity_with_signing_key("device-b", &key);
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Initiator,
+            "session-trusted-pin-mismatch",
+            &mismatched_identity,
+            "x25519:session-key",
+            "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        )
+        .unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding, &key).unwrap();
+        let trusted = vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            signed.public_key.as_str(),
+            signed.public_key_fingerprint.as_str(),
+        )];
+
+        let error =
+            verify_incoming_peer_against_trusted_devices(&trusted, &identity, &signed).unwrap_err();
+
+        assert!(error.contains("binding"));
     }
 
     #[test]
