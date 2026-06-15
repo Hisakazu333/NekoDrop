@@ -104,6 +104,7 @@ Current desktop transfers have an encrypted session path:
 - desktop sessions exchange Ed25519 signed identity bindings after `session.ready`
 - each side verifies the peer owns the public key advertised by the session identity
 - the plain compatibility path is labeled `legacy_plain`, requires manual approval, and cannot refresh trusted devices
+- the desktop UI shows the actual transfer mode after receive and in history when the record has it
 
 Remaining work:
 
@@ -182,18 +183,15 @@ Future:
 
 ## User-Facing Security States
 
-Show clear states:
+Show clear transfer states from real wire modes:
 
 ```text
-Untrusted
-Pairing
-Trusted
-Receiving
-Verified
-Failed verification
+已认证加密    authenticated_encrypted_session
+已加密        encrypted_session
+兼容明文      legacy_plain
 ```
 
-Avoid vague states such as "secure" unless the connection is actually authenticated and encrypted.
+Avoid vague states such as "secure". Old history records may not have a recorded transfer mode; in that case the UI should show no security badge instead of guessing.
 
 ## Dependency Audits
 
