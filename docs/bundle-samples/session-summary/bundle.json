@@ -1,0 +1,29 @@
+{
+  "schema": "nekolink.bundle.v1",
+  "bundle_id": "sample_session_summary",
+  "bundle_type": "session",
+  "display_name": "planning_notes_session",
+  "source_app": "Generic Agent App",
+  "created_at": "2026-06-16T00:00:00Z",
+  "sender": {
+    "device_id": "neko-device-sample",
+    "device_name": "Sample Device",
+    "fingerprint": "sha256:sample"
+  },
+  "compatibility": {
+    "min_nekolink_version": 1,
+    "required_capabilities": ["bundle_transfer"]
+  },
+  "summary": {
+    "file_count": 1,
+    "total_bytes": 257
+  },
+  "files": [
+    {
+      "path": "files/session.json",
+      "size": 257,
+      "sha256": "d2a37401d3dc1336dae52c671f12e56d135423a39e690a354d6906db1a851b9d",
+      "role": "payload"
+    }
+  ]
+}

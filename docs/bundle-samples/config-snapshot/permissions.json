@@ -1,0 +1,13 @@
+{
+  "requested_scopes": ["config.import"],
+  "writes": [
+    {
+      "target": "app.config",
+      "mode": "manual_import"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": []
+  }
+}

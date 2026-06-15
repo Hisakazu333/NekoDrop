@@ -1,0 +1,6 @@
+{
+  "name": "summarize_selection",
+  "version": "0.1.0",
+  "entry": "main.ts",
+  "description": "Summarize selected text with a local agent."
+}

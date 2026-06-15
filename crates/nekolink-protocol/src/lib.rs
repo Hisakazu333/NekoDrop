@@ -4912,6 +4912,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn documented_bundle_samples_validate_against_protocol_types() {
+        let repo_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("workspace root");
+        let samples_root = repo_root.join("docs").join("bundle-samples");
+        for sample in [
+            "skill-basic",
+            "session-summary",
+            "workspace-fragment",
+            "agent-profile",
+            "config-snapshot",
+        ] {
+            let sample_root = samples_root.join(sample);
+            let manifest = std::fs::read_to_string(sample_root.join("bundle.json")).unwrap();
+            let checksums = std::fs::read_to_string(sample_root.join("checksums.json")).unwrap();
+            let permissions =
+                std::fs::read_to_string(sample_root.join("permissions.json")).unwrap();
+
+            let manifest = serde_json::from_str::<BundleManifest>(&manifest).unwrap();
+            let checksums = serde_json::from_str::<BundleChecksums>(&checksums).unwrap();
+            let permissions = serde_json::from_str::<BundlePermissions>(&permissions).unwrap();
+
+            manifest.validate().unwrap();
+            checksums.validate_against(&manifest).unwrap();
+            assert!(permissions.can_import().unwrap());
+        }
+    }
+
     fn valid_bundle_manifest() -> BundleManifest {
         BundleManifest {
             schema: BUNDLE_SCHEMA_V1.to_string(),
