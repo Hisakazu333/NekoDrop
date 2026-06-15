@@ -188,8 +188,9 @@ export interface ReceivedBundleDto {
   total_bytes: number;
   staging_path: string;
   import_allowed: boolean;
-  staging_status: "saved" | "deleted" | string;
+  staging_status: "saved" | "imported" | "deleted" | string;
   can_import_now: boolean;
+  import_path: string | null;
 }
 
 export interface ManualBundleCreateDto {

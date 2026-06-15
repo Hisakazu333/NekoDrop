@@ -82,7 +82,7 @@
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
-| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看和删除，不再作为单独主导航页面。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
+| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
 | 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测。授权申请、发送和导入仍返回 `pending_auth`，授权申请响应会带回 scope、reason 和 ttl。localhost runtime、持久化授权、授权码和导入执行还没有接入。 |
 
 ## 当前不能宣传为已完成
@@ -93,7 +93,7 @@
 - 长期身份密钥认证
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
-- 上层应用自动导出和导入 NekoLink bundle
+- 上层应用自动导出和直接写入 NekoLink bundle
 - 本机 local bridge runtime
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
@@ -112,7 +112,7 @@ V0.7
 
 V0.8
   NekoLink 上层包格式：
-  定义 bundle manifest，为 skills、session、agent profile、workspace 这类上层数据传输提供统一校验、权限和兼容边界。
+  定义 bundle manifest，为 skills、session、agent profile、workspace 这类上层数据传输提供统一校验、权限和兼容边界；桌面端已有 staging、预览、删除和手动导入到本机导入区，下一步接本机 bridge 授权和真实上层应用适配。
 
 V0.9
   transport 技术验证：
