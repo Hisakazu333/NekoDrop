@@ -55,6 +55,7 @@ Current status:
 - trusted device records store the peer public key and reject records where the key and fingerprint do not match
 - old trusted-device records without a stored public key are dropped on load and must be paired again
 - desktop authenticated sessions exchange and verify signed session identity bindings during handshake
+- legacy plain transfers are marked separately and cannot update trusted-device contact state
 
 The later session-policy stage should pin authenticated session verification to the stored trusted-device public key.
 
@@ -102,11 +103,12 @@ Current desktop transfers have an encrypted session path:
 - encrypted receive reads decrypt frames on demand instead of buffering a whole file payload
 - desktop sessions exchange Ed25519 signed identity bindings after `session.ready`
 - each side verifies the peer owns the public key advertised by the session identity
+- the plain compatibility path is labeled `legacy_plain`, requires manual approval, and cannot refresh trusted devices
 
 Remaining work:
 
 - require authenticated sessions to verify against the stored trusted-device public key where a trusted record exists
-- decide how and when to retire the plain compatibility transfer path
+- decide when to retire the plain compatibility transfer path
 
 Do not describe a transfer as fully trusted just because it uses authenticated session handshakes. The current path proves ownership of the key advertised in the session, and trusted records now store the long-term public key. The next step is enforcing that stored key during session verification.
 
