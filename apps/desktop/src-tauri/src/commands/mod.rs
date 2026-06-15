@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::ErrorKind;
 use std::net::{IpAddr, SocketAddr, TcpListener};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -49,6 +49,9 @@ use crate::app_state::{
     PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision, TransferStatusState,
 };
 use crate::device_identity::app_config_dir;
+use crate::local_bridge_authorizations::{
+    save_local_bridge_authorizations, save_local_bridge_authorizations_at,
+};
 use crate::local_bridge_runtime;
 use crate::network::{local_lan_ips, primary_lan_ip};
 use crate::transfer_history::{
@@ -715,12 +718,13 @@ pub fn confirm_local_bridge_authorization(
     state: State<'_, AppState>,
     authorization_code: String,
 ) -> Result<LocalBridgeAuthorizationDto, String> {
-    confirm_local_bridge_runtime_authorization_at(
+    let now_ms = now_ms();
+    let authorization = confirm_local_bridge_runtime_authorization_and_persist(
         &state.local_bridge_runtime,
         &authorization_code,
-        now_ms(),
-    )
-    .map(local_bridge_authorization_to_dto)
+        now_ms,
+    )?;
+    Ok(local_bridge_authorization_to_dto(authorization))
 }
 
 #[tauri::command]
@@ -2766,6 +2770,39 @@ fn confirm_local_bridge_runtime_authorization_at(
         .map_err(|error| error.to_string())?
         .push(authorization.clone());
     *pending_guard = None;
+    Ok(authorization)
+}
+
+fn confirm_local_bridge_runtime_authorization_and_persist(
+    runtime: &LocalBridgeRuntimeState,
+    authorization_code: &str,
+    now_ms: u128,
+) -> Result<LocalBridgeAuthorizationRecord, String> {
+    let authorization =
+        confirm_local_bridge_runtime_authorization_at(runtime, authorization_code, now_ms)?;
+    let authorizations = runtime
+        .authorizations
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    save_local_bridge_authorizations(&authorizations, now_ms)?;
+    Ok(authorization)
+}
+
+fn confirm_local_bridge_runtime_authorization_and_save_at(
+    runtime: &LocalBridgeRuntimeState,
+    authorization_code: &str,
+    now_ms: u128,
+    authorizations_path: &Path,
+) -> Result<LocalBridgeAuthorizationRecord, String> {
+    let authorization =
+        confirm_local_bridge_runtime_authorization_at(runtime, authorization_code, now_ms)?;
+    let authorizations = runtime
+        .authorizations
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    save_local_bridge_authorizations_at(authorizations_path, &authorizations, now_ms)?;
     Ok(authorization)
 }
 
@@ -5469,6 +5506,58 @@ mod tests {
         assert!(!response.requires_user_confirmation);
         assert!(runtime.pending_authorization.lock().unwrap().is_none());
         assert_eq!(runtime.authorizations.lock().unwrap().len(), 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn confirmed_runtime_authorization_is_saved_for_restart() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-persisted-auth");
+        let staging_root = dir.join("bundle_staging");
+        let authorizations_path = dir.join("local_bridge_authorizations.json");
+        let runtime = LocalBridgeRuntimeState::default();
+        let auth_request = serde_json::json!({
+            "kind": "authorization.request",
+            "payload": {
+                "request_id": "bridge-auth-persist",
+                "client": {
+                    "client_id": "generic-local-app",
+                    "display_name": "Generic Local App",
+                    "app_kind": "generic"
+                },
+                "requested_scopes": [
+                    "bundle.send"
+                ],
+                "reason": "Send a local bundle",
+                "ttl_seconds": 900
+            }
+        })
+        .to_string();
+
+        let auth_response = handle_local_bridge_request_with_runtime_at(
+            &auth_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_000,
+        )
+        .unwrap();
+        let authorization = confirm_local_bridge_runtime_authorization_and_save_at(
+            &runtime,
+            auth_response.authorization_code.as_deref().unwrap(),
+            1_500,
+            &authorizations_path,
+        )
+        .unwrap();
+        let saved = crate::local_bridge_authorizations::load_local_bridge_authorizations_at(
+            &authorizations_path,
+            1_600,
+        )
+        .unwrap();
+
+        assert_eq!(authorization.client_id, "generic-local-app");
+        assert_eq!(saved, vec![authorization]);
 
         fs::remove_dir_all(dir).unwrap();
     }

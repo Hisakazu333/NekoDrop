@@ -3,6 +3,7 @@ mod app_state;
 mod commands;
 mod device_identity;
 mod discovery;
+mod local_bridge_authorizations;
 mod local_bridge_runtime;
 mod network;
 mod transfer_history;
