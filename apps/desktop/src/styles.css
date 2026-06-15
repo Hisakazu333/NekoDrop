@@ -1453,6 +1453,51 @@ button:disabled {
   font-size: 12px;
 }
 
+.security-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+
+.security-line span:last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.security-badge {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  min-height: 22px;
+  padding: 0 8px;
+  border-radius: var(--r-pill);
+  color: var(--text-2);
+  background: var(--surface-input);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.security-badge.is-trusted {
+  color: #0b6b3a;
+  background: #e7f6ee;
+}
+
+.security-badge.is-encrypted {
+  color: #2454a6;
+  background: #eaf1ff;
+}
+
+.security-badge.is-warning {
+  color: #9a5b00;
+  background: #fff3d6;
+}
+
 .transfer-status-head strong,
 .panel-head strong,
 .result-line strong,
