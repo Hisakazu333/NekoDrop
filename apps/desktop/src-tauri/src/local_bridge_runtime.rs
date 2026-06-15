@@ -6,7 +6,9 @@ use std::time::Duration;
 
 use serde::Serialize;
 
-use crate::app_state::{AppState, LocalBridgeRuntimeState, TransferStatusState};
+use crate::app_state::{
+    AppState, LocalBridgeRuntimeState, LocalBridgeRuntimeStatusState, TransferStatusState,
+};
 use crate::commands;
 use crate::trusted_devices::TrustedDeviceRecord;
 
@@ -16,6 +18,7 @@ const LOCAL_BRIDGE_BIND_ATTEMPTS: u16 = 20;
 const LOCAL_BRIDGE_HEADER_LIMIT_BYTES: usize = 16 * 1024;
 const LOCAL_BRIDGE_MAX_REQUEST_BYTES: usize = 64 * 1024;
 const LOCAL_BRIDGE_READ_TIMEOUT: Duration = Duration::from_secs(5);
+const LOCAL_BRIDGE_REQUEST_PATH: &str = "/bridge/request";
 
 struct LocalBridgeRuntimeContext {
     trusted_devices: Arc<Mutex<Vec<TrustedDeviceRecord>>>,
@@ -46,14 +49,28 @@ pub fn start_local_bridge_runtime(state: &AppState) {
         let listener = match bind_local_bridge_listener(LOCAL_BRIDGE_DEFAULT_PORT) {
             Ok(listener) => listener,
             Err(error) => {
+                set_local_bridge_runtime_status(
+                    &context.runtime,
+                    false,
+                    LOCAL_BRIDGE_DEFAULT_PORT,
+                    Some(error.clone()),
+                );
                 eprintln!("local bridge runtime unavailable: {error}");
                 return;
             }
         };
         let Ok(address) = listener.local_addr() else {
-            eprintln!("local bridge runtime unavailable: listener address is unavailable");
+            let error = "listener address is unavailable".to_string();
+            set_local_bridge_runtime_status(
+                &context.runtime,
+                false,
+                LOCAL_BRIDGE_DEFAULT_PORT,
+                Some(error.clone()),
+            );
+            eprintln!("local bridge runtime unavailable: {error}");
             return;
         };
+        set_local_bridge_runtime_status(&context.runtime, true, address.port(), None);
         eprintln!("local bridge runtime listening on {address}");
 
         for stream in listener.incoming() {
@@ -235,8 +252,10 @@ fn parse_local_bridge_http_request(bytes: &[u8]) -> Result<LocalBridgeHttpReques
     if method != "POST" {
         return Err("local bridge only accepts POST requests".to_string());
     }
-    if path != "/bridge/request" {
-        return Err("local bridge only accepts /bridge/request".to_string());
+    if path != LOCAL_BRIDGE_REQUEST_PATH {
+        return Err(format!(
+            "local bridge only accepts {LOCAL_BRIDGE_REQUEST_PATH}"
+        ));
     }
 
     let content_length = content_length_from_headers(&bytes[..header_end])?;
@@ -323,6 +342,72 @@ fn write_local_bridge_json_response<T: Serialize>(
         body.len()
     )?;
     stream.write_all(&body)
+}
+
+pub(crate) fn local_bridge_runtime_status(
+    runtime: &LocalBridgeRuntimeState,
+) -> LocalBridgeRuntimeStatusSnapshot {
+    let status = runtime
+        .status
+        .lock()
+        .map(|status| status.clone())
+        .unwrap_or_default();
+    let pending_authorization_client =
+        runtime
+            .pending_authorization
+            .lock()
+            .ok()
+            .and_then(|pending| {
+                pending
+                    .as_ref()
+                    .map(|pending| pending.client.display_name.clone())
+            });
+    let authorization_count = runtime
+        .authorizations
+        .lock()
+        .map(|authorizations| authorizations.len())
+        .unwrap_or_default();
+
+    LocalBridgeRuntimeStatusSnapshot {
+        active: status.active,
+        bind_host: status.bind_host,
+        port: status.port,
+        request_path: status.request_path,
+        max_request_bytes: status.max_request_bytes,
+        pending_authorization_client,
+        authorization_count,
+        last_error: status.last_error,
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LocalBridgeRuntimeStatusSnapshot {
+    pub active: bool,
+    pub bind_host: String,
+    pub port: u16,
+    pub request_path: String,
+    pub max_request_bytes: usize,
+    pub pending_authorization_client: Option<String>,
+    pub authorization_count: usize,
+    pub last_error: Option<String>,
+}
+
+fn set_local_bridge_runtime_status(
+    runtime: &LocalBridgeRuntimeState,
+    active: bool,
+    port: u16,
+    last_error: Option<String>,
+) {
+    if let Ok(mut status) = runtime.status.lock() {
+        *status = LocalBridgeRuntimeStatusState {
+            active,
+            bind_host: LOCAL_BRIDGE_BIND_HOST.to_string(),
+            port,
+            request_path: LOCAL_BRIDGE_REQUEST_PATH.to_string(),
+            max_request_bytes: LOCAL_BRIDGE_MAX_REQUEST_BYTES,
+            last_error,
+        };
+    }
 }
 
 #[cfg(test)]
@@ -437,5 +522,37 @@ mod tests {
         assert_eq!(response.status, "pending_runtime");
         assert_eq!(response.security_state, "authorized");
         assert!(response.message.contains("not connected yet"));
+    }
+
+    #[test]
+    fn local_bridge_runtime_status_reports_loopback_boundary() {
+        let runtime = LocalBridgeRuntimeState::default();
+        set_local_bridge_runtime_status(&runtime, true, LOCAL_BRIDGE_DEFAULT_PORT, None);
+        runtime.pending_authorization.lock().unwrap().replace(
+            crate::app_state::PendingLocalBridgeAuthorization {
+                request_id: "bridge-auth".to_string(),
+                client: nekolink_protocol::LocalBridgeClientIdentity {
+                    client_id: "local-app".to_string(),
+                    display_name: "Local App".to_string(),
+                    app_kind: Some("generic".to_string()),
+                },
+                requested_scopes: vec![nekolink_protocol::LocalBridgePermissionScope::BundleSend],
+                reason: "Send a local bundle".to_string(),
+                authorization_code: "ABC-123".to_string(),
+                requested_at_ms: 1_000,
+                expires_at_ms: 2_000,
+            },
+        );
+
+        let status = local_bridge_runtime_status(&runtime);
+
+        assert!(status.active);
+        assert_eq!(status.bind_host, "127.0.0.1");
+        assert_eq!(status.request_path, "/bridge/request");
+        assert_eq!(status.max_request_bytes, LOCAL_BRIDGE_MAX_REQUEST_BYTES);
+        assert_eq!(
+            status.pending_authorization_client.as_deref(),
+            Some("Local App")
+        );
     }
 }

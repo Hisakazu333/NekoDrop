@@ -80,6 +80,17 @@ export interface LocalBridgeAuthorizationDto {
   expires_at_ms: number | null;
 }
 
+export interface LocalBridgeRuntimeStatusDto {
+  active: boolean;
+  bind_host: string;
+  port: number;
+  request_path: string;
+  max_request_bytes: number;
+  pending_authorization_client: string | null;
+  authorization_count: number;
+  last_error: string | null;
+}
+
 export interface DiscoveryStatusDto {
   phase: string;
   message: string;

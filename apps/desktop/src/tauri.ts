@@ -44,6 +44,7 @@ type CommandName =
   | "prune_staged_bundles"
   | "delete_staged_bundle"
   | "import_staged_bundle"
+  | "get_local_bridge_runtime_status"
   | "handle_local_bridge_request"
   | "confirm_local_bridge_authorization";
 
