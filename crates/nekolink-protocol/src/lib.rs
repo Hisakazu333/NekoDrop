@@ -2023,6 +2023,8 @@ pub enum LocalBridgePermissionScope {
 pub enum LocalBridgeEvent {
     #[serde(rename = "bundle.received")]
     BundleReceived(LocalBridgeBundleReceivedEvent),
+    #[serde(rename = "bundle.send.preflight")]
+    BundleSendPreflight(LocalBridgeBundleSendPreflightEvent),
     #[serde(rename = "transfer.updated")]
     TransferUpdated(LocalBridgeTransferUpdatedEvent),
 }
@@ -2038,6 +2040,25 @@ pub struct LocalBridgeBundleReceivedEvent {
     pub file_count: usize,
     pub total_bytes: u64,
     pub import_allowed: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeBundleSendPreflightEvent {
+    pub event_id: String,
+    pub request_id: String,
+    pub client_id: String,
+    pub status: LocalBridgeBundleSendPreflightStatus,
+    pub reason: Option<String>,
+    pub bundle_id: Option<String>,
+    pub bundle_type: Option<BundleType>,
+    pub target_device_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalBridgeBundleSendPreflightStatus {
+    Ready,
+    FailedPreflight,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2166,6 +2187,7 @@ impl LocalBridgeEvent {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         match self {
             Self::BundleReceived(event) => event.validate(),
+            Self::BundleSendPreflight(event) => event.validate(),
             Self::TransferUpdated(event) => event.validate(),
         }
     }
@@ -2185,6 +2207,19 @@ impl LocalBridgeBundleReceivedEvent {
             ));
         }
         Ok(())
+    }
+}
+
+impl LocalBridgeBundleSendPreflightEvent {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("event_id", &self.event_id)?;
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_bridge_client_id(&self.client_id)?;
+        validate_optional_non_empty("reason", self.reason.as_deref())?;
+        if let Some(bundle_id) = self.bundle_id.as_deref() {
+            validate_staged_bundle_id(bundle_id)?;
+        }
+        validate_optional_non_empty("target_device_id", self.target_device_id.as_deref())
     }
 }
 
@@ -4957,6 +4992,36 @@ mod tests {
         assert_eq!(json["kind"], "bundle.received");
         assert_eq!(json["payload"]["event_id"], "bridge-event-1");
         assert_eq!(json["payload"]["bundle_type"], "skill");
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeEvent>(json).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_event_uses_stable_json_shape() {
+        let event = LocalBridgeEvent::BundleSendPreflight(LocalBridgeBundleSendPreflightEvent {
+            event_id: "bridge-event-send-1".to_string(),
+            request_id: "bridge-send-1".to_string(),
+            client_id: "local-agent-app".to_string(),
+            status: LocalBridgeBundleSendPreflightStatus::FailedPreflight,
+            reason: Some("bundle_root_missing".to_string()),
+            bundle_id: None,
+            bundle_type: Some(BundleType::Skill),
+            target_device_id: Some("device-a".to_string()),
+        });
+
+        event.validate().unwrap();
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "bundle.send.preflight");
+        assert_eq!(json["payload"]["event_id"], "bridge-event-send-1");
+        assert_eq!(json["payload"]["request_id"], "bridge-send-1");
+        assert_eq!(json["payload"]["client_id"], "local-agent-app");
+        assert_eq!(json["payload"]["status"], "failed_preflight");
+        assert_eq!(json["payload"]["reason"], "bundle_root_missing");
+        assert_eq!(json["payload"]["bundle_type"], "skill");
+        assert!(json["payload"].get("bundle_root").is_none());
         assert_eq!(
             serde_json::from_value::<LocalBridgeEvent>(json).unwrap(),
             event

@@ -36,6 +36,7 @@ use nekodrop_storage::{
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
     BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeAuthorizationRequest,
+    LocalBridgeBundleSendPreflightEvent, LocalBridgeBundleSendPreflightStatus,
     LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
     SignedSessionIdentityBinding,
 };
@@ -3142,15 +3143,16 @@ fn push_local_bridge_pending_action_result(
     let Some(claimed_at_ms) = result.claimed_at_ms else {
         return Ok(());
     };
+    let event_id = format!("bridge-action-{request_id}-{claimed_at_ms}");
 
     let mut results = runtime
         .pending_action_results
         .lock()
         .map_err(|error| error.to_string())?;
     results.push(LocalBridgePendingActionResult {
-        request_id,
+        request_id: request_id.clone(),
         action_kind: "bundle.send".to_string(),
-        client_id,
+        client_id: client_id.clone(),
         client_display_name,
         status: result.status.clone(),
         reason: result.reason.clone(),
@@ -3167,6 +3169,29 @@ fn push_local_bridge_pending_action_result(
         let excess = results.len() - LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT;
         results.drain(0..excess);
     }
+    drop(results);
+
+    let status = match result.status.as_str() {
+        "ready" => LocalBridgeBundleSendPreflightStatus::Ready,
+        "failed_preflight" => LocalBridgeBundleSendPreflightStatus::FailedPreflight,
+        _ => return Ok(()),
+    };
+    push_local_bridge_runtime_event(
+        runtime,
+        LocalBridgeEvent::BundleSendPreflight(LocalBridgeBundleSendPreflightEvent {
+            event_id,
+            request_id,
+            client_id,
+            status,
+            reason: result.reason.clone(),
+            bundle_id: result.bundle_id.clone(),
+            bundle_type: result
+                .bundle_type
+                .as_deref()
+                .and_then(bundle_type_from_label),
+            target_device_id: result.target_device_id.clone(),
+        }),
+    )?;
     Ok(())
 }
 
@@ -3389,7 +3414,13 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 LocalBridgePermissionScope::TransferStatusRead,
                 now_ms,
             );
-            if !can_read_bundles && !can_read_transfers {
+            let can_send_bundles = local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleSend,
+                now_ms,
+            );
+            if !can_read_bundles && !can_read_transfers && !can_send_bundles {
                 return Ok(local_bridge_pending_confirmation_response(
                     request.request_id,
                     request.client,
@@ -3401,6 +3432,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 request.limit.unwrap_or(50),
                 can_read_bundles,
                 can_read_transfers,
+                can_send_bundles,
             )?;
             Ok(local_bridge_events_response(
                 request.request_id,
@@ -3554,6 +3586,7 @@ fn local_bridge_events_after(
     limit: usize,
     can_read_bundles: bool,
     can_read_transfers: bool,
+    can_send_bundles: bool,
 ) -> Result<Vec<serde_json::Value>, String> {
     let mut after_cursor = after_event_id.is_none();
     let mut output = Vec::new();
@@ -3562,7 +3595,12 @@ fn local_bridge_events_after(
             after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
             continue;
         }
-        if !local_bridge_event_is_allowed(event, can_read_bundles, can_read_transfers) {
+        if !local_bridge_event_is_allowed(
+            event,
+            can_read_bundles,
+            can_read_transfers,
+            can_send_bundles,
+        ) {
             continue;
         }
         output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
@@ -3576,6 +3614,7 @@ fn local_bridge_events_after(
 fn local_bridge_event_id(event: &LocalBridgeEvent) -> &str {
     match event {
         LocalBridgeEvent::BundleReceived(event) => &event.event_id,
+        LocalBridgeEvent::BundleSendPreflight(event) => &event.event_id,
         LocalBridgeEvent::TransferUpdated(event) => &event.event_id,
     }
 }
@@ -3584,9 +3623,11 @@ fn local_bridge_event_is_allowed(
     event: &LocalBridgeEvent,
     can_read_bundles: bool,
     can_read_transfers: bool,
+    can_send_bundles: bool,
 ) -> bool {
     match event {
         LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
+        LocalBridgeEvent::BundleSendPreflight(_) => can_send_bundles,
         LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
     }
 }
@@ -4152,6 +4193,10 @@ fn parse_bundle_type(value: &str) -> Result<BundleType, String> {
         "config_snapshot" => Ok(BundleType::ConfigSnapshot),
         _ => Err(format!("不支持的资料包类型：{value}")),
     }
+}
+
+fn bundle_type_from_label(value: &str) -> Option<BundleType> {
+    parse_bundle_type(value).ok()
 }
 
 fn received_root_name(report: &TransferReceiveReport) -> String {
@@ -7029,6 +7074,85 @@ mod tests {
         assert_eq!(results[0].reason.as_deref(), Some("bundle_root_missing"));
         assert!(results[0].message.contains("bundle_root"));
         assert!(results[0].bundle_root.is_none());
+    }
+
+    #[test]
+    fn authorized_local_bridge_client_can_poll_bundle_send_preflight_events() {
+        let runtime = LocalBridgeRuntimeState::default();
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-event");
+        let staging_root = dir.join("bundle_staging");
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ));
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-event".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: "/tmp/nekodrop-missing-bundle-event".to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-send",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(
+            response.events[0]["kind"].as_str(),
+            Some("bundle.send.preflight")
+        );
+        assert_eq!(
+            response.events[0]["payload"]["request_id"].as_str(),
+            Some("bridge-send-event")
+        );
+        assert_eq!(
+            response.events[0]["payload"]["status"].as_str(),
+            Some("failed_preflight")
+        );
+        assert!(response.events[0]["payload"].get("bundle_root").is_none());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
