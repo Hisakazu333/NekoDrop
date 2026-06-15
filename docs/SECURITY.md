@@ -47,11 +47,13 @@ The public key fingerprint is shown during pairing and used in trusted device re
 Current status:
 
 - desktop builds persist `device_identity.json` in the OS application data directory
+- new desktop identities use schema v2 with a persisted Ed25519 signing seed
+- old schema v1 desktop identities are migrated to schema v2 on load
 - connection codes include the receiver's public identity fields
 - this is the foundation for trusted pairing and current desktop identity checks
-- long-term asymmetric device identity keys are still pending
+- protocol-level signed session identity bindings exist, but the desktop session handshake does not exchange or verify them yet
 
-The later trusted-pairing stage should replace or extend the seed-derived fingerprint with a real asymmetric identity key pair.
+The later trusted-pairing stage should exchange and verify these long-term public keys between paired devices.
 
 ## Pairing
 
@@ -95,11 +97,12 @@ Current desktop transfers have an encrypted session path:
 - encrypted file frames protect file payloads on the encrypted session path
 - file-frame AAD binds transfer id, manifest path, offset, plain size, cipher, direction, counter, and nonce
 - encrypted receive reads decrypt frames on demand instead of buffering a whole file payload
-- protocol-level session identity binding material exists for later long-term signatures
+- protocol-level Ed25519 signed session identity bindings exist
+- desktop identities can sign a session identity binding with the persisted local signing key
 
 Remaining work:
 
-- add long-term authenticated device identity keys and signatures over session identity bindings
+- exchange and verify signed session identity bindings in the desktop session handshake
 - decide how and when to retire the plain compatibility transfer path
 
 Do not describe a transfer as fully authenticated just because it uses the current encrypted session path. It has confidentiality and integrity for encrypted frames, plus replay protection for encrypted control readers, but long-term device-key authentication is not complete.
