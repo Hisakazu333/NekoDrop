@@ -66,7 +66,7 @@ pub fn write_received_file_with_progress_and_cancel<R, F, C>(
     should_cancel: C,
 ) -> NekoDropResult<ReceivedFile>
 where
-    R: Read,
+    R: Read + ?Sized,
     F: FnMut(u64),
     C: FnMut() -> bool,
 {
@@ -93,7 +93,7 @@ pub fn write_received_file_with_resume_and_cancel<R, F, C>(
     mut should_cancel: C,
 ) -> NekoDropResult<ReceivedFile>
 where
-    R: Read,
+    R: Read + ?Sized,
     F: FnMut(u64),
     C: FnMut() -> bool,
 {

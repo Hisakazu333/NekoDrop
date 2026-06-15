@@ -226,7 +226,7 @@ crates/
 
 ### V0.8 Encrypted Session
 
-状态：控制消息已经走 encrypted `session.control`，offer / decision 读取路径已经接入 replay window，encrypted session 路径的文件 payload 已经进入加密 file frames。接收端 streaming 解密和长期身份密钥认证还没完成。
+状态：控制消息已经走 encrypted `session.control`，offer / decision 读取路径已经接入 replay window，encrypted session 路径的文件 payload 已经进入加密 file frames，接收端已改成逐帧 streaming 解密。长期身份密钥认证还没完成。
 
 目标：把文件互传从明文 TCP 升级为可信加密会话。
 
@@ -717,7 +717,7 @@ logs/
 6. OpenNeko Agent Integration
 ```
 
-当前最不应该跳过的是加密文件流收口和 bundle 闭环。设备身份、可信配对、encrypted control、replay window 和 encrypted file frames 已经有基础，但接收端 streaming 解密、长期身份密钥认证和上层导入边界还没压实；没有这些，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
+当前最不应该跳过的是长期身份认证和 bundle 闭环。设备身份、可信配对、encrypted control、replay window、encrypted file frames 和接收端 streaming 解密已经有基础，但长期身份密钥认证和上层导入边界还没压实；没有这些，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
 
 ## 12. 一句话总结
 

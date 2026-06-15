@@ -1142,7 +1142,7 @@ pub fn receive_encrypted_file_frames_with_expected_count<R, F, T>(
 ) -> NekoDropResult<Vec<T>>
 where
     R: Read,
-    F: FnMut(&FileFrameHeader, &mut std::io::Cursor<Vec<u8>>) -> NekoDropResult<T>,
+    F: FnMut(&FileFrameHeader, &mut dyn Read) -> NekoDropResult<T>,
 {
     let expected_count = u32::try_from(expected_count).map_err(|_| {
         NekoDropError::Network(format!(
@@ -1160,7 +1160,7 @@ fn receive_encrypted_file_frames_checked<R, F, T>(
 ) -> NekoDropResult<Vec<T>>
 where
     R: Read,
-    F: FnMut(&FileFrameHeader, &mut std::io::Cursor<Vec<u8>>) -> NekoDropResult<T>,
+    F: FnMut(&FileFrameHeader, &mut dyn Read) -> NekoDropResult<T>,
 {
     let count = read_file_count(stream)?;
     if let Some(expected_count) = expected_count {
@@ -1174,9 +1174,10 @@ where
 
     for _ in 0..count {
         let header = read_header(stream)?;
-        let plaintext = read_encrypted_file_payload(stream, keys, &header)?;
-        let mut reader = std::io::Cursor::new(plaintext);
-        received.push(receive_file(&header, &mut reader)?);
+        let mut reader = EncryptedFilePayloadReader::new(stream, keys, &header);
+        let received_file = receive_file(&header, &mut reader)?;
+        reader.finish()?;
+        received.push(received_file);
     }
 
     Ok(received)
@@ -1298,41 +1299,6 @@ fn write_encrypted_file_frame(
     Ok(())
 }
 
-fn read_encrypted_file_payload(
-    stream: &mut impl Read,
-    keys: &SessionKeyMaterial,
-    file_header: &FileFrameHeader,
-) -> NekoDropResult<Vec<u8>> {
-    let remaining = file_header.size.saturating_sub(file_header.offset);
-    let mut plaintext = Vec::with_capacity(remaining.min(usize::MAX as u64) as usize);
-    let mut expected_offset = file_header.offset;
-    while expected_offset < file_header.size {
-        let frame = read_encrypted_file_frame(stream)?;
-        if frame.header.manifest_path != file_header.manifest_path {
-            return Err(NekoDropError::Network(format!(
-                "encrypted file frame path mismatch: {} != {}",
-                frame.header.manifest_path, file_header.manifest_path
-            )));
-        }
-        if frame.header.offset != expected_offset {
-            return Err(NekoDropError::Network(format!(
-                "encrypted file frame offset mismatch for {}: {} != {}",
-                file_header.manifest_path, frame.header.offset, expected_offset
-            )));
-        }
-        let chunk = frame.open(keys).map_err(protocol_error_to_network)?;
-        expected_offset = expected_offset.saturating_add(chunk.len() as u64);
-        plaintext.extend_from_slice(&chunk);
-    }
-    if expected_offset != file_header.size {
-        return Err(NekoDropError::Network(format!(
-            "encrypted file payload size mismatch for {}: {} != {}",
-            file_header.manifest_path, expected_offset, file_header.size
-        )));
-    }
-    Ok(plaintext)
-}
-
 fn read_encrypted_file_frame(stream: &mut impl Read) -> NekoDropResult<EncryptedFileFrame> {
     let mut header_len_bytes = [0_u8; 4];
     stream.read_exact(&mut header_len_bytes).map_err(|error| {
@@ -1382,6 +1348,126 @@ fn read_encrypted_file_frame(stream: &mut impl Read) -> NekoDropResult<Encrypted
     })?;
 
     Ok(EncryptedFileFrame { header, ciphertext })
+}
+
+struct EncryptedFilePayloadReader<'a, R>
+where
+    R: Read,
+{
+    stream: &'a mut R,
+    keys: &'a SessionKeyMaterial,
+    file_header: &'a FileFrameHeader,
+    next_frame_offset: u64,
+    plaintext: Vec<u8>,
+    plaintext_offset: usize,
+}
+
+impl<'a, R> EncryptedFilePayloadReader<'a, R>
+where
+    R: Read,
+{
+    fn new(
+        stream: &'a mut R,
+        keys: &'a SessionKeyMaterial,
+        file_header: &'a FileFrameHeader,
+    ) -> Self {
+        Self {
+            stream,
+            keys,
+            file_header,
+            next_frame_offset: file_header.offset,
+            plaintext: Vec::new(),
+            plaintext_offset: 0,
+        }
+    }
+
+    fn finish(&mut self) -> NekoDropResult<()> {
+        let mut buffer = [0_u8; COPY_BUFFER_SIZE];
+        loop {
+            let read = self.read(&mut buffer).map_err(|error| {
+                NekoDropError::Network(format!(
+                    "failed to drain encrypted file payload for {}: {error}",
+                    self.file_header.manifest_path
+                ))
+            })?;
+            if read == 0 {
+                break;
+            }
+        }
+        if self.next_frame_offset != self.file_header.size {
+            return Err(NekoDropError::Network(format!(
+                "encrypted file payload size mismatch for {}: {} != {}",
+                self.file_header.manifest_path, self.next_frame_offset, self.file_header.size
+            )));
+        }
+        Ok(())
+    }
+
+    fn load_next_plaintext_chunk(&mut self) -> std::io::Result<bool> {
+        if self.next_frame_offset >= self.file_header.size {
+            return Ok(false);
+        }
+
+        let frame = read_encrypted_file_frame(self.stream).map_err(network_error_to_io)?;
+        if frame.header.manifest_path != self.file_header.manifest_path {
+            return Err(network_error_to_io(NekoDropError::Network(format!(
+                "encrypted file frame path mismatch: {} != {}",
+                frame.header.manifest_path, self.file_header.manifest_path
+            ))));
+        }
+        if frame.header.offset != self.next_frame_offset {
+            return Err(network_error_to_io(NekoDropError::Network(format!(
+                "encrypted file frame offset mismatch for {}: {} != {}",
+                self.file_header.manifest_path, frame.header.offset, self.next_frame_offset
+            ))));
+        }
+
+        let chunk = frame
+            .open(self.keys)
+            .map_err(protocol_error_to_network)
+            .map_err(network_error_to_io)?;
+        let next_offset = self.next_frame_offset.saturating_add(chunk.len() as u64);
+        if next_offset > self.file_header.size {
+            return Err(network_error_to_io(NekoDropError::Network(format!(
+                "encrypted file payload exceeds declared size for {}: {} > {}",
+                self.file_header.manifest_path, next_offset, self.file_header.size
+            ))));
+        }
+
+        self.next_frame_offset = next_offset;
+        self.plaintext = chunk;
+        self.plaintext_offset = 0;
+        Ok(true)
+    }
+}
+
+impl<R> Read for EncryptedFilePayloadReader<'_, R>
+where
+    R: Read,
+{
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+
+        if self.plaintext_offset >= self.plaintext.len() {
+            self.plaintext.clear();
+            self.plaintext_offset = 0;
+            if !self.load_next_plaintext_chunk()? {
+                return Ok(0);
+            }
+        }
+
+        let available = &self.plaintext[self.plaintext_offset..];
+        let to_copy = available.len().min(buf.len());
+        buf[..to_copy].copy_from_slice(&available[..to_copy]);
+        self.plaintext_offset += to_copy;
+        Ok(to_copy)
+    }
+}
+
+fn network_error_to_io(error: NekoDropError) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::InvalidData, error.to_string())
 }
 
 fn read_file_count(stream: &mut impl Read) -> NekoDropResult<u32> {
@@ -1860,7 +1946,11 @@ mod tests {
             &keys,
             |header, reader| {
                 let mut plaintext = Vec::new();
-                reader.read_to_end(&mut plaintext).unwrap();
+                reader.read_to_end(&mut plaintext).map_err(|error| {
+                    NekoDropError::Network(format!(
+                        "failed to read encrypted file payload: {error}"
+                    ))
+                })?;
                 Ok((header.clone(), plaintext))
             },
         )
@@ -1896,13 +1986,94 @@ mod tests {
             &keys,
             |header, reader| {
                 let mut plaintext = Vec::new();
-                reader.read_to_end(&mut plaintext).unwrap();
+                reader.read_to_end(&mut plaintext).map_err(|error| {
+                    NekoDropError::Network(format!(
+                        "failed to read encrypted file payload: {error}"
+                    ))
+                })?;
                 Ok((header.clone(), plaintext))
             },
         )
         .unwrap_err();
 
         assert!(error.to_string().contains("failed to open session payload"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_file_receive_exposes_streaming_reader() {
+        struct CountingReader<R> {
+            inner: R,
+            bytes_read: std::rc::Rc<std::cell::Cell<usize>>,
+        }
+
+        impl<R: Read> Read for CountingReader<R> {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                let read = self.inner.read(buf)?;
+                self.bytes_read.set(self.bytes_read.get() + read);
+                Ok(read)
+            }
+        }
+
+        let dir = unique_temp_dir("tcp-encrypted-file-streaming-reader");
+        let file = dir.join("sample.bin");
+        let payload = vec![b'a'; COPY_BUFFER_SIZE + 4096];
+        fs::write(&file, &payload).unwrap();
+        let outgoing = vec![OutgoingFileFrame::new(
+            "drop/sample.bin",
+            file,
+            "sha256-placeholder",
+        )];
+        let keys = SessionKeyMaterial {
+            send_key: [51_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [51_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut counters = nekolink_protocol::SessionTrafficCounters::default();
+        let mut stream = Cursor::new(Vec::new());
+
+        send_encrypted_file_frames_with_resume_and_cancel(
+            &mut stream,
+            "transfer-streaming",
+            &outgoing,
+            payload.len() as u64,
+            &[],
+            &keys,
+            &mut counters,
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            |_| {},
+            || false,
+        )
+        .unwrap();
+
+        let wire_payload = stream.into_inner();
+        let total_wire_len = wire_payload.len();
+        let bytes_read = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut stream = CountingReader {
+            inner: Cursor::new(wire_payload),
+            bytes_read: bytes_read.clone(),
+        };
+        let first_read_len = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            |_, reader| {
+                let consumed_before_plain_read = bytes_read.get();
+                assert!(
+                    consumed_before_plain_read < total_wire_len,
+                    "encrypted file payload should not be fully consumed before receiver reads plaintext"
+                );
+                let mut first = [0_u8; 16];
+                let read = reader.read(&mut first).unwrap();
+                let mut rest = Vec::new();
+                reader.read_to_end(&mut rest).unwrap();
+                assert_eq!(read + rest.len(), payload.len());
+                Ok(read)
+            },
+        )
+        .unwrap();
+
+        assert_eq!(first_read_len, vec![16]);
 
         fs::remove_dir_all(dir).unwrap();
     }

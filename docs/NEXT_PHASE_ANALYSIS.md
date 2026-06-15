@@ -15,35 +15,35 @@ NekoLink 安全层已经进入桌面传输主线：
 
 这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。但还有三个边界没有收口：
 
-- 接收端 encrypted file frame 目前会先解密单文件 payload，再交给 storage 写入；大文件场景需要 streaming decrypt
 - session 还没有绑定长期设备身份密钥
+- legacy plain file stream 仍然保留，需要迁移或拒绝策略
 - bundle/local bridge 还没有形成“上层应用请求、用户确认、导入回滚”的完整闭环
 
 所以现在不应该直接跳到 iroh、跨公网或 Agent 上层能力。跨网络 transport 解决的是“怎么连”，不能替代加密、权限和导入边界。
 
-## 阶段 1：Encrypted File Stream 收口
+## 阶段 1：Encrypted Session 收口
 
-加密文件流已经接进 encrypted session 路径。下一刀不是重新设计协议，而是把接收端实现从“整文件解密后写入”改成“边解密边写入”。
+加密文件流已经接进 encrypted session 路径，接收端也已经改成按 reader 逐帧解密。下一刀不是重写文件流，而是把 session 的身份和兼容边界收住。
 
 这一阶段要完成：
 
-- 接收端 streaming decrypt
-- 保持 partial/resume 的 offset 语义
-- 保持 cancel、history、progress 不倒退
-- 增加截断、乱序、重放和 AAD 篡改测试
+- 长期身份密钥认证
 - 明确 legacy plain file stream 的兼容策略
+- 增加截断、乱序和更多 replay 边界测试
+- 保持 partial/resume、cancel、history、progress 不倒退
 
 主要风险：
 
 - nonce/counter 不能复用
 - encrypted chunk 边界不能破坏 resume
 - 失败恢复不能只看普通 TCP offset
-- 大文件性能不能退回到高内存占用
+- 旧 plain path 不能继续承载敏感 bundle 或本机接入能力
 
 完成标准：
 
 - 控制消息和文件 payload 都在 session 保护边界内
-- 接收大文件不需要把单文件 payload 全部解密进内存
+- trusted device 和 session 绑定到长期身份密钥
+- 明文兼容路径有明确迁移或拒绝策略
 - 失败恢复、取消、历史记录不倒退
 
 ## 阶段 2：NekoLink Bundle 闭环
@@ -164,7 +164,7 @@ NekoDrop / OpenNeko / other app
 
 短期建议按这个顺序开分支：
 
-1. `security/streaming-encrypted-file-receive`
+1. `security/session-identity-binding`
 2. `bundle/staging-import-lifecycle`
 3. `bridge/local-runtime-auth`
 4. `bridge/bundle-send-import-requests`

@@ -43,21 +43,26 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 仍未完成：
 
-- 接收端 streaming 解密优化，当前加密路径会先解密单文件 payload 再交给 storage 写入
 - 长期身份密钥认证
+- legacy plain file stream 的迁移或拒绝策略
 - iroh runtime
 - relay server
 - Agent command
 - skills/session bundle
 - 手机端互通
 
-## 下一阶段：Encrypted File Stream 收口
+## 已完成：Encrypted File Stream 接收端 streaming 解密
 
-目标：把加密文件流从“功能闭环”收成适合大文件长期使用的实现。
+目标：把加密文件流从“整文件解密后写入”改成适合大文件长期使用的接收路径。
 
-范围：
+已经接入：
 
 - 接收端改成 streaming 解密，不再为单文件完整 payload 分配内存。
+- storage 按普通 reader 写入文件，network 层按需读取和解密 encrypted file frames。
+- encrypted frame 的 path、offset、AAD 篡改仍会失败。
+
+后续范围：
+
 - 给 encrypted file frame 增加更完整的乱序、截断和重放测试。
 - 明确 legacy plain file stream 的兼容策略和迁移策略。
 - checksum 继续作为落盘后的完整性校验。

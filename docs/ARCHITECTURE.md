@@ -97,9 +97,9 @@ sender selects files
 ```
 
 Encrypted file frame AAD binds transfer id, manifest path, offset, plain size,
-traffic kind, direction, counter, nonce, and cipher. The current receive helper
-still decrypts a complete single-file payload before handing it to storage; the
-next security/performance step is streaming decrypt on receive.
+traffic kind, direction, counter, nonce, and cipher. The receive side exposes a
+streaming reader that decrypts frames as storage reads, so it does not need a
+full single-file plaintext buffer.
 
 Long-term device identity keys are not wired yet. Current session encryption is
 ephemeral and tied to the existing desktop identity checks, not a full
@@ -172,8 +172,8 @@ NekoDrop currently enforces these boundaries:
 
 Known gaps:
 
-- encrypted receive path needs streaming decrypt for large files
 - long-term identity keys are not wired into session authentication
+- legacy plain transfer compatibility still needs a retirement or migration policy
 - local bridge has no runtime server or persisted authorization yet
 - iroh / relay / P2P are not implemented transports
 - mobile and Agent command channels are not current product paths

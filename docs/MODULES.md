@@ -111,8 +111,8 @@ Implemented in the current desktop path:
 
 Experimental or planned:
 
-- streaming decrypt for encrypted file receive
 - long-term authenticated device identity keys
+- legacy plain transfer migration or retirement policy
 - iroh transport
 - Relay / P2P transport
 - mobile main flow
