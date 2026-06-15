@@ -233,6 +233,23 @@ The same verified handshake produces mirrored directions on both peers: one side
 
 `SessionEphemeralKeyPair` can generate an X25519 ephemeral secret, expose the encoded public key for `session.hello` / `session.ready`, and derive the same 32-byte shared secret from the peer public key on both sides. The secret is not printed by the keypair Debug implementation.
 
+### Session Identity Signature
+
+`SessionIdentityBinding` is the canonical material that long-term device keys sign. It binds:
+
+```text
+role
+session_id
+device_id
+public_key_fingerprint
+session_ephemeral_public_key
+handshake_hash
+```
+
+`SignedSessionIdentityBinding` uses Ed25519. The signed payload is the binding's canonical SHA-256 hash, not ad-hoc JSON serialization. The public key and signature are base64url without padding, and the public key fingerprint is derived from the Ed25519 public key bytes.
+
+Current status: the protocol model and desktop local signing key persistence exist. Desktop session handshake exchange and peer verification are the next step.
+
 ### Session Traffic Frames
 
 The protocol crate defines traffic-frame counters and nonce inputs for encrypted control frames and encrypted file frames. Desktop transfers use this for encrypted session control and file payloads. Replay-window enforcement is wired into the encrypted offer/decision readers.

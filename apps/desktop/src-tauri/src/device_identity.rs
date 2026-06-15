@@ -8,11 +8,14 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use nekolink_protocol::{Capability, DeviceIdentity, DeviceKind, PlatformKind};
+use nekolink_protocol::{
+    Capability, DeviceIdentity, DeviceIdentitySigningKey, DeviceKind, PlatformKind,
+    SessionIdentityBinding, SignedSessionIdentityBinding, DEVICE_IDENTITY_SIGNING_KEY_LEN,
+};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 
-const IDENTITY_SCHEMA_VERSION: u16 = 1;
+const IDENTITY_SCHEMA_VERSION: u16 = 2;
+const LEGACY_IDENTITY_SCHEMA_VERSION: u16 = 1;
 const SECRET_SEED_BYTES: usize = 32;
 
 #[derive(Debug, Clone)]
@@ -69,6 +72,17 @@ impl LocalDeviceIdentity {
         *persisted = next_identity;
         Ok(device_name)
     }
+
+    pub fn sign_session_identity_binding(
+        &self,
+        binding: SessionIdentityBinding,
+    ) -> Result<SignedSessionIdentityBinding, String> {
+        let signing_key = {
+            let persisted = self.persisted.lock().map_err(|error| error.to_string())?;
+            signing_key_from_seed_hex(&persisted.signing_seed_hex)?
+        };
+        SignedSessionIdentityBinding::sign(binding, &signing_key).map_err(|error| error.message)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,6 +93,8 @@ struct PersistedDeviceIdentity {
     device_kind: DeviceKind,
     platform: PlatformKind,
     secret_seed_hex: String,
+    #[serde(default)]
+    signing_seed_hex: String,
     public_key_fingerprint: String,
     created_at_ms: u128,
 }
@@ -102,7 +118,12 @@ fn read_device_identity(path: PathBuf) -> Result<LocalDeviceIdentity, String> {
         .map_err(|error| format!("无法读取设备身份文件 {}: {error}", path.display()))?;
     let identity = serde_json::from_str::<PersistedDeviceIdentity>(&content)
         .map_err(|error| format!("设备身份文件格式无效 {}: {error}", path.display()))?;
+    let original_schema_version = identity.schema_version;
+    let identity = migrate_persisted_identity(identity)?;
     validate_persisted_identity(&identity)?;
+    if original_schema_version != IDENTITY_SCHEMA_VERSION {
+        write_persisted_identity(&path, &identity)?;
+    }
     Ok(LocalDeviceIdentity {
         persisted: Arc::new(Mutex::new(identity)),
     })
@@ -111,9 +132,14 @@ fn read_device_identity(path: PathBuf) -> Result<LocalDeviceIdentity, String> {
 fn new_device_identity() -> Result<PersistedDeviceIdentity, String> {
     let mut secret_seed = [0_u8; SECRET_SEED_BYTES];
     getrandom::fill(&mut secret_seed).map_err(|error| format!("无法生成设备密钥种子: {error}"))?;
+    let mut signing_seed = [0_u8; DEVICE_IDENTITY_SIGNING_KEY_LEN];
+    getrandom::fill(&mut signing_seed)
+        .map_err(|error| format!("无法生成设备身份签名密钥: {error}"))?;
 
     let secret_seed_hex = hex::encode(secret_seed);
-    let public_key_fingerprint = fingerprint_for_seed(&secret_seed);
+    let signing_seed_hex = hex::encode(signing_seed);
+    let signing_key = DeviceIdentitySigningKey::from_seed(signing_seed);
+    let public_key_fingerprint = signing_key.public_key_fingerprint();
     let id_suffix = public_key_fingerprint
         .strip_prefix("sha256:")
         .unwrap_or(&public_key_fingerprint)
@@ -128,9 +154,30 @@ fn new_device_identity() -> Result<PersistedDeviceIdentity, String> {
         device_kind: DeviceKind::Desktop,
         platform: current_platform(),
         secret_seed_hex,
+        signing_seed_hex,
         public_key_fingerprint,
         created_at_ms: now_ms(),
     })
+}
+
+fn migrate_persisted_identity(
+    mut identity: PersistedDeviceIdentity,
+) -> Result<PersistedDeviceIdentity, String> {
+    if identity.schema_version == IDENTITY_SCHEMA_VERSION {
+        return Ok(identity);
+    }
+    if identity.schema_version != LEGACY_IDENTITY_SCHEMA_VERSION {
+        return Err(format!("不支持的设备身份版本: {}", identity.schema_version));
+    }
+
+    let mut signing_seed = [0_u8; DEVICE_IDENTITY_SIGNING_KEY_LEN];
+    getrandom::fill(&mut signing_seed)
+        .map_err(|error| format!("无法迁移设备身份签名密钥: {error}"))?;
+    let signing_key = DeviceIdentitySigningKey::from_seed(signing_seed);
+    identity.schema_version = IDENTITY_SCHEMA_VERSION;
+    identity.signing_seed_hex = hex::encode(signing_seed);
+    identity.public_key_fingerprint = signing_key.public_key_fingerprint();
+    Ok(identity)
 }
 
 fn validate_persisted_identity(identity: &PersistedDeviceIdentity) -> Result<(), String> {
@@ -146,8 +193,15 @@ fn validate_persisted_identity(identity: &PersistedDeviceIdentity) -> Result<(),
     if identity.secret_seed_hex.len() != SECRET_SEED_BYTES * 2 {
         return Err("设备身份密钥种子长度无效".to_string());
     }
+    if identity.signing_seed_hex.len() != DEVICE_IDENTITY_SIGNING_KEY_LEN * 2 {
+        return Err("设备身份签名密钥长度无效".to_string());
+    }
     if identity.public_key_fingerprint.trim().is_empty() {
         return Err("设备身份缺少 public_key_fingerprint".to_string());
+    }
+    let signing_key = signing_key_from_seed_hex(&identity.signing_seed_hex)?;
+    if identity.public_key_fingerprint != signing_key.public_key_fingerprint() {
+        return Err("设备身份签名密钥与 fingerprint 不匹配".to_string());
     }
     Ok(())
 }
@@ -287,9 +341,13 @@ fn desktop_capabilities() -> Vec<Capability> {
     ]
 }
 
-fn fingerprint_for_seed(secret_seed: &[u8; SECRET_SEED_BYTES]) -> String {
-    let digest = Sha256::digest(secret_seed);
-    format!("sha256:{}", hex::encode(digest))
+fn signing_key_from_seed_hex(value: &str) -> Result<DeviceIdentitySigningKey, String> {
+    let decoded =
+        hex::decode(value).map_err(|error| format!("设备身份签名密钥不是 hex: {error}"))?;
+    let seed: [u8; DEVICE_IDENTITY_SIGNING_KEY_LEN] = decoded
+        .try_into()
+        .map_err(|_| "设备身份签名密钥长度无效".to_string())?;
+    Ok(DeviceIdentitySigningKey::from_seed(seed))
 }
 
 fn now_ms() -> u128 {
@@ -316,6 +374,45 @@ mod tests {
         assert!(public.public_key_fingerprint.starts_with("sha256:"));
         assert!(public.capabilities.contains(&Capability::FileTransfer));
         assert!(public.capabilities.contains(&Capability::DevicePairing));
+    }
+
+    #[test]
+    fn local_identity_can_sign_session_identity_binding() {
+        let identity = LocalDeviceIdentity {
+            persisted: Arc::new(Mutex::new(new_device_identity().unwrap())),
+        };
+        let public = identity.public_identity();
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Initiator,
+            "session-1",
+            &public,
+            "base64-local-key",
+            format!("sha256:{}", "1".repeat(64)),
+        )
+        .unwrap();
+
+        let signed = identity
+            .sign_session_identity_binding(binding.clone())
+            .unwrap();
+
+        assert_eq!(signed.public_key_fingerprint, public.public_key_fingerprint);
+        signed.verify(&binding).unwrap();
+    }
+
+    #[test]
+    fn migrates_legacy_identity_to_signing_key_schema() {
+        let mut legacy = new_device_identity().unwrap();
+        legacy.schema_version = LEGACY_IDENTITY_SCHEMA_VERSION;
+        legacy.signing_seed_hex = String::new();
+
+        let migrated = migrate_persisted_identity(legacy).unwrap();
+
+        assert_eq!(migrated.schema_version, IDENTITY_SCHEMA_VERSION);
+        assert_eq!(
+            migrated.signing_seed_hex.len(),
+            DEVICE_IDENTITY_SIGNING_KEY_LEN * 2
+        );
+        validate_persisted_identity(&migrated).unwrap();
     }
 
     #[test]
