@@ -7,7 +7,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     connect_endpoint, read_incoming_control_frame, read_pairing_decision,
-    read_session_transfer_decision, read_session_transfer_offer, read_transfer_decision,
+    read_session_control_envelope, read_session_transfer_offer, read_transfer_decision,
     read_verified_session_ready, receive_file_frames_with_expected_count,
     send_file_frames_with_resume_and_cancel, write_pairing_decision, write_pairing_request,
     write_session_hello, write_session_ready, write_session_transfer_decision,
@@ -25,7 +25,7 @@ use nekodrop_storage::{
 use nekolink_protocol::{
     default_session_cipher_preference, BundleType, Capability, DeviceIdentity, ProtocolError,
     SessionEphemeralKeyPair, SessionFrameKind, SessionHelloPayload, SessionKeyMaterial,
-    SessionReadyPayload, SessionTrafficCounters, SessionTrafficFrameHeader,
+    SessionReadyPayload, SessionReplayWindow, SessionTrafficCounters, SessionTrafficFrameHeader,
     VerifiedSessionHandshake,
 };
 
@@ -230,7 +230,7 @@ where
         file_count: plan.file_count(),
         total_bytes: plan.total_bytes(),
     });
-    let decision = read_session_transfer_decision(&mut stream, &session.keys)?;
+    let decision = session.read_transfer_decision(&mut stream)?;
     if should_cancel() {
         return Err(NekoDropError::Network("transfer cancelled".into()));
     }
@@ -885,6 +885,7 @@ struct ActiveSessionControl {
     cipher: String,
     keys: SessionKeyMaterial,
     counters: SessionTrafficCounters,
+    receive_window: SessionReplayWindow,
     message_counter: u64,
     peer_identity: DeviceIdentity,
 }
@@ -900,6 +901,46 @@ impl ActiveSessionControl {
         self.counters
             .next_send_header(&self.cipher, SessionFrameKind::Control)
             .map_err(protocol_error_to_service)
+    }
+
+    fn read_transfer_decision<S>(&mut self, stream: &mut S) -> NekoDropResult<TransferDecision>
+    where
+        S: Read,
+    {
+        let envelope = read_session_control_envelope(stream)?;
+        if !matches!(
+            envelope.payload.inner_kind,
+            nekolink_protocol::MessageKind::FileAccept
+                | nekolink_protocol::MessageKind::FileDecline
+        ) {
+            return Err(NekoDropError::Network(format!(
+                "unexpected encrypted transfer decision kind: {}",
+                envelope.payload.inner_kind.as_str()
+            )));
+        }
+        let decision: TransferDecision =
+            nekolink_protocol::EncryptedSessionPayload::open_control_once(
+                &envelope,
+                &self.keys,
+                &mut self.receive_window,
+            )
+            .map_err(protocol_error_to_service)?;
+        decision.validate().map_err(protocol_error_to_service)?;
+        if decision.accepted
+            && envelope.payload.inner_kind != nekolink_protocol::MessageKind::FileAccept
+        {
+            return Err(NekoDropError::Network(
+                "accepted encrypted transfer decision must use file.accept".into(),
+            ));
+        }
+        if !decision.accepted
+            && envelope.payload.inner_kind != nekolink_protocol::MessageKind::FileDecline
+        {
+            return Err(NekoDropError::Network(
+                "declined encrypted transfer decision must use file.decline".into(),
+            ));
+        }
+        Ok(decision)
     }
 }
 
@@ -980,6 +1021,7 @@ fn active_session_from_handshake(
         cipher: handshake.cipher,
         keys,
         counters: SessionTrafficCounters::default(),
+        receive_window: SessionReplayWindow::default(),
         message_counter: 0,
         peer_identity,
     })
@@ -1271,6 +1313,96 @@ mod tests {
         assert!(!receive_dir.join("drop/sample.txt").exists());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn active_session_control_rejects_replayed_encrypted_decision() {
+        let mut session = ActiveSessionControl {
+            session_id: "session-1".to_string(),
+            cipher: nekolink_protocol::SESSION_CIPHER_XCHACHA20POLY1305.to_string(),
+            keys: SessionKeyMaterial {
+                send_key: [23_u8; nekolink_protocol::SESSION_TRAFFIC_KEY_LEN],
+                receive_key: [23_u8; nekolink_protocol::SESSION_TRAFFIC_KEY_LEN],
+            },
+            counters: SessionTrafficCounters::default(),
+            receive_window: SessionReplayWindow::default(),
+            message_counter: 0,
+            peer_identity: test_identity("neko-device-peer", "Peer"),
+        };
+        let header = nekolink_protocol::SessionTrafficFrameHeader::new(
+            nekolink_protocol::SESSION_CIPHER_XCHACHA20POLY1305,
+            nekolink_protocol::SessionFrameKind::Control,
+            nekolink_protocol::SessionFrameDirection::Send,
+            7,
+        )
+        .unwrap();
+        let envelope = nekolink_protocol::EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:decision-1",
+            &session.keys,
+            header,
+            nekolink_protocol::MessageKind::FileAccept,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        let mut first_buffer = Vec::new();
+        let mut second_buffer = Vec::new();
+        nekodrop_network::write_session_control_envelope(&mut first_buffer, &envelope).unwrap();
+        nekodrop_network::write_session_control_envelope(&mut second_buffer, &envelope).unwrap();
+
+        assert_eq!(
+            session
+                .read_transfer_decision(&mut std::io::Cursor::new(first_buffer))
+                .unwrap(),
+            TransferDecision::accept()
+        );
+        let error = session
+            .read_transfer_decision(&mut std::io::Cursor::new(second_buffer))
+            .unwrap_err();
+
+        assert!(error.to_string().contains("replayed session frame"));
+    }
+
+    #[test]
+    fn active_session_control_rejects_unexpected_encrypted_decision_kind() {
+        let mut session = ActiveSessionControl {
+            session_id: "session-1".to_string(),
+            cipher: nekolink_protocol::SESSION_CIPHER_XCHACHA20POLY1305.to_string(),
+            keys: SessionKeyMaterial {
+                send_key: [23_u8; nekolink_protocol::SESSION_TRAFFIC_KEY_LEN],
+                receive_key: [23_u8; nekolink_protocol::SESSION_TRAFFIC_KEY_LEN],
+            },
+            counters: SessionTrafficCounters::default(),
+            receive_window: SessionReplayWindow::default(),
+            message_counter: 0,
+            peer_identity: test_identity("neko-device-peer", "Peer"),
+        };
+        let header = nekolink_protocol::SessionTrafficFrameHeader::new(
+            nekolink_protocol::SESSION_CIPHER_XCHACHA20POLY1305,
+            nekolink_protocol::SessionFrameKind::Control,
+            nekolink_protocol::SessionFrameDirection::Send,
+            8,
+        )
+        .unwrap();
+        let envelope = nekolink_protocol::EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:decision-2",
+            &session.keys,
+            header,
+            nekolink_protocol::MessageKind::FileOffer,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        let mut buffer = Vec::new();
+        nekodrop_network::write_session_control_envelope(&mut buffer, &envelope).unwrap();
+
+        let error = session
+            .read_transfer_decision(&mut std::io::Cursor::new(buffer))
+            .unwrap_err();
+
+        assert!(error
+            .to_string()
+            .contains("unexpected encrypted transfer decision kind"));
     }
 
     #[test]
