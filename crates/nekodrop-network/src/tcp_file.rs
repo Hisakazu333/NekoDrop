@@ -7,8 +7,8 @@ use std::path::Path;
 pub use nekolink_protocol::{
     DeviceHello, EncryptedFileFrame, EncryptedFileFrameHeader, EncryptedSessionPayload,
     PairingDecisionPayload, PairingRequestPayload, SessionHelloPayload, SessionReadyPayload,
-    TransferDecision, TransferOffer, TransferOfferFile, TransferResumeFile,
-    VerifiedSessionHandshake,
+    SignedSessionIdentityBinding, TransferDecision, TransferOffer, TransferOfferFile,
+    TransferResumeFile, VerifiedSessionHandshake,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
@@ -682,6 +682,43 @@ pub fn read_verified_session_ready(
         .verify_for_hello(hello)
         .map_err(protocol_error_to_network)?;
     Ok(ready)
+}
+
+pub fn write_session_identity_binding(
+    stream: &mut impl Write,
+    signed_binding: &SignedSessionIdentityBinding,
+) -> NekoDropResult<()> {
+    signed_binding
+        .validate()
+        .map_err(protocol_error_to_network)?;
+    let session_id = signed_binding.binding.session_id.clone();
+    let message_id = format!(
+        "{}:session-identity-{}",
+        session_id,
+        signed_binding.binding.role.as_str()
+    );
+    let envelope = Envelope::new(
+        session_id,
+        message_id,
+        MessageKind::SessionIdentity,
+        signed_binding.clone(),
+    )
+    .with_capabilities([Capability::EncryptedSession]);
+    write_json_frame(stream, &envelope)
+}
+
+pub fn read_session_identity_binding(
+    stream: &mut impl Read,
+) -> NekoDropResult<SignedSessionIdentityBinding> {
+    let envelope: Envelope<SignedSessionIdentityBinding> = read_json_frame(stream)?;
+    envelope
+        .validate_kind(MessageKind::SessionIdentity)
+        .map_err(protocol_error_to_network)?;
+    let signed_binding = envelope.payload;
+    signed_binding
+        .validate()
+        .map_err(protocol_error_to_network)?;
+    Ok(signed_binding)
 }
 
 pub fn write_session_control_envelope(
@@ -1592,9 +1629,10 @@ mod tests {
 
     use nekodrop_storage::{create_source_plan_from_paths, sha256_file, write_received_file};
     use nekolink_protocol::{
-        default_session_cipher_preference, Capability, DeviceIdentity, DeviceKind, MessageKind,
-        PlatformKind, SessionFrameDirection, SessionFrameKind, SessionHelloPayload,
-        SessionKeyMaterial, SessionReadyPayload, SessionTrafficFrameHeader,
+        default_session_cipher_preference, Capability, DeviceIdentity, DeviceIdentitySigningKey,
+        DeviceKind, MessageKind, PlatformKind, SessionFrameDirection, SessionFrameKind,
+        SessionHelloPayload, SessionIdentityBinding, SessionKeyMaterial, SessionReadyPayload,
+        SessionTrafficFrameHeader, SignedSessionIdentityBinding, VerifiedSessionHandshake,
         SESSION_CIPHER_XCHACHA20POLY1305, SESSION_TRAFFIC_KEY_LEN,
     };
 
@@ -1757,6 +1795,58 @@ mod tests {
         let error = read_verified_session_ready(&mut Cursor::new(buffer), &hello).unwrap_err();
 
         assert!(error.to_string().contains("handshake_hash mismatch"));
+    }
+
+    #[test]
+    fn session_identity_binding_round_trips_through_nekolink_envelope() {
+        let signing_key = DeviceIdentitySigningKey::from_seed([7_u8; 32]);
+        let local_identity = DeviceIdentity::new(
+            "neko-device-local",
+            "Local Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            signing_key.public_key_fingerprint(),
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer_key = DeviceIdentitySigningKey::from_seed([8_u8; 32]);
+        let peer_identity = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            peer_key.public_key_fingerprint(),
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto(
+            "session-1",
+            local_identity,
+            "base64-local-ephemeral-public-key",
+        );
+        let ready = SessionReadyPayload::for_hello_with_cipher_preference(
+            &hello,
+            peer_identity,
+            "base64-peer-ephemeral-public-key",
+            &default_session_cipher_preference(),
+        )
+        .unwrap();
+        let handshake = VerifiedSessionHandshake::from_ready(&hello, &ready).unwrap();
+        let binding = SessionIdentityBinding::for_initiator(&handshake).unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding.clone(), &signing_key).unwrap();
+        let mut buffer = Vec::new();
+
+        write_session_identity_binding(&mut buffer, &signed).unwrap();
+        let received = read_session_identity_binding(&mut Cursor::new(buffer)).unwrap();
+
+        assert_eq!(received, signed);
+        received.verify(&binding).unwrap();
     }
 
     #[test]

@@ -11,16 +11,17 @@ use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{
-    Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, ReceivePolicy,
+    Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, NekoDropError,
+    ReceivePolicy,
 };
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
     TransferProgress,
 };
 use nekodrop_service::{
-    accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel,
+    accept_incoming_stream_with_authenticated_control_bundle_staging_and_cancel,
     create_transfer_plan as create_service_transfer_plan, create_transfer_plan_with_scan_progress,
-    send_pairing_request, send_plan_with_encrypted_control_and_cancel, IncomingSessionReport,
+    send_pairing_request, send_plan_with_authenticated_session_and_cancel, IncomingSessionReport,
     ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport,
     TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
@@ -977,6 +978,7 @@ fn send_paths_to_endpoint_with_history_id(
     let source_paths = path_bufs_to_strings(&paths);
     let plan = create_service_transfer_plan(&paths).map_err(|error| error.to_string())?;
     let sender_identity = state.device_identity.public_identity();
+    let local_device_identity = state.device_identity.clone();
     reject_self_peer(&sender_identity, &peer)?;
     let started_at_ms = now_ms();
     let transfer_id = history_transfer_id(started_at_ms, history_id_override.as_deref());
@@ -1012,10 +1014,16 @@ fn send_paths_to_endpoint_with_history_id(
         || {
             let transfer_status = transfer_status.clone();
             let cancel_for_attempt = cancel_for_send.clone();
-            send_plan_with_encrypted_control_and_cancel(
+            let local_device_identity = local_device_identity.clone();
+            send_plan_with_authenticated_session_and_cancel(
                 &endpoint,
                 plan.clone(),
                 &sender_identity,
+                move |binding| {
+                    local_device_identity
+                        .sign_session_identity_binding(binding)
+                        .map_err(NekoDropError::Network)
+                },
                 move |event| {
                     if let Some(status) = status_from_progress_event("send", None, event) {
                         set_transfer_status(&transfer_status, status);
@@ -1392,6 +1400,7 @@ pub fn start_receive_once(
     let trusted_devices = state.trusted_devices.clone();
     let transfer_history = state.transfer_history.clone();
     let active_receive_cancel = state.active_receive_cancel.clone();
+    let local_device_identity = state.device_identity.clone();
     let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
     let bundle_staging_root_for_thread = bundle_staging_root.clone();
@@ -1454,17 +1463,23 @@ pub fn start_receive_once(
                 let receive_dir_for_decision = receive_dir_for_thread.clone();
                 let trusted_for_pairing = trusted_devices.clone();
                 let local_for_pairing = local_identity.clone();
+                let local_for_signing = local_device_identity.clone();
                 let peer_host_for_pairing = peer_host.clone();
                 let current_receive_cancel = Arc::new(AtomicBool::new(false));
                 if let Ok(mut active_cancel) = active_receive_cancel.lock() {
                     *active_cancel = Some(current_receive_cancel.clone());
                 }
                 let result =
-                    accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel(
+                    accept_incoming_stream_with_authenticated_control_bundle_staging_and_cancel(
                         &mut stream,
                         &receive_dir_for_thread,
                         &bundle_staging_root_for_thread,
                         &local_identity,
+                        move |binding| {
+                            local_for_signing
+                                .sign_session_identity_binding(binding)
+                                .map_err(NekoDropError::Network)
+                        },
                         move |offer| {
                             let resume_summary =
                                 pending_resume_summary_from_offer(&receive_dir_for_decision, offer);
