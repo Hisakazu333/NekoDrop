@@ -43,7 +43,7 @@
 | 发送端瞬时网络失败自动重试 | 已接入 | 连接拒绝、连接重置、超时等短暂网络错误会自动重试 1 次；用户取消、对方拒绝、校验失败、权限和路径错误不会自动重试。 |
 | TCP partial offset 断点续传基础 | 已接入 | 接收端可以基于 `.nekodrop-part` 生成 resume files，发送端按 offset 只补传剩余 payload，接收端追加后做 SHA-256 校验。 |
 | 接收端 resume 明细 UI | 已接入 | 接收确认卡片会在存在可续传内容时显示可继续文件数、可跳过已完成文件数和已接收字节数。 |
-| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；未接入加密会话前，旧配置中的 `auto_accept_trusted` 会按人工确认处理，不再仅凭公开 device_id + fingerprint 静默接收。 |
+| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会在 authenticated session 已验签且长期 public key 命中可信设备记录时自动接收，旧明文和未配对签名 session 仍按人工确认处理。 |
 | 接收目录持久化 | 已接入 | 选择或启动收件时会写入 `app_config.json`，重启后继续使用。 |
 | 失败/取消历史进度 | 已接入 | 发送失败或取消时，历史记录会保留最后一次真实已传字节数；未传完的发送记录会显示已传和剩余大小，主操作为“继续发送”，普通失败和不可续传取消显示“重试”，当前失败/取消状态、最近记录和历史详情都会保留下一步提示或备用码兜底入口；重试结果会更新同一条历史记录。 |
 | 网络/传输错误提示和地址预检 | 已接入 | 连接阶段有短超时保护；连接拒绝、超时、127.0.0.1、0.0.0.0、169.254.x.x、198.18/198.19、未接入 transport、checksum 等问题会在发送/配对前或失败后转成人能看懂的提示；当前失败状态和历史详情会给一条短的下一步建议。 |
@@ -109,7 +109,7 @@ V0.6
 
 V0.7
   加密 session 接入桌面主线：
-  file.offer / file.accept / file.decline 已经走 encrypted session.control，offer / decision 控制消息读取路径已接入 replay window；encrypted session 路径的文件 payload 已经进入加密 file frames，接收端已改为逐帧 streaming 解密。session.identity 签名校验、可信设备 public key pinning 和 legacy plain 隔离已接入；下一步收口 authenticated trusted auto-accept 策略。
+  file.offer / file.accept / file.decline 已经走 encrypted session.control，offer / decision 控制消息读取路径已接入 replay window；encrypted session 路径的文件 payload 已经进入加密 file frames，接收端已改为逐帧 streaming 解密。session.identity 签名校验、可信设备 public key pinning、legacy plain 隔离和 authenticated trusted auto-accept 策略已接入。
 
 V0.8
   NekoLink 上层包格式：
