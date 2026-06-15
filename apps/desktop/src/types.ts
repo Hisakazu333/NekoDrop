@@ -114,6 +114,11 @@ export interface LocalBridgePendingActionRemoveDto {
   actions: LocalBridgePendingActionDto[];
 }
 
+export interface LocalBridgePendingActionTakeDto {
+  action: LocalBridgePendingActionDto | null;
+  remaining_count: number;
+}
+
 export interface LocalBridgeRuntimeStatusDto {
   active: boolean;
   bind_host: string;
