@@ -205,6 +205,7 @@ Current desktop behavior:
 - rejects oversized request bodies
 - allows read-only requests for devices, staged bundle details, and transfer status
 - lets local apps request scopes with a short authorization code
+- persists confirmed authorizations locally and restores only unexpired records on restart
 - keeps `bundle.send` and `bundle.import` behind authorization and returns `pending_runtime`; it does not execute those mutations yet
 
 Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.

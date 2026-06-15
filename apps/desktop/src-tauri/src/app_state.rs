@@ -8,6 +8,7 @@ use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgePermissionScope};
 
 use crate::app_config::load_app_config;
 use crate::device_identity::{load_or_create_device_identity, LocalDeviceIdentity};
+use crate::local_bridge_authorizations::load_local_bridge_authorizations;
 use crate::transfer_history::{load_transfer_history, TransferHistoryRecord};
 use crate::trusted_devices::{load_trusted_devices, TrustedDeviceRecord};
 
@@ -186,6 +187,7 @@ impl AppState {
         let trusted_devices = load_trusted_devices()?;
         let transfer_history = load_transfer_history()?;
         let config = load_app_config(&device_identity.device_name())?;
+        let local_bridge_authorizations = load_local_bridge_authorizations(now_ms())?;
 
         Ok(Self {
             config: Arc::new(Mutex::new(config)),
@@ -203,7 +205,10 @@ impl AppState {
             active_receive_cancel: Arc::new(Mutex::new(None)),
             transfer_status: Arc::new(Mutex::new(None)),
             last_receive_report: Arc::new(Mutex::new(None)),
-            local_bridge_runtime: Arc::new(LocalBridgeRuntimeState::default()),
+            local_bridge_runtime: Arc::new(LocalBridgeRuntimeState {
+                authorizations: Mutex::new(local_bridge_authorizations),
+                ..LocalBridgeRuntimeState::default()
+            }),
         })
     }
 }
@@ -212,4 +217,11 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new().expect("failed to initialize NekoDrop app state")
     }
+}
+
+fn now_ms() -> u128 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis())
+        .unwrap_or_default()
 }
