@@ -321,7 +321,7 @@ bridge 请求可以带可选 `client`：
 
 授权请求必须带 `client`、`requested_scopes`、`reason`，可以带 `ttl_seconds`。这一步只定义申请模型，不发 token，也不写入授权记录。
 
-桌面端现在有一个内部 handler skeleton，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照，并让 `authorization.request`、`bundle.send` / `bundle.import` 返回明确的 `pending_auth`。授权申请的响应会带回申请的 scope、reason 和 ttl，方便后续确认弹窗展示给用户。响应会标记 `read_only` 或 `requires_user_confirmation`，方便后续接本机授权码和确认弹窗。它不是公开 localhost 服务，也不会绕过用户确认去发送或导入 bundle。
+桌面端现在有一个内部 handler skeleton，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；内部授权记录可以让已授权 client 通过 `bundle.send` / `bundle.import` 的门控，但真实发送和导入 runtime 还没有开放给 bridge。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是公开 localhost 服务，也不会绕过用户确认去发送或导入 bundle。
 
 bridge 不可以做：
 

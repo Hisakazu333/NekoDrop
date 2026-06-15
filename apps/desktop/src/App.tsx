@@ -855,16 +855,20 @@ export function App() {
       const response = await invokeCommand<LocalBridgeResponseDto>("handle_local_bridge_request", {
         requestJson: JSON.stringify({
           "kind": "devices.list",
-          request_id: `settings-self-check-${Date.now()}`,
-          trusted_only: true,
-          client: {
-            client_id: "nekodrop.settings",
-            display_name: "NekoDrop Settings"
+          "payload": {
+            request_id: `settings-self-check-${Date.now()}`,
+            trusted_only: true,
+            client: {
+              client_id: "nekodrop.settings",
+              display_name: "NekoDrop Settings"
+            }
           }
         })
       });
       setLocalBridgeCheck(
-        `${localBridgeStatusLabel(response.status)} · ${response.devices.length} 台可信设备 · ${response.staged_bundles.length} 个暂存资料包`
+        response.authorization_code
+          ? `${localBridgeStatusLabel(response.status)} · 授权码 ${response.authorization_code}`
+          : `${localBridgeStatusLabel(response.status)} · ${response.devices.length} 台可信设备 · ${response.staged_bundles.length} 个暂存资料包`
       );
     } catch (nextError) {
       setLocalBridgeCheck("自测失败");
