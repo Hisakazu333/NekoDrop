@@ -41,6 +41,7 @@ pub struct Device {
     pub platform: DevicePlatform,
     pub host: String,
     pub port: u16,
+    pub public_key: Option<String>,
     pub public_key_fingerprint: Option<String>,
     pub trust_state: DeviceTrustState,
 }
@@ -64,6 +65,7 @@ impl Device {
             platform,
             host: host.into(),
             port,
+            public_key: None,
             public_key_fingerprint: None,
             trust_state: DeviceTrustState::Untrusted,
         })

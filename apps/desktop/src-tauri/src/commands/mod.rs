@@ -88,6 +88,7 @@ pub struct DeviceDto {
     pub host: String,
     pub port: u16,
     pub trust_state: String,
+    pub public_key: Option<String>,
     pub public_key_fingerprint: Option<String>,
     pub pairing_code: Option<String>,
 }
@@ -99,6 +100,7 @@ pub struct TrustedDeviceDto {
     pub platform: String,
     pub host: String,
     pub port: u16,
+    pub public_key: String,
     pub public_key_fingerprint: String,
     pub pairing_code: String,
     pub paired_at_ms: u128,
@@ -285,6 +287,7 @@ pub struct PendingPairingRequestDto {
     pub platform: String,
     pub host: String,
     pub port: u16,
+    pub public_key: String,
     pub public_key_fingerprint: String,
     pub pairing_code: String,
 }
@@ -458,6 +461,7 @@ pub fn request_device_pairing(
     let listen_port = current_receive_session_port(&state)?
         .ok_or_else(|| "请先打开后台收件，再发起配对。".to_string())?;
     let local_identity = state.device_identity.public_identity();
+    let local_public_key = state.device_identity.public_key()?;
     let pairing_code = pairing_code_for_device(&local_identity, &device)
         .ok_or_else(|| "这个设备缺少公开指纹，当前不能发起配对。".to_string())?;
     let request = PairingRequestPayload {
@@ -465,6 +469,7 @@ pub fn request_device_pairing(
         device_id: local_identity.device_id.clone(),
         device_name: local_identity.device_name.clone(),
         platform: local_identity.platform.as_str().to_string(),
+        public_key: local_public_key,
         public_key_fingerprint: local_identity.public_key_fingerprint.clone(),
         pairing_code,
         listen_port,
@@ -2112,6 +2117,7 @@ fn device_to_dto(
         } else {
             format!("{:?}", device.trust_state)
         },
+        public_key: device.public_key.clone(),
         public_key_fingerprint: device.public_key_fingerprint.clone(),
         pairing_code: pairing_code_for_device(local_identity, device),
     }
@@ -2124,6 +2130,7 @@ fn trusted_device_to_dto(device: &TrustedDeviceRecord) -> TrustedDeviceDto {
         platform: device.platform.clone(),
         host: device.host.clone(),
         port: device.port,
+        public_key: device.public_key.clone(),
         public_key_fingerprint: device.public_key_fingerprint.clone(),
         pairing_code: device.pairing_code.clone(),
         paired_at_ms: device.paired_at_ms,
@@ -2725,6 +2732,7 @@ fn pending_pairing_request_to_dto(request: &PendingPairingRequest) -> PendingPai
         platform: request.platform.clone(),
         host: request.host.clone(),
         port: request.port,
+        public_key: request.public_key.clone(),
         public_key_fingerprint: request.public_key_fingerprint.clone(),
         pairing_code: request.pairing_code.clone(),
     }
@@ -2935,6 +2943,7 @@ fn wait_for_pairing_decision(
         platform: request.platform.clone(),
         host: peer_host.to_string(),
         port: request.listen_port,
+        public_key: request.public_key.clone(),
         public_key_fingerprint: request.public_key_fingerprint.clone(),
         pairing_code: request.pairing_code.clone(),
         decision: decision.clone(),
@@ -2974,8 +2983,13 @@ fn wait_for_pairing_decision(
         request.platform.clone(),
         peer_host.to_string(),
         request.listen_port,
+        request.public_key.clone(),
         request.public_key_fingerprint.clone(),
     );
+    let record = match record {
+        Ok(record) => record,
+        Err(error) => return PairingDecisionPayload::reject(error),
+    };
     match persist_trusted_device_records(trusted_devices, record) {
         Ok(()) => PairingDecisionPayload::accept(),
         Err(error) => PairingDecisionPayload::reject(error),
@@ -3086,9 +3100,20 @@ fn refresh_trusted_device_contact_from_receive_report(
         return;
     };
     let mut next_trusted_devices = trusted_devices.clone();
+    let Some(sender_public_key) = next_trusted_devices
+        .iter()
+        .find(|record| {
+            record.device_id == sender_device_id
+                && record.public_key_fingerprint == sender_fingerprint
+        })
+        .map(|record| record.public_key.clone())
+    else {
+        return;
+    };
     let changed = refresh_trusted_device_contact(
         &mut next_trusted_devices,
         sender_device_id,
+        &sender_public_key,
         sender_fingerprint,
         report.sender_device_name.as_deref(),
         now_ms(),
@@ -3116,9 +3141,19 @@ fn refresh_trusted_device_contact_from_peer(
         return;
     };
     let mut next_trusted_devices = trusted_devices.clone();
+    let Some(public_key) = next_trusted_devices
+        .iter()
+        .find(|record| {
+            record.device_id == device_id && record.public_key_fingerprint == fingerprint
+        })
+        .map(|record| record.public_key.clone())
+    else {
+        return;
+    };
     let changed = refresh_trusted_device_contact(
         &mut next_trusted_devices,
         device_id,
+        &public_key,
         fingerprint,
         peer.name.as_deref(),
         now_ms(),
@@ -4257,6 +4292,7 @@ mod tests {
 
     #[test]
     fn receive_policy_auto_accept_trusted_requires_authenticated_session() {
+        let public_key = test_public_key("device-a");
         let trusted = Arc::new(Mutex::new(vec![TrustedDeviceRecord {
             schema_version: 1,
             device_id: "device-a".to_string(),
@@ -4264,14 +4300,15 @@ mod tests {
             platform: "macos".to_string(),
             host: "192.168.1.20".to_string(),
             port: 45821,
-            public_key_fingerprint: "sha256:abc".to_string(),
+            public_key: public_key.public_key.clone(),
+            public_key_fingerprint: public_key.fingerprint.clone(),
             pairing_code: "AAA-BBB".to_string(),
             paired_at_ms: 1,
             last_seen_at_ms: 1,
         }]));
         let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
         offer.sender_device_id = Some("device-a".to_string());
-        offer.sender_public_key_fingerprint = Some("sha256:abc".to_string());
+        offer.sender_public_key_fingerprint = Some(public_key.fingerprint);
 
         let accepted =
             should_auto_accept_receive_offer(&offer, ReceivePolicy::AutoAcceptTrusted, &trusted);
@@ -4321,6 +4358,7 @@ mod tests {
     }
 
     fn nearby_device(device_id: &str, fingerprint: &str) -> Device {
+        let public_key = test_public_key(device_id);
         let mut device = Device::new(
             nekodrop_core::DeviceId::new(device_id).unwrap(),
             "MacBook",
@@ -4329,6 +4367,7 @@ mod tests {
             45821,
         )
         .unwrap();
+        device.public_key = Some(public_key.public_key);
         device.public_key_fingerprint = Some(fingerprint.to_string());
         device
     }
@@ -4338,6 +4377,7 @@ mod tests {
         device_name: &str,
         public_key_fingerprint: &str,
     ) -> TrustedDeviceRecord {
+        let public_key = test_public_key(device_id);
         TrustedDeviceRecord {
             schema_version: 1,
             device_id: device_id.to_string(),
@@ -4345,11 +4385,20 @@ mod tests {
             platform: "macos".to_string(),
             host: "192.168.1.20".to_string(),
             port: 45821,
+            public_key: public_key.public_key,
             public_key_fingerprint: public_key_fingerprint.to_string(),
             pairing_code: "AAA-BBB".to_string(),
             paired_at_ms: 1,
             last_seen_at_ms: 1,
         }
+    }
+
+    fn test_public_key(label: &str) -> nekolink_protocol::DeviceIdentityPublicKey {
+        let mut seed = [0_u8; nekolink_protocol::DEVICE_IDENTITY_SIGNING_KEY_LEN];
+        for (index, byte) in label.as_bytes().iter().enumerate() {
+            seed[index % seed.len()] ^= *byte;
+        }
+        nekolink_protocol::DeviceIdentitySigningKey::from_seed(seed).public_key()
     }
 
     fn test_identity(device_id: &str) -> DeviceIdentity {

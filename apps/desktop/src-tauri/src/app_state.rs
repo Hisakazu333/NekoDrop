@@ -88,6 +88,7 @@ pub struct PendingPairingRequest {
     pub platform: String,
     pub host: String,
     pub port: u16,
+    pub public_key: String,
     pub public_key_fingerprint: String,
     pub pairing_code: String,
     pub decision: Arc<(Mutex<Option<ReceiveDecision>>, Condvar)>,

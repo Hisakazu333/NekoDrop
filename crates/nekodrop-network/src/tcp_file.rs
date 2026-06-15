@@ -2776,12 +2776,15 @@ mod tests {
     fn pairing_request_round_trips_through_nekolink_envelope() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
+        let signing_key = nekolink_protocol::DeviceIdentitySigningKey::from_seed([21_u8; 32]);
+        let public_key = signing_key.public_key();
         let request = PairingRequestPayload {
             request_id: "pairing-1".to_string(),
             device_id: "neko-device-local".to_string(),
             device_name: "Local Mac".to_string(),
             platform: "macos".to_string(),
-            public_key_fingerprint: "sha256:local".to_string(),
+            public_key: public_key.public_key,
+            public_key_fingerprint: public_key.fingerprint,
             pairing_code: "ABC-123".to_string(),
             listen_port: 45821,
         };
