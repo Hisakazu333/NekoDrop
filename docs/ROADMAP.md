@@ -33,11 +33,11 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - 在接收端返回并校验 `session.ready`。
 - 基于 X25519 shared secret 和 HKDF 派生 session key material。
 - 让 `file.offer`、`file.accept`、`file.decline` 走 encrypted `session.control`。
+- 给 offer / decision 控制消息读取路径接入 replay window。
 
 仍未完成：
 
 - 文件 payload 加密
-- replay window
 - 长期身份密钥认证
 - iroh runtime
 - relay server

@@ -73,7 +73,7 @@
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
 | Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256 和配对能力，不声明未完成的加密文件流 / Agent host。 |
-| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致。文件 payload 仍是明文 TCP 流；replay window、长期身份密钥认证和加密文件流还没接入。 |
+| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。文件 payload 仍是明文 TCP 流；长期身份密钥认证和加密文件流还没接入。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
 | File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path、Windows 不安全路径片段和半截 sender identity。 |
 | TCP transport | 已接入 | 当前真实传输主线；接收文件帧数量有上限，并会按已接受 offer 的 file_count 做早期校验。 |
@@ -106,7 +106,7 @@ V0.6
 
 V0.7
   加密 session 接入桌面主线：
-  file.offer / file.accept / file.decline 已经走 encrypted session.control；下一步做 replay 保护、长期身份密钥认证和文件流加密。
+  file.offer / file.accept / file.decline 已经走 encrypted session.control，offer / decision 控制消息读取路径已接入 replay window；下一步做长期身份密钥认证和文件流加密。
 
 V0.8
   NekoLink 上层包格式：
