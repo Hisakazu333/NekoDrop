@@ -28,6 +28,7 @@ use nekodrop_service::{
 use nekodrop_storage::{
     build_resume_plan_for_files, create_manual_bundle_directory,
     delete_staged_bundle as delete_staged_bundle_storage,
+    import_staged_bundle as import_staged_bundle_storage,
     list_staged_bundles as list_staged_bundles_storage, ManualBundleCreateRequest,
     ResumeExpectedFile, ResumePlan, StagedBundle,
 };
@@ -217,6 +218,7 @@ pub struct ReceivedBundleDto {
     pub import_allowed: bool,
     pub staging_status: String,
     pub can_import_now: bool,
+    pub import_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -591,6 +593,13 @@ pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
 pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
     let staging_root = bundle_staging_root()?;
     delete_staged_bundle_at(&staging_root, &bundle_id)
+}
+
+#[tauri::command]
+pub fn import_staged_bundle(bundle_id: String) -> Result<ReceivedBundleDto, String> {
+    let staging_root = bundle_staging_root()?;
+    let import_root = bundle_import_root()?;
+    import_staged_bundle_at(&staging_root, &import_root, &bundle_id)
 }
 
 #[tauri::command]
@@ -2261,6 +2270,7 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         import_allowed: bundle.import_allowed,
         staging_status: "saved".to_string(),
         can_import_now: false,
+        import_path: None,
     }
 }
 
@@ -2285,7 +2295,9 @@ fn staged_bundle_to_dto(staged: &StagedBundle) -> ReceivedBundleDto {
         import_allowed: staged.detected.import_policy
             == nekodrop_storage::BundleImportPolicy::ImportAllowed,
         staging_status: "saved".to_string(),
-        can_import_now: false,
+        can_import_now: staged.detected.import_policy
+            == nekodrop_storage::BundleImportPolicy::ImportAllowed,
+        import_path: None,
     }
 }
 
@@ -2310,7 +2322,47 @@ fn delete_staged_bundle_at(
     staging_root: &std::path::Path,
     bundle_id: &str,
 ) -> Result<bool, String> {
+    validate_safe_bundle_id(bundle_id)?;
     delete_staged_bundle_storage(staging_root, bundle_id).map_err(|error| error.to_string())
+}
+
+fn import_staged_bundle_at(
+    staging_root: &std::path::Path,
+    import_root: &std::path::Path,
+    bundle_id: &str,
+) -> Result<ReceivedBundleDto, String> {
+    validate_safe_bundle_id(bundle_id)?;
+    let staged_path = staging_root.join(bundle_id);
+    let imported = import_staged_bundle_storage(&staged_path, import_root)
+        .map_err(|error| error.to_string())?;
+    Ok(ReceivedBundleDto {
+        bundle_id: imported.bundle_id,
+        bundle_type: bundle_type_label(imported.bundle_type).to_string(),
+        display_name: imported.display_name,
+        source_app: imported.source_app,
+        file_count: imported.file_count,
+        total_bytes: imported.total_bytes,
+        staging_path: staged_path.display().to_string(),
+        import_allowed: true,
+        staging_status: "imported".to_string(),
+        can_import_now: false,
+        import_path: Some(imported.destination_path.display().to_string()),
+    })
+}
+
+fn validate_safe_bundle_id(bundle_id: &str) -> Result<(), String> {
+    let trimmed = bundle_id.trim();
+    if trimmed.is_empty()
+        || trimmed != bundle_id
+        || bundle_id.contains('/')
+        || bundle_id.contains('\\')
+        || bundle_id.contains("..")
+        || bundle_id.contains(':')
+        || bundle_id.contains('\0')
+    {
+        return Err(format!("bundle_id 不安全: {bundle_id}"));
+    }
+    Ok(())
 }
 
 fn handle_local_bridge_request_at(
@@ -2553,6 +2605,10 @@ fn received_root_name(report: &TransferReceiveReport) -> String {
 
 fn bundle_staging_root() -> Result<PathBuf, String> {
     Ok(app_config_dir()?.join("bundle_staging"))
+}
+
+fn bundle_import_root() -> Result<PathBuf, String> {
+    Ok(app_config_dir()?.join("bundle_imports"))
 }
 
 fn manual_bundle_output_root() -> Result<PathBuf, String> {
@@ -4034,7 +4090,51 @@ mod tests {
         assert_eq!(bundles.len(), 1);
         assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
         assert_eq!(bundles[0].staging_status, "saved");
-        assert!(!bundles[0].can_import_now);
+        assert!(bundles[0].can_import_now);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn import_staged_bundle_at_marks_bundle_imported() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-import");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+
+        let imported =
+            import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+
+        assert_eq!(imported.bundle_id, "bundle_1234567890");
+        assert_eq!(imported.staging_status, "imported");
+        assert!(!imported.can_import_now);
+        assert_eq!(
+            imported.import_path.as_deref(),
+            Some(
+                import_root
+                    .join("bundle_1234567890")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+        assert!(import_root
+            .join("bundle_1234567890")
+            .join("content.bin")
+            .is_file());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn import_staged_bundle_at_rejects_unsafe_bundle_id() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-import-unsafe");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+
+        let error = import_staged_bundle_at(&staging_root, &import_root, "../bundle").unwrap_err();
+
+        assert!(error.contains("bundle_id"));
 
         fs::remove_dir_all(dir).unwrap();
     }
