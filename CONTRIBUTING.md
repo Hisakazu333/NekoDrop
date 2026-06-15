@@ -169,6 +169,7 @@ PR 目标分支：
 - 默认 squash merge 到 `develop`
 - `develop -> main` 用仓库允许的方式合并；如果 GitHub 只能 rebase，就在合并后把 `develop` 同步到 `main` 的发布点
 - 合并后的 topic branch 要删除
+- 长期分支同步 PR 不删除 head 分支：`develop`、`desktop-develop`、`main` 都不能被 PR 合并按钮顺手删除
 - 不允许 force push 到 `main` 或 `develop`
 
 PR 描述写清楚：
