@@ -34,8 +34,8 @@ use nekodrop_storage::{
 };
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
-    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeClientIdentity,
-    LocalBridgePermissionScope, LocalBridgeRequest,
+    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeAuthorizationRequest,
+    LocalBridgeClientIdentity, LocalBridgePermissionScope, LocalBridgeRequest,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -334,9 +334,32 @@ pub struct LocalBridgeResponseDto {
     pub authorization_scopes: Vec<String>,
     pub authorization_reason: Option<String>,
     pub authorization_ttl_seconds: Option<u64>,
+    pub authorization_code: Option<String>,
+    pub authorization_expires_at_ms: Option<u128>,
     pub devices: Vec<TrustedDeviceDto>,
     pub staged_bundles: Vec<ReceivedBundleDto>,
     pub transfer_status: Option<TransferStatusDto>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LocalBridgeAuthorizationRecord {
+    client_id: String,
+    display_name: String,
+    app_kind: Option<String>,
+    scopes: Vec<LocalBridgePermissionScope>,
+    granted_at_ms: u128,
+    expires_at_ms: Option<u128>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct PendingLocalBridgeAuthorization {
+    request_id: String,
+    client: LocalBridgeClientIdentity,
+    requested_scopes: Vec<LocalBridgePermissionScope>,
+    reason: String,
+    authorization_code: String,
+    requested_at_ms: u128,
+    expires_at_ms: u128,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2371,6 +2394,24 @@ fn handle_local_bridge_request_at(
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
 ) -> Result<LocalBridgeResponseDto, String> {
+    handle_local_bridge_request_with_auth_at(
+        request_json,
+        trusted_devices,
+        transfer_status,
+        staging_root,
+        &[],
+        now_ms(),
+    )
+}
+
+fn handle_local_bridge_request_with_auth_at(
+    request_json: &str,
+    trusted_devices: &[TrustedDeviceRecord],
+    transfer_status: Option<&TransferStatusState>,
+    staging_root: &std::path::Path,
+    authorizations: &[LocalBridgeAuthorizationRecord],
+    now_ms: u128,
+) -> Result<LocalBridgeResponseDto, String> {
     let request: LocalBridgeRequest = serde_json::from_str(request_json)
         .map_err(|error| format!("invalid bridge request JSON: {error}"))?;
     request.validate().map_err(|error| error.message)?;
@@ -2417,13 +2458,44 @@ fn handle_local_bridge_request_at(
                 )),
             }
         }
-        LocalBridgeRequest::SendBundle(request) => Ok(local_bridge_pending_confirmation_response(
-            request.request_id,
-            request.client,
-        )),
-        LocalBridgeRequest::ImportBundle(request) => Ok(
-            local_bridge_pending_confirmation_response(request.request_id, request.client),
-        ),
+        LocalBridgeRequest::SendBundle(request) => {
+            if local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleSend,
+                now_ms,
+            ) {
+                Ok(local_bridge_authorized_runtime_pending_response(
+                    request.request_id,
+                    request.client,
+                    "local bridge bundle send is authorized, but the send runtime is not connected yet",
+                ))
+            } else {
+                Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ))
+            }
+        }
+        LocalBridgeRequest::ImportBundle(request) => {
+            if local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleImportRequest,
+                now_ms,
+            ) {
+                Ok(local_bridge_authorized_runtime_pending_response(
+                    request.request_id,
+                    request.client,
+                    "local bridge bundle import is authorized, but the import runtime is not connected yet",
+                ))
+            } else {
+                Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ))
+            }
+        }
         LocalBridgeRequest::AuthorizationRequest(request) => {
             Ok(local_bridge_pending_authorization_response(
                 request.request_id,
@@ -2431,9 +2503,93 @@ fn handle_local_bridge_request_at(
                 request.requested_scopes,
                 request.reason,
                 request.ttl_seconds,
+                now_ms,
             ))
         }
     }
+}
+
+fn local_bridge_client_has_scope(
+    client: Option<&LocalBridgeClientIdentity>,
+    authorizations: &[LocalBridgeAuthorizationRecord],
+    scope: LocalBridgePermissionScope,
+    now_ms: u128,
+) -> bool {
+    let Some(client) = client else {
+        return false;
+    };
+    authorizations.iter().any(|record| {
+        record.client_id == client.client_id
+            && record
+                .expires_at_ms
+                .is_none_or(|expires_at_ms| expires_at_ms >= now_ms)
+            && record.scopes.contains(&scope)
+    })
+}
+
+fn pending_local_bridge_authorization_from_request(
+    request: &LocalBridgeAuthorizationRequest,
+    now_ms: u128,
+) -> Result<PendingLocalBridgeAuthorization, String> {
+    request.validate().map_err(|error| error.message)?;
+    let ttl_ms = u128::from(request.ttl_seconds.unwrap_or(900)).saturating_mul(1_000);
+    let expires_at_ms = now_ms.saturating_add(ttl_ms);
+    Ok(PendingLocalBridgeAuthorization {
+        request_id: request.request_id.clone(),
+        client: request.client.clone(),
+        requested_scopes: request.requested_scopes.clone(),
+        reason: request.reason.clone(),
+        authorization_code: local_bridge_authorization_code(request, now_ms),
+        requested_at_ms: now_ms,
+        expires_at_ms,
+    })
+}
+
+fn confirm_pending_local_bridge_authorization(
+    pending: &PendingLocalBridgeAuthorization,
+    authorization_code: &str,
+    now_ms: u128,
+) -> Result<LocalBridgeAuthorizationRecord, String> {
+    if now_ms > pending.expires_at_ms {
+        return Err("local bridge authorization request expired".to_string());
+    }
+    if authorization_code.trim() != pending.authorization_code {
+        return Err("local bridge authorization code mismatch".to_string());
+    }
+    Ok(LocalBridgeAuthorizationRecord {
+        client_id: pending.client.client_id.clone(),
+        display_name: pending.client.display_name.clone(),
+        app_kind: pending.client.app_kind.clone(),
+        scopes: pending.requested_scopes.clone(),
+        granted_at_ms: now_ms,
+        expires_at_ms: Some(pending.expires_at_ms),
+    })
+}
+
+fn local_bridge_authorization_code(
+    request: &LocalBridgeAuthorizationRequest,
+    requested_at_ms: u128,
+) -> String {
+    let mut material = String::new();
+    material.push_str(&request.request_id);
+    material.push('\n');
+    material.push_str(&request.client.client_id);
+    material.push('\n');
+    material.push_str(&request.client.display_name);
+    material.push('\n');
+    if let Some(app_kind) = &request.client.app_kind {
+        material.push_str(app_kind);
+    }
+    material.push('\n');
+    for scope in &request.requested_scopes {
+        material.push_str(local_bridge_permission_scope_label(*scope));
+        material.push('\n');
+    }
+    material.push_str(&request.reason);
+    material.push('\n');
+    material.push_str(&requested_at_ms.to_string());
+    let digest = sha256_hex(material.as_bytes()).to_ascii_uppercase();
+    format!("{}-{}", &digest[..3], &digest[3..6])
 }
 
 fn local_bridge_read_only_response(
@@ -2457,6 +2613,8 @@ fn local_bridge_read_only_response(
         authorization_scopes: Vec::new(),
         authorization_reason: None,
         authorization_ttl_seconds: None,
+        authorization_code: None,
+        authorization_expires_at_ms: None,
         devices,
         staged_bundles,
         transfer_status,
@@ -2481,6 +2639,8 @@ fn local_bridge_read_only_unsupported_response(
         authorization_scopes: Vec::new(),
         authorization_reason: None,
         authorization_ttl_seconds: None,
+        authorization_code: None,
+        authorization_expires_at_ms: None,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -2504,6 +2664,34 @@ fn local_bridge_pending_confirmation_response(
         authorization_scopes: Vec::new(),
         authorization_reason: None,
         authorization_ttl_seconds: None,
+        authorization_code: None,
+        authorization_expires_at_ms: None,
+        devices: Vec::new(),
+        staged_bundles: Vec::new(),
+        transfer_status: None,
+    }
+}
+
+fn local_bridge_authorized_runtime_pending_response(
+    request_id: String,
+    client: Option<LocalBridgeClientIdentity>,
+    message: &str,
+) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(client);
+    LocalBridgeResponseDto {
+        request_id,
+        status: "pending_runtime".to_string(),
+        message: message.to_string(),
+        security_state: "authorized".to_string(),
+        requires_user_confirmation: false,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
+        authorization_scopes: Vec::new(),
+        authorization_reason: None,
+        authorization_ttl_seconds: None,
+        authorization_code: None,
+        authorization_expires_at_ms: None,
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -2516,7 +2704,16 @@ fn local_bridge_pending_authorization_response(
     requested_scopes: Vec<LocalBridgePermissionScope>,
     reason: String,
     ttl_seconds: Option<u64>,
+    now_ms: u128,
 ) -> LocalBridgeResponseDto {
+    let request = LocalBridgeAuthorizationRequest {
+        request_id: request_id.clone(),
+        client: client.clone(),
+        requested_scopes: requested_scopes.clone(),
+        reason: reason.clone(),
+        ttl_seconds,
+    };
+    let pending = pending_local_bridge_authorization_from_request(&request, now_ms).ok();
     let client_metadata = local_bridge_client_metadata(Some(client));
     LocalBridgeResponseDto {
         request_id,
@@ -2534,6 +2731,10 @@ fn local_bridge_pending_authorization_response(
             .collect(),
         authorization_reason: Some(reason),
         authorization_ttl_seconds: ttl_seconds,
+        authorization_code: pending
+            .as_ref()
+            .map(|authorization| authorization.authorization_code.clone()),
+        authorization_expires_at_ms: pending.map(|authorization| authorization.expires_at_ms),
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
@@ -4374,6 +4575,90 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_authorized_client_can_pass_import_gate() {
+        let dir = unique_bundle_temp_dir("local-bridge-authorized-import");
+        let staging_root = dir.join("bundle_staging");
+        let authorizations = vec![local_bridge_authorization(
+            "openneko-desktop",
+            &[LocalBridgePermissionScope::BundleImportRequest],
+            1_000,
+            2_000,
+        )];
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "client": {
+                    "client_id": "openneko-desktop",
+                    "display_name": "OpenNeko Desktop",
+                    "app_kind": "openneko"
+                },
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &authorizations,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_runtime");
+        assert_eq!(response.security_state, "authorized");
+        assert!(!response.requires_user_confirmation);
+        assert!(response.message.contains("authorized"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_expired_authorization_requires_confirmation_again() {
+        let dir = unique_bundle_temp_dir("local-bridge-expired-auth");
+        let staging_root = dir.join("bundle_staging");
+        let authorizations = vec![local_bridge_authorization(
+            "openneko-desktop",
+            &[LocalBridgePermissionScope::BundleImportRequest],
+            1_000,
+            1_100,
+        )];
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "client": {
+                    "client_id": "openneko-desktop",
+                    "display_name": "OpenNeko Desktop",
+                    "app_kind": "openneko"
+                },
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &authorizations,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_auth");
+        assert_eq!(response.security_state, "requires_user_confirmation");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn local_bridge_authorization_request_waits_for_user_confirmation() {
         let dir = unique_bundle_temp_dir("local-bridge-authorization");
         let staging_root = dir.join("bundle_staging");
@@ -4413,9 +4698,86 @@ mod tests {
             Some("Send a skill bundle to a trusted desktop device")
         );
         assert_eq!(response.authorization_ttl_seconds, Some(900));
+        assert!(response.authorization_code.as_deref().is_some_and(|code| {
+            code.len() == 7
+                && code.as_bytes()[3] == b'-'
+                && code
+                    .chars()
+                    .filter(|character| *character != '-')
+                    .all(|character| {
+                        character.is_ascii_hexdigit() && !character.is_ascii_lowercase()
+                    })
+        }));
+        assert!(response.authorization_expires_at_ms.is_some());
         assert!(response.message.contains("authorization"));
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_authorization_request_creates_short_code() {
+        let request = LocalBridgeAuthorizationRequest {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "openneko-desktop".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            },
+            requested_scopes: vec![
+                LocalBridgePermissionScope::DeviceRead,
+                LocalBridgePermissionScope::BundleSend,
+            ],
+            reason: "Send a skill bundle".to_string(),
+            ttl_seconds: Some(900),
+        };
+
+        let pending = pending_local_bridge_authorization_from_request(&request, 1_000).unwrap();
+
+        assert_eq!(pending.request_id, "bridge-auth-1");
+        assert_eq!(pending.client.client_id, "openneko-desktop");
+        assert_eq!(pending.requested_scopes, request.requested_scopes);
+        assert_eq!(pending.expires_at_ms, 901_000);
+        assert_eq!(pending.authorization_code.len(), 7);
+        assert_eq!(pending.authorization_code.as_bytes()[3], b'-');
+        assert!(pending
+            .authorization_code
+            .chars()
+            .filter(|character| *character != '-')
+            .all(|character| character.is_ascii_hexdigit() && !character.is_ascii_lowercase()));
+    }
+
+    #[test]
+    fn confirmed_local_bridge_authorization_grants_requested_scopes() {
+        let pending = PendingLocalBridgeAuthorization {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "openneko-desktop".to_string(),
+                display_name: "OpenNeko Desktop".to_string(),
+                app_kind: Some("openneko".to_string()),
+            },
+            requested_scopes: vec![LocalBridgePermissionScope::BundleImportRequest],
+            reason: "Import staged bundle".to_string(),
+            authorization_code: "ABC-123".to_string(),
+            requested_at_ms: 1_000,
+            expires_at_ms: 11_000,
+        };
+
+        let authorization =
+            confirm_pending_local_bridge_authorization(&pending, "ABC-123", 2_000).unwrap();
+
+        assert_eq!(authorization.client_id, "openneko-desktop");
+        assert_eq!(
+            authorization.scopes,
+            vec![LocalBridgePermissionScope::BundleImportRequest]
+        );
+        assert_eq!(authorization.granted_at_ms, 2_000);
+        assert_eq!(authorization.expires_at_ms, Some(11_000));
+        assert!(local_bridge_client_has_scope(
+            Some(&pending.client),
+            &[authorization],
+            LocalBridgePermissionScope::BundleImportRequest,
+            3_000,
+        ));
     }
 
     #[test]
@@ -4541,6 +4903,22 @@ mod tests {
             pairing_code: "AAA-BBB".to_string(),
             paired_at_ms: 1,
             last_seen_at_ms: 1,
+        }
+    }
+
+    fn local_bridge_authorization(
+        client_id: &str,
+        scopes: &[LocalBridgePermissionScope],
+        granted_at_ms: u128,
+        expires_at_ms: u128,
+    ) -> LocalBridgeAuthorizationRecord {
+        LocalBridgeAuthorizationRecord {
+            client_id: client_id.to_string(),
+            display_name: "OpenNeko Desktop".to_string(),
+            app_kind: Some("openneko".to_string()),
+            scopes: scopes.to_vec(),
+            granted_at_ms,
+            expires_at_ms: Some(expires_at_ms),
         }
     }
 

@@ -64,6 +64,8 @@ export interface LocalBridgeResponseDto {
   authorization_scopes: LocalBridgePermissionScope[];
   authorization_reason: string | null;
   authorization_ttl_seconds: number | null;
+  authorization_code: string | null;
+  authorization_expires_at_ms: number | null;
   devices: TrustedDeviceDto[];
   staged_bundles: ReceivedBundleDto[];
   transfer_status: TransferStatusDto | null;
