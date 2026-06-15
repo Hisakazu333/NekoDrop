@@ -570,6 +570,23 @@ pub struct VerifiedSessionHandshake {
     pub responder: DeviceIdentity,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionParticipantRole {
+    Initiator,
+    Responder,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionIdentityBinding {
+    pub role: SessionParticipantRole,
+    pub session_id: String,
+    pub device_id: String,
+    pub public_key_fingerprint: String,
+    pub session_ephemeral_public_key: String,
+    pub handshake_hash: String,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionKeyDerivationContext {
     pub session_id: String,
@@ -1140,6 +1157,107 @@ impl VerifiedSessionHandshake {
             from_device_id,
             to_device_id
         )
+    }
+}
+
+impl SessionIdentityBinding {
+    pub fn for_initiator(handshake: &VerifiedSessionHandshake) -> Result<Self, ProtocolError> {
+        Self::new(
+            SessionParticipantRole::Initiator,
+            &handshake.session_id,
+            &handshake.initiator,
+            &handshake.initiator_ephemeral_public_key,
+            &handshake.handshake_hash,
+        )
+    }
+
+    pub fn for_responder(handshake: &VerifiedSessionHandshake) -> Result<Self, ProtocolError> {
+        Self::new(
+            SessionParticipantRole::Responder,
+            &handshake.session_id,
+            &handshake.responder,
+            &handshake.responder_ephemeral_public_key,
+            &handshake.handshake_hash,
+        )
+    }
+
+    pub fn new(
+        role: SessionParticipantRole,
+        session_id: impl Into<String>,
+        identity: &DeviceIdentity,
+        session_ephemeral_public_key: impl Into<String>,
+        handshake_hash: impl Into<String>,
+    ) -> Result<Self, ProtocolError> {
+        identity.validate()?;
+        identity.require_capability(Capability::EncryptedSession)?;
+        let binding = Self {
+            role,
+            session_id: session_id.into(),
+            device_id: identity.device_id.clone(),
+            public_key_fingerprint: identity.public_key_fingerprint.clone(),
+            session_ephemeral_public_key: session_ephemeral_public_key.into(),
+            handshake_hash: handshake_hash.into(),
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_session_id(&self.session_id)?;
+        validate_non_empty("device_id", &self.device_id)?;
+        validate_non_empty("public_key_fingerprint", &self.public_key_fingerprint)?;
+        validate_session_crypto_label(
+            "session_ephemeral_public_key",
+            &self.session_ephemeral_public_key,
+        )?;
+        validate_sha256_digest_label("handshake_hash", &self.handshake_hash)?;
+        Ok(())
+    }
+
+    pub fn verify_identity(&self, identity: &DeviceIdentity) -> Result<(), ProtocolError> {
+        self.validate()?;
+        identity.validate()?;
+        if self.device_id != identity.device_id
+            || self.public_key_fingerprint != identity.public_key_fingerprint
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "session identity binding does not match device identity",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn canonical_payload_hash(&self) -> Result<String, ProtocolError> {
+        self.validate()?;
+        let mut hasher = Sha256::new();
+        hash_field(&mut hasher, "protocol", PROTOCOL_NAME);
+        hash_field(&mut hasher, "version", &PROTOCOL_VERSION.to_string());
+        hash_field(&mut hasher, "kind", "session.identity_binding");
+        hash_field(&mut hasher, "role", self.role.as_str());
+        hash_field(&mut hasher, "session_id", &self.session_id);
+        hash_field(&mut hasher, "device_id", &self.device_id);
+        hash_field(
+            &mut hasher,
+            "public_key_fingerprint",
+            &self.public_key_fingerprint,
+        );
+        hash_field(
+            &mut hasher,
+            "session_ephemeral_public_key",
+            &self.session_ephemeral_public_key,
+        );
+        hash_field(&mut hasher, "handshake_hash", &self.handshake_hash);
+        Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+    }
+}
+
+impl SessionParticipantRole {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Initiator => "initiator",
+            Self::Responder => "responder",
+        }
     }
 }
 
@@ -3318,6 +3436,107 @@ mod tests {
         );
         assert_eq!(handshake.initiator.device_id, hello.identity.device_id);
         assert_eq!(handshake.responder.device_id, ready.identity.device_id);
+    }
+
+    #[test]
+    fn builds_session_identity_bindings_from_verified_handshake() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let peer = DeviceIdentity::new(
+            "neko-device-peer",
+            "Peer Windows",
+            DeviceKind::Desktop,
+            PlatformKind::Windows,
+            "sha256:peer",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let hello = SessionHelloPayload::default_crypto("session-1", identity, "base64-local-key");
+        let ready = SessionReadyPayload::for_hello(
+            &hello,
+            peer,
+            "base64-peer-key",
+            SESSION_CIPHER_XCHACHA20POLY1305,
+        )
+        .unwrap();
+        let handshake = VerifiedSessionHandshake::from_ready(&hello, &ready).unwrap();
+
+        let initiator = SessionIdentityBinding::for_initiator(&handshake).unwrap();
+        let responder = SessionIdentityBinding::for_responder(&handshake).unwrap();
+
+        assert_eq!(initiator.role, SessionParticipantRole::Initiator);
+        assert_eq!(initiator.session_id, "session-1");
+        assert_eq!(initiator.device_id, "neko-device-abc123");
+        assert_eq!(initiator.public_key_fingerprint, "sha256:abc123");
+        assert_eq!(initiator.session_ephemeral_public_key, "base64-local-key");
+        assert_eq!(initiator.handshake_hash, ready.handshake_hash);
+        assert_ne!(
+            initiator.canonical_payload_hash().unwrap(),
+            responder.canonical_payload_hash().unwrap()
+        );
+
+        assert_eq!(responder.role, SessionParticipantRole::Responder);
+        assert_eq!(responder.device_id, "neko-device-peer");
+        assert_eq!(responder.public_key_fingerprint, "sha256:peer");
+        assert_eq!(responder.session_ephemeral_public_key, "base64-peer-key");
+        assert!(initiator.verify_identity(&handshake.initiator).is_ok());
+        assert!(responder.verify_identity(&handshake.responder).is_ok());
+
+        let error = initiator.verify_identity(&handshake.responder).unwrap_err();
+        assert!(error
+            .message
+            .contains("session identity binding does not match device identity"));
+    }
+
+    #[test]
+    fn session_identity_binding_hash_changes_with_session_material() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let binding = SessionIdentityBinding::new(
+            SessionParticipantRole::Initiator,
+            "session-1",
+            &identity,
+            "base64-local-key",
+            format!("sha256:{}", "1".repeat(64)),
+        )
+        .unwrap();
+
+        let mut changed_key = binding.clone();
+        changed_key.session_ephemeral_public_key = "base64-other-key".to_string();
+        let mut changed_hash = binding.clone();
+        changed_hash.handshake_hash = format!("sha256:{}", "2".repeat(64));
+
+        assert_ne!(
+            binding.canonical_payload_hash().unwrap(),
+            changed_key.canonical_payload_hash().unwrap()
+        );
+        assert_ne!(
+            binding.canonical_payload_hash().unwrap(),
+            changed_hash.canonical_payload_hash().unwrap()
+        );
     }
 
     #[test]

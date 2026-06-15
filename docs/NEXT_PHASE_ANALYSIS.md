@@ -12,10 +12,11 @@ NekoLink 安全层已经进入桌面传输主线：
 - `file.offer`、`file.accept`、`file.decline` 走 encrypted `session.control`
 - offer / decision 控制消息读取路径有 replay window
 - encrypted session 路径的文件 payload 已经切成加密 file frames
+- `nekolink-protocol` 已有 session identity binding 的 canonical payload hash
 
 这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。但还有三个边界没有收口：
 
-- session 还没有绑定长期设备身份密钥
+- session 还没有长期设备身份密钥签名和桌面主线校验
 - legacy plain file stream 仍然保留，需要迁移或拒绝策略
 - bundle/local bridge 还没有形成“上层应用请求、用户确认、导入回滚”的完整闭环
 
@@ -25,7 +26,13 @@ NekoLink 安全层已经进入桌面传输主线：
 
 加密文件流已经接进 encrypted session 路径，接收端也已经改成按 reader 逐帧解密。下一刀不是重写文件流，而是把 session 的身份和兼容边界收住。
 
-这一阶段要完成：
+这一阶段已经开始：
+
+- 定义 session identity binding
+- 让 binding 绑定 session_id、设备 ID、fingerprint、session ephemeral key 和 handshake_hash
+- 提供 canonical payload hash，作为后续签名输入
+
+后续要完成：
 
 - 长期身份密钥认证
 - 明确 legacy plain file stream 的兼容策略
