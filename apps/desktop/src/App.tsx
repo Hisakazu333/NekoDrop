@@ -63,6 +63,7 @@ import type {
   DiscoveryStatusDto,
   LocalBridgeAuthorizationDto,
   LocalBridgeResponseDto,
+  LocalBridgeRuntimeStatusDto,
   ManualBundleCreateDto,
   PendingPairingRequestDto,
   PendingReceiveOfferDto,
@@ -161,6 +162,7 @@ export function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
+  const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
   const [mode, setMode] = useState<ComposerMode>("overview");
@@ -229,6 +231,7 @@ export function App() {
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
+    refreshLocalBridgeStatus().catch(() => undefined);
     const slowRefreshTimer = window.setTimeout(() => {
       refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
     }, STARTUP_SLOW_REFRESH_DELAY_MS);
@@ -901,6 +904,7 @@ export function App() {
           ? `${localBridgeStatusLabel(response.status)} · 授权码 ${response.authorization_code}`
           : `${localBridgeStatusLabel(response.status)} · ${response.devices.length} 台可信设备 · ${response.staged_bundles.length} 个暂存资料包`
       );
+      await refreshLocalBridgeStatus();
     } catch (nextError) {
       setLocalBridgeCheck("自测失败");
       setError(errorMessage(nextError));
@@ -923,6 +927,7 @@ export function App() {
       });
       setLocalBridgeAuthorizationCode("");
       setLocalBridgeCheck(`已授权 ${authorization.display_name} · ${authorization.scopes.join(" · ")}`);
+      await refreshLocalBridgeStatus();
     } catch (nextError) {
       setLocalBridgeCheck("授权失败");
       setError(errorMessage(nextError));
@@ -946,6 +951,11 @@ export function App() {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function refreshLocalBridgeStatus() {
+    const status = await invokeCommand<LocalBridgeRuntimeStatusDto>("get_local_bridge_runtime_status");
+    setLocalBridgeStatus((current) => keepIfEqual(current, status));
   }
 
   async function createManualBundleForSend() {
@@ -1556,6 +1566,7 @@ export function App() {
                   discoveryStatus={discoveryStatus}
                   localBridgeAuthorizationCode={localBridgeAuthorizationCode}
                   localBridgeCheck={localBridgeCheck}
+                  localBridgeStatus={localBridgeStatus}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
@@ -2109,6 +2120,7 @@ function IntegrationSettings({
   busy,
   localBridgeAuthorizationCode,
   localBridgeCheck,
+  localBridgeStatus,
   setLocalBridgeAuthorizationCode,
   onConfirmLocalBridgeAuthorization,
   onRunLocalBridgeSelfCheck
@@ -2116,14 +2128,19 @@ function IntegrationSettings({
   busy: BusyMode | null;
   localBridgeAuthorizationCode: string;
   localBridgeCheck: string | null;
+  localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   setLocalBridgeAuthorizationCode: (value: string) => void;
   onConfirmLocalBridgeAuthorization: () => void;
   onRunLocalBridgeSelfCheck: () => void;
 }) {
+  const localBridgeRuntimeLine = localBridgeRuntimeStatusLine(localBridgeStatus);
+
   return (
     <SettingsGroup title="本机接入" note="本机应用只能通过受控请求读取设备、发送资料包或申请导入">
       <SettingsRow label="桥接状态">
-        <SettingsValue>内部处理器就绪，localhost 服务未开放</SettingsValue>
+        <SettingsValue mono={Boolean(localBridgeStatus?.active)} title={localBridgeRuntimeLine}>
+          {localBridgeRuntimeLine}
+        </SettingsValue>
       </SettingsRow>
       <SettingsRow label="只读自测">
         <SettingsValue>{localBridgeCheck ?? "尚未运行"}</SettingsValue>
@@ -2549,6 +2566,7 @@ function SettingsPanel({
   discoveryStatus,
   localBridgeAuthorizationCode,
   localBridgeCheck,
+  localBridgeStatus,
   receiveDir,
   receivePolicy,
   receiveSession,
@@ -2572,6 +2590,7 @@ function SettingsPanel({
   discoveryStatus: DiscoveryStatusDto | null;
   localBridgeAuthorizationCode: string;
   localBridgeCheck: string | null;
+  localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
@@ -2699,6 +2718,7 @@ function SettingsPanel({
         busy={busy}
         localBridgeAuthorizationCode={localBridgeAuthorizationCode}
         localBridgeCheck={localBridgeCheck}
+        localBridgeStatus={localBridgeStatus}
         setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
         onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
         onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
@@ -3347,6 +3367,19 @@ function localBridgeStatusLabel(status: string) {
   if (status === "pending_auth") return "等待确认";
   if (status === "unsupported") return "不支持";
   return status;
+}
+
+function localBridgeRuntimeStatusLine(status: LocalBridgeRuntimeStatusDto | null) {
+  if (!status) return "读取中";
+  if (!status.active) {
+    return status.last_error ? `未监听 · ${status.last_error}` : "未监听";
+  }
+  const auth = status.pending_authorization_client
+    ? ` · 等待 ${status.pending_authorization_client}`
+    : status.authorization_count > 0
+      ? ` · 已授权 ${status.authorization_count}`
+      : "";
+  return `${status.bind_host}:${status.port}${status.request_path}${auth}`;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {

@@ -49,6 +49,7 @@ use crate::app_state::{
     PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision, TransferStatusState,
 };
 use crate::device_identity::app_config_dir;
+use crate::local_bridge_runtime;
 use crate::network::{local_lan_ips, primary_lan_ip};
 use crate::transfer_history::{
     clear_transfer_history_records, delete_transfer_history_record, new_transfer_history_record,
@@ -360,6 +361,18 @@ pub struct LocalBridgeAuthorizationDto {
     pub scopes: Vec<String>,
     pub granted_at_ms: u128,
     pub expires_at_ms: Option<u128>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgeRuntimeStatusDto {
+    pub active: bool,
+    pub bind_host: String,
+    pub port: u16,
+    pub request_path: String,
+    pub max_request_bytes: usize,
+    pub pending_authorization_client: Option<String>,
+    pub authorization_count: usize,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -708,6 +721,15 @@ pub fn confirm_local_bridge_authorization(
         now_ms(),
     )
     .map(local_bridge_authorization_to_dto)
+}
+
+#[tauri::command]
+pub fn get_local_bridge_runtime_status(
+    state: State<'_, AppState>,
+) -> Result<LocalBridgeRuntimeStatusDto, String> {
+    Ok(local_bridge_runtime_status_to_dto(
+        local_bridge_runtime::local_bridge_runtime_status(&state.local_bridge_runtime),
+    ))
 }
 
 #[tauri::command]
@@ -3029,6 +3051,21 @@ fn local_bridge_authorization_to_dto(
             .collect(),
         granted_at_ms: authorization.granted_at_ms,
         expires_at_ms: authorization.expires_at_ms,
+    }
+}
+
+fn local_bridge_runtime_status_to_dto(
+    status: local_bridge_runtime::LocalBridgeRuntimeStatusSnapshot,
+) -> LocalBridgeRuntimeStatusDto {
+    LocalBridgeRuntimeStatusDto {
+        active: status.active,
+        bind_host: status.bind_host,
+        port: status.port,
+        request_path: status.request_path,
+        max_request_bytes: status.max_request_bytes,
+        pending_authorization_client: status.pending_authorization_client,
+        authorization_count: status.authorization_count,
+        last_error: status.last_error,
     }
 }
 

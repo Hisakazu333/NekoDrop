@@ -134,6 +134,30 @@ pub struct PendingLocalBridgeAuthorization {
 pub struct LocalBridgeRuntimeState {
     pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
     pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
+    pub status: Mutex<LocalBridgeRuntimeStatusState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgeRuntimeStatusState {
+    pub active: bool,
+    pub bind_host: String,
+    pub port: u16,
+    pub request_path: String,
+    pub max_request_bytes: usize,
+    pub last_error: Option<String>,
+}
+
+impl Default for LocalBridgeRuntimeStatusState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            bind_host: "127.0.0.1".to_string(),
+            port: 45921,
+            request_path: "/bridge/request".to_string(),
+            max_request_bytes: 64 * 1024,
+            last_error: None,
+        }
+    }
 }
 
 #[derive(Debug)]
