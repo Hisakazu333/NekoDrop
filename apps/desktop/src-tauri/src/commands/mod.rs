@@ -398,6 +398,32 @@ pub struct LocalBridgeAuthorizationRevokeDto {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgePendingActionDto {
+    pub request_id: String,
+    pub action_kind: String,
+    pub client_id: String,
+    pub client_display_name: String,
+    pub bundle_type: Option<String>,
+    pub target_device_id: Option<String>,
+    pub staged_bundle_id: Option<String>,
+    pub expected_bundle_type: Option<String>,
+    pub require_trusted_device: Option<bool>,
+    pub requested_at_ms: u128,
+    pub bundle_root: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgePendingActionListDto {
+    pub actions: Vec<LocalBridgePendingActionDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgePendingActionRemoveDto {
+    pub removed: bool,
+    pub actions: Vec<LocalBridgePendingActionDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct DiscoveryStatusDto {
     pub phase: String,
     pub message: String,
@@ -791,6 +817,27 @@ pub fn revoke_local_bridge_authorization(
             &state.local_bridge_runtime,
             now_ms,
         )),
+    })
+}
+
+#[tauri::command]
+pub fn list_local_bridge_pending_actions(
+    state: State<'_, AppState>,
+) -> Result<LocalBridgePendingActionListDto, String> {
+    Ok(LocalBridgePendingActionListDto {
+        actions: list_local_bridge_pending_actions_at(&state.local_bridge_runtime)?,
+    })
+}
+
+#[tauri::command]
+pub fn remove_local_bridge_pending_action(
+    state: State<'_, AppState>,
+    request_id: String,
+) -> Result<LocalBridgePendingActionRemoveDto, String> {
+    let removed = remove_local_bridge_pending_action_at(&state.local_bridge_runtime, &request_id)?;
+    Ok(LocalBridgePendingActionRemoveDto {
+        removed,
+        actions: list_local_bridge_pending_actions_at(&state.local_bridge_runtime)?,
     })
 }
 
@@ -2798,6 +2845,78 @@ fn push_local_bridge_pending_action(
         actions.drain(0..excess);
     }
     Ok(())
+}
+
+fn list_local_bridge_pending_actions_at(
+    runtime: &LocalBridgeRuntimeState,
+) -> Result<Vec<LocalBridgePendingActionDto>, String> {
+    let actions = runtime
+        .pending_actions
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(actions
+        .iter()
+        .map(local_bridge_pending_action_to_dto)
+        .collect())
+}
+
+fn remove_local_bridge_pending_action_at(
+    runtime: &LocalBridgeRuntimeState,
+    request_id: &str,
+) -> Result<bool, String> {
+    if request_id.trim().is_empty() {
+        return Err("request_id 不能为空".to_string());
+    }
+    let mut actions = runtime
+        .pending_actions
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let before_len = actions.len();
+    actions.retain(|action| local_bridge_pending_action_request_id(action) != request_id);
+    Ok(actions.len() != before_len)
+}
+
+fn local_bridge_pending_action_to_dto(
+    action: &LocalBridgePendingAction,
+) -> LocalBridgePendingActionDto {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => LocalBridgePendingActionDto {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.send".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            bundle_type: Some(bundle_type_label(action.bundle_type).to_string()),
+            target_device_id: action.target_device_id.clone(),
+            staged_bundle_id: None,
+            expected_bundle_type: None,
+            require_trusted_device: Some(action.require_trusted_device),
+            requested_at_ms: action.requested_at_ms,
+            bundle_root: None,
+        },
+        LocalBridgePendingAction::ImportBundle(action) => LocalBridgePendingActionDto {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.import".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            bundle_type: None,
+            target_device_id: None,
+            staged_bundle_id: Some(action.staged_bundle_id.clone()),
+            expected_bundle_type: action
+                .expected_bundle_type
+                .map(bundle_type_label)
+                .map(str::to_string),
+            require_trusted_device: None,
+            requested_at_ms: action.requested_at_ms,
+            bundle_root: None,
+        },
+    }
+}
+
+fn local_bridge_pending_action_request_id(action: &LocalBridgePendingAction) -> &str {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => &action.request_id,
+        LocalBridgePendingAction::ImportBundle(action) => &action.request_id,
+    }
 }
 
 fn local_bridge_pending_send_action_from_request(
@@ -6199,6 +6318,94 @@ mod tests {
         assert!(runtime.pending_actions.lock().unwrap().is_empty());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_pending_actions_are_listed_as_safe_summaries() {
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.pending_actions.lock().unwrap().extend([
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-1".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-a".to_string()),
+                bundle_root: "/tmp/exported/bundle".to_string(),
+                bundle_type: BundleType::Workspace,
+                require_trusted_device: true,
+                requested_at_ms: 1_500,
+            }),
+            LocalBridgePendingAction::ImportBundle(LocalBridgePendingImportBundleAction {
+                request_id: "bridge-import-1".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                staged_bundle_id: "bundle_1234567890".to_string(),
+                expected_bundle_type: Some(BundleType::Skill),
+                requested_at_ms: 1_600,
+            }),
+        ]);
+
+        let actions = list_local_bridge_pending_actions_at(&runtime).unwrap();
+
+        assert_eq!(actions.len(), 2);
+        assert_eq!(actions[0].request_id, "bridge-send-1");
+        assert_eq!(actions[0].action_kind, "bundle.send");
+        assert_eq!(actions[0].client_display_name, "Local Agent App");
+        assert_eq!(actions[0].bundle_type.as_deref(), Some("workspace"));
+        assert_eq!(actions[0].target_device_id.as_deref(), Some("device-a"));
+        assert!(actions[0].bundle_root.is_none());
+        assert_eq!(actions[1].request_id, "bridge-import-1");
+        assert_eq!(actions[1].action_kind, "bundle.import");
+        assert_eq!(
+            actions[1].staged_bundle_id.as_deref(),
+            Some("bundle_1234567890")
+        );
+        assert_eq!(actions[1].expected_bundle_type.as_deref(), Some("skill"));
+    }
+
+    #[test]
+    fn local_bridge_pending_action_can_be_removed_by_request_id() {
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.pending_actions.lock().unwrap().extend([
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-1".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-a".to_string()),
+                bundle_root: "bundle-a".to_string(),
+                bundle_type: BundleType::Workspace,
+                require_trusted_device: true,
+                requested_at_ms: 1_500,
+            }),
+            LocalBridgePendingAction::ImportBundle(LocalBridgePendingImportBundleAction {
+                request_id: "bridge-import-1".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                staged_bundle_id: "bundle_1234567890".to_string(),
+                expected_bundle_type: Some(BundleType::Skill),
+                requested_at_ms: 1_600,
+            }),
+        ]);
+
+        let removed = remove_local_bridge_pending_action_at(&runtime, "bridge-send-1").unwrap();
+        let missing = remove_local_bridge_pending_action_at(&runtime, "bridge-missing").unwrap();
+        let actions = list_local_bridge_pending_actions_at(&runtime).unwrap();
+
+        assert!(removed);
+        assert!(!missing);
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].request_id, "bridge-import-1");
     }
 
     #[test]

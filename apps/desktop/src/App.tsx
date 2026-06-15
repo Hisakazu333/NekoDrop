@@ -64,6 +64,9 @@ import type {
   LocalBridgeAuthorizationListDto,
   LocalBridgeAuthorizationRevokeDto,
   LocalBridgeAuthorizationDto,
+  LocalBridgePendingActionDto,
+  LocalBridgePendingActionListDto,
+  LocalBridgePendingActionRemoveDto,
   LocalBridgePermissionScope,
   LocalBridgeResponseDto,
   LocalBridgeRuntimeStatusDto,
@@ -167,6 +170,7 @@ export function App() {
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
   const [localBridgeAuthorizations, setLocalBridgeAuthorizations] = useState<LocalBridgeAuthorizationDto[]>([]);
+  const [localBridgePendingActions, setLocalBridgePendingActions] = useState<LocalBridgePendingActionDto[]>([]);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
   const [mode, setMode] = useState<ComposerMode>("overview");
@@ -237,6 +241,7 @@ export function App() {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
     refreshLocalBridgeStatus().catch(() => undefined);
     refreshLocalBridgeAuthorizations().catch(() => undefined);
+    refreshLocalBridgePendingActions().catch(() => undefined);
     const slowRefreshTimer = window.setTimeout(() => {
       refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
     }, STARTUP_SLOW_REFRESH_DELAY_MS);
@@ -972,6 +977,29 @@ export function App() {
     }
   }
 
+  async function refreshLocalBridgePendingActions() {
+    const response = await invokeCommand<LocalBridgePendingActionListDto>("list_local_bridge_pending_actions");
+    setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
+  }
+
+  async function removeLocalBridgePendingAction(action: LocalBridgePendingActionDto) {
+    setBusy("open");
+    setError(null);
+    try {
+      const response = await invokeCommand<LocalBridgePendingActionRemoveDto>("remove_local_bridge_pending_action", {
+        requestId: action.request_id
+      });
+      setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
+      setLocalBridgeCheck(response.removed ? `已移除 ${localBridgePendingActionKindLabel(action.action_kind)}` : "没有找到待执行动作");
+      await refreshLocalBridgeStatus();
+    } catch (nextError) {
+      setLocalBridgeCheck("移除失败");
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function revokeLocalBridgeAuthorization(authorization: LocalBridgeAuthorizationDto, scope: LocalBridgePermissionScope) {
     setBusy("open");
     setError(null);
@@ -1616,6 +1644,7 @@ export function App() {
                   localBridgeAuthorizationCode={localBridgeAuthorizationCode}
                   localBridgeAuthorizations={localBridgeAuthorizations}
                   localBridgeCheck={localBridgeCheck}
+                  localBridgePendingActions={localBridgePendingActions}
                   localBridgeStatus={localBridgeStatus}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
@@ -1629,6 +1658,7 @@ export function App() {
                   onConfirmLocalBridgeAuthorization={confirmLocalBridgeAuthorization}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onPruneLocalBridgeAuthorizations={pruneLocalBridgeAuthorizations}
+                  onRemoveLocalBridgePendingAction={removeLocalBridgePendingAction}
                   onRevokeLocalBridgeAuthorization={revokeLocalBridgeAuthorization}
                   onRunLocalBridgeSelfCheck={runLocalBridgeSelfCheck}
                   onSaveReceiveDir={saveReceiveDir}
@@ -2173,10 +2203,12 @@ function IntegrationSettings({
   localBridgeAuthorizationCode,
   localBridgeAuthorizations,
   localBridgeCheck,
+  localBridgePendingActions,
   localBridgeStatus,
   setLocalBridgeAuthorizationCode,
   onConfirmLocalBridgeAuthorization,
   onPruneLocalBridgeAuthorizations,
+  onRemoveLocalBridgePendingAction,
   onRevokeLocalBridgeAuthorization,
   onRunLocalBridgeSelfCheck
 }: {
@@ -2184,10 +2216,12 @@ function IntegrationSettings({
   localBridgeAuthorizationCode: string;
   localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
   localBridgeCheck: string | null;
+  localBridgePendingActions: LocalBridgePendingActionDto[];
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   setLocalBridgeAuthorizationCode: (value: string) => void;
   onConfirmLocalBridgeAuthorization: () => void;
   onPruneLocalBridgeAuthorizations: () => void;
+  onRemoveLocalBridgePendingAction: (action: LocalBridgePendingActionDto) => void;
   onRevokeLocalBridgeAuthorization: (authorization: LocalBridgeAuthorizationDto, scope: LocalBridgePermissionScope) => void;
   onRunLocalBridgeSelfCheck: () => void;
 }) {
@@ -2226,6 +2260,31 @@ function IntegrationSettings({
       </SettingsRow>
       <SettingsRow label="权限范围">
         <SettingsValue>读取设备、发送资料包、查看传输、申请导入</SettingsValue>
+      </SettingsRow>
+      <SettingsRow label="待执行">
+        <div className="local-bridge-auth-list">
+          {localBridgePendingActions.length > 0 ? (
+            localBridgePendingActions.map((action) => (
+              <div className="console-row" key={action.request_id}>
+                <span title={localBridgePendingActionTitle(action)}>
+                  {action.client_display_name} · {localBridgePendingActionSummary(action)}
+                </span>
+                <div className="settings-inline-actions">
+                  <button
+                    className="text-button"
+                    disabled={busy === "open"}
+                    onClick={() => onRemoveLocalBridgePendingAction(action)}
+                    type="button"
+                  >
+                    移除
+                  </button>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="console-empty">暂无待执行</div>
+          )}
+        </div>
       </SettingsRow>
       <SettingsRow label="已授权">
         <div className="local-bridge-auth-list">
@@ -2658,6 +2717,7 @@ function SettingsPanel({
   localBridgeAuthorizationCode,
   localBridgeAuthorizations,
   localBridgeCheck,
+  localBridgePendingActions,
   localBridgeStatus,
   receiveDir,
   receivePolicy,
@@ -2671,6 +2731,7 @@ function SettingsPanel({
   onConfirmLocalBridgeAuthorization,
   onOpenReceiveDir,
   onPruneLocalBridgeAuthorizations,
+  onRemoveLocalBridgePendingAction,
   onRevokeLocalBridgeAuthorization,
   onRunLocalBridgeSelfCheck,
   onSaveDeviceName,
@@ -2685,6 +2746,7 @@ function SettingsPanel({
   localBridgeAuthorizationCode: string;
   localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
   localBridgeCheck: string | null;
+  localBridgePendingActions: LocalBridgePendingActionDto[];
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
@@ -2698,6 +2760,7 @@ function SettingsPanel({
   onConfirmLocalBridgeAuthorization: () => void;
   onOpenReceiveDir: () => void;
   onPruneLocalBridgeAuthorizations: () => void;
+  onRemoveLocalBridgePendingAction: (action: LocalBridgePendingActionDto) => void;
   onRevokeLocalBridgeAuthorization: (authorization: LocalBridgeAuthorizationDto, scope: LocalBridgePermissionScope) => void;
   onRunLocalBridgeSelfCheck: () => void;
   onSaveDeviceName: () => void;
@@ -2816,10 +2879,12 @@ function SettingsPanel({
         localBridgeAuthorizationCode={localBridgeAuthorizationCode}
         localBridgeAuthorizations={localBridgeAuthorizations}
         localBridgeCheck={localBridgeCheck}
+        localBridgePendingActions={localBridgePendingActions}
         localBridgeStatus={localBridgeStatus}
         setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
         onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
         onPruneLocalBridgeAuthorizations={onPruneLocalBridgeAuthorizations}
+        onRemoveLocalBridgePendingAction={onRemoveLocalBridgePendingAction}
         onRevokeLocalBridgeAuthorization={onRevokeLocalBridgeAuthorization}
         onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
       />
@@ -3490,6 +3555,30 @@ function localBridgeScopeLabel(scope: LocalBridgePermissionScope) {
   if (scope === "bundle.send") return "发送";
   if (scope === "bundle.import.request") return "导入";
   return scope;
+}
+
+function localBridgePendingActionKindLabel(actionKind: string) {
+  if (actionKind === "bundle.send") return "发送资料包";
+  if (actionKind === "bundle.import") return "导入资料包";
+  return actionKind;
+}
+
+function localBridgePendingActionSummary(action: LocalBridgePendingActionDto) {
+  if (action.action_kind === "bundle.send") {
+    const type = action.bundle_type ? bundleTypeLabel(action.bundle_type) : "资料包";
+    const target = action.target_device_id ? ` -> ${action.target_device_id}` : "";
+    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}${target}`;
+  }
+  if (action.action_kind === "bundle.import") {
+    const type = action.expected_bundle_type ? bundleTypeLabel(action.expected_bundle_type) : "资料包";
+    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}`;
+  }
+  return localBridgePendingActionKindLabel(action.action_kind);
+}
+
+function localBridgePendingActionTitle(action: LocalBridgePendingActionDto) {
+  const target = action.target_device_id ?? action.staged_bundle_id ?? action.request_id;
+  return `${action.client_display_name} · ${localBridgePendingActionKindLabel(action.action_kind)} · ${target}`;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {

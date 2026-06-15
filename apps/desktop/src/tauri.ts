@@ -47,6 +47,8 @@ type CommandName =
   | "get_local_bridge_runtime_status"
   | "list_local_bridge_authorizations"
   | "revoke_local_bridge_authorization"
+  | "list_local_bridge_pending_actions"
+  | "remove_local_bridge_pending_action"
   | "prune_local_bridge_authorizations"
   | "handle_local_bridge_request"
   | "confirm_local_bridge_authorization";
