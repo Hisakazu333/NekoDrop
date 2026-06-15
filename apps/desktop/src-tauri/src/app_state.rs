@@ -140,6 +140,24 @@ pub enum LocalBridgePendingAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgePendingActionResult {
+    pub request_id: String,
+    pub action_kind: String,
+    pub client_id: String,
+    pub client_display_name: String,
+    pub status: String,
+    pub reason: Option<String>,
+    pub message: String,
+    pub bundle_id: Option<String>,
+    pub bundle_type: Option<String>,
+    pub bundle_root: Option<String>,
+    pub target_device_id: Option<String>,
+    pub require_trusted_device: Option<bool>,
+    pub requested_at_ms: u128,
+    pub claimed_at_ms: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LocalBridgePendingSendBundleAction {
     pub request_id: String,
     pub client: LocalBridgeClientIdentity,
@@ -164,6 +182,7 @@ pub struct LocalBridgeRuntimeState {
     pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
     pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
     pub pending_actions: Mutex<Vec<LocalBridgePendingAction>>,
+    pub pending_action_results: Mutex<Vec<LocalBridgePendingActionResult>>,
     pub events: Mutex<Vec<LocalBridgeEvent>>,
     pub status: Mutex<LocalBridgeRuntimeStatusState>,
 }

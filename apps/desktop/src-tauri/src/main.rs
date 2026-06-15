@@ -66,6 +66,7 @@ pub fn run() {
             commands::revoke_local_bridge_authorization,
             commands::list_local_bridge_pending_actions,
             commands::remove_local_bridge_pending_action,
+            commands::list_local_bridge_pending_action_results,
             commands::take_next_local_bridge_pending_action,
             commands::preflight_next_local_bridge_bundle_send,
             commands::prune_local_bridge_authorizations,
