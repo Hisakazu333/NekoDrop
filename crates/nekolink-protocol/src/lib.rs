@@ -9,6 +9,7 @@ use chacha20poly1305::{
     aead::{Aead, Payload},
     KeyInit, XChaCha20Poly1305, XNonce,
 };
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -27,6 +28,10 @@ pub const SESSION_AES256GCM_NONCE_LEN: usize = 12;
 pub const SESSION_XCHACHA20POLY1305_NONCE_LEN: usize = 24;
 pub const SESSION_REPLAY_WINDOW_SIZE: u64 = 64;
 pub const SESSION_FILE_FRAME_MAX_PLAINTEXT_LEN: u64 = 64 * 1024;
+pub const DEVICE_IDENTITY_SIGNATURE_ED25519: &str = "ed25519";
+pub const DEVICE_IDENTITY_SIGNING_KEY_LEN: usize = 32;
+pub const DEVICE_IDENTITY_PUBLIC_KEY_LEN: usize = 32;
+pub const DEVICE_IDENTITY_SIGNATURE_LEN: usize = 64;
 pub const BUNDLE_SCHEMA_V1: &str = "nekolink.bundle.v1";
 pub const BUNDLE_CHECKSUM_SHA256: &str = "sha256";
 
@@ -585,6 +590,27 @@ pub struct SessionIdentityBinding {
     pub public_key_fingerprint: String,
     pub session_ephemeral_public_key: String,
     pub handshake_hash: String,
+}
+
+#[derive(Clone)]
+pub struct DeviceIdentitySigningKey {
+    signing_key: SigningKey,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceIdentityPublicKey {
+    pub algorithm: String,
+    pub public_key: String,
+    pub fingerprint: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SignedSessionIdentityBinding {
+    pub binding: SessionIdentityBinding,
+    pub algorithm: String,
+    pub public_key: String,
+    pub public_key_fingerprint: String,
+    pub signature: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1249,6 +1275,159 @@ impl SessionIdentityBinding {
         );
         hash_field(&mut hasher, "handshake_hash", &self.handshake_hash);
         Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
+    }
+}
+
+impl DeviceIdentitySigningKey {
+    pub fn generate() -> Result<Self, ProtocolError> {
+        let mut seed = [0_u8; DEVICE_IDENTITY_SIGNING_KEY_LEN];
+        getrandom::fill(&mut seed).map_err(|error| {
+            ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                format!("failed to generate device identity signing key: {error}"),
+            )
+        })?;
+        Ok(Self::from_seed(seed))
+    }
+
+    pub fn from_seed(seed: [u8; DEVICE_IDENTITY_SIGNING_KEY_LEN]) -> Self {
+        Self {
+            signing_key: SigningKey::from_bytes(&seed),
+        }
+    }
+
+    pub fn seed_bytes(&self) -> [u8; DEVICE_IDENTITY_SIGNING_KEY_LEN] {
+        self.signing_key.to_bytes()
+    }
+
+    pub fn public_key(&self) -> DeviceIdentityPublicKey {
+        let public_key = self.signing_key.verifying_key();
+        DeviceIdentityPublicKey::from_verifying_key(public_key)
+    }
+
+    pub fn public_key_fingerprint(&self) -> String {
+        self.public_key().fingerprint
+    }
+
+    fn sign_binding(&self, binding: &SessionIdentityBinding) -> Result<String, ProtocolError> {
+        let payload_hash = binding.canonical_payload_hash()?;
+        let signature = self.signing_key.sign(payload_hash.as_bytes());
+        Ok(URL_SAFE_NO_PAD.encode(signature.to_bytes()))
+    }
+}
+
+impl std::fmt::Debug for DeviceIdentitySigningKey {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DeviceIdentitySigningKey")
+            .field("public_key", &self.public_key().public_key)
+            .field("fingerprint", &self.public_key_fingerprint())
+            .finish_non_exhaustive()
+    }
+}
+
+impl DeviceIdentityPublicKey {
+    pub fn from_encoded(public_key: impl Into<String>) -> Result<Self, ProtocolError> {
+        let public_key = public_key.into();
+        let verifying_key = decode_device_identity_public_key(&public_key)?;
+        Ok(Self::from_verifying_key(verifying_key))
+    }
+
+    fn from_verifying_key(verifying_key: VerifyingKey) -> Self {
+        let bytes = verifying_key.to_bytes();
+        Self {
+            algorithm: DEVICE_IDENTITY_SIGNATURE_ED25519.to_string(),
+            public_key: URL_SAFE_NO_PAD.encode(bytes),
+            fingerprint: device_identity_public_key_fingerprint(&bytes),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_device_identity_signature_algorithm(&self.algorithm)?;
+        let verifying_key = decode_device_identity_public_key(&self.public_key)?;
+        let expected = device_identity_public_key_fingerprint(&verifying_key.to_bytes());
+        if self.fingerprint != expected {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "device identity public key fingerprint mismatch",
+            ));
+        }
+        Ok(())
+    }
+}
+
+impl SignedSessionIdentityBinding {
+    pub fn sign(
+        binding: SessionIdentityBinding,
+        signing_key: &DeviceIdentitySigningKey,
+    ) -> Result<Self, ProtocolError> {
+        binding.validate()?;
+        let public_key = signing_key.public_key();
+        Ok(Self {
+            binding: binding.clone(),
+            algorithm: DEVICE_IDENTITY_SIGNATURE_ED25519.to_string(),
+            public_key: public_key.public_key,
+            public_key_fingerprint: public_key.fingerprint,
+            signature: signing_key.sign_binding(&binding)?,
+        })
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        self.binding.validate()?;
+        validate_device_identity_signature_algorithm(&self.algorithm)?;
+        let public_key = DeviceIdentityPublicKey {
+            algorithm: self.algorithm.clone(),
+            public_key: self.public_key.clone(),
+            fingerprint: self.public_key_fingerprint.clone(),
+        };
+        public_key.validate()?;
+        decode_device_identity_signature(&self.signature)?;
+        Ok(())
+    }
+
+    pub fn verify(&self, expected_binding: &SessionIdentityBinding) -> Result<(), ProtocolError> {
+        let public_key = DeviceIdentityPublicKey {
+            algorithm: self.algorithm.clone(),
+            public_key: self.public_key.clone(),
+            fingerprint: self.public_key_fingerprint.clone(),
+        };
+        self.verify_with_public_key(expected_binding, &public_key)
+    }
+
+    pub fn verify_with_public_key(
+        &self,
+        expected_binding: &SessionIdentityBinding,
+        public_key: &DeviceIdentityPublicKey,
+    ) -> Result<(), ProtocolError> {
+        self.validate()?;
+        expected_binding.validate()?;
+        public_key.validate()?;
+        if self.public_key != public_key.public_key
+            || self.public_key_fingerprint != public_key.fingerprint
+        {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "session identity signature public key mismatch",
+            ));
+        }
+        if &self.binding != expected_binding {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "session identity signature binding mismatch",
+            ));
+        }
+
+        let verifying_key = decode_device_identity_public_key(&self.public_key)?;
+        let signature = decode_device_identity_signature(&self.signature)?;
+        let payload_hash = expected_binding.canonical_payload_hash()?;
+        verifying_key
+            .verify(payload_hash.as_bytes(), &signature)
+            .map_err(|_| {
+                ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "session identity signature verification failed",
+                )
+            })
     }
 }
 
@@ -2455,6 +2634,16 @@ fn validate_sha256_digest_label(name: &str, value: &str) -> Result<(), ProtocolE
     Ok(())
 }
 
+fn validate_device_identity_signature_algorithm(value: &str) -> Result<(), ProtocolError> {
+    if value != DEVICE_IDENTITY_SIGNATURE_ED25519 {
+        return Err(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!("unsupported device identity signature algorithm: {value}"),
+        ));
+    }
+    Ok(())
+}
+
 fn session_hash_bytes(name: &str, value: &str) -> Result<[u8; 32], ProtocolError> {
     validate_sha256_digest_label(name, value)?;
     let hex = value.strip_prefix("sha256:").unwrap_or_default();
@@ -2656,6 +2845,58 @@ fn decode_session_public_key(
     let mut public_key = [0_u8; SESSION_SHARED_SECRET_LEN];
     public_key.copy_from_slice(&decoded);
     Ok(public_key)
+}
+
+fn decode_device_identity_public_key(value: &str) -> Result<VerifyingKey, ProtocolError> {
+    validate_session_crypto_label("device identity public_key", value)?;
+    let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "device identity public_key must be base64url without padding",
+        )
+    })?;
+    let bytes: [u8; DEVICE_IDENTITY_PUBLIC_KEY_LEN] = decoded.try_into().map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!(
+                "device identity public_key must decode to {DEVICE_IDENTITY_PUBLIC_KEY_LEN} bytes"
+            ),
+        )
+    })?;
+    VerifyingKey::from_bytes(&bytes).map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "device identity public_key is not a valid ed25519 key",
+        )
+    })
+}
+
+fn decode_device_identity_signature(value: &str) -> Result<Signature, ProtocolError> {
+    validate_session_crypto_label("device identity signature", value)?;
+    let decoded = URL_SAFE_NO_PAD.decode(value).map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "device identity signature must be base64url without padding",
+        )
+    })?;
+    let bytes: [u8; DEVICE_IDENTITY_SIGNATURE_LEN] = decoded.try_into().map_err(|_| {
+        ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            format!(
+                "device identity signature must decode to {DEVICE_IDENTITY_SIGNATURE_LEN} bytes"
+            ),
+        )
+    })?;
+    Ok(Signature::from_bytes(&bytes))
+}
+
+fn device_identity_public_key_fingerprint(
+    public_key: &[u8; DEVICE_IDENTITY_PUBLIC_KEY_LEN],
+) -> String {
+    let mut hasher = Sha256::new();
+    hash_field(&mut hasher, "kind", "device.identity.ed25519");
+    hasher.update(public_key);
+    format!("sha256:{}", hex::encode(hasher.finalize()))
 }
 
 fn session_key_derivation_error(direction: &str) -> ProtocolError {
@@ -3537,6 +3778,55 @@ mod tests {
             binding.canonical_payload_hash().unwrap(),
             changed_hash.canonical_payload_hash().unwrap()
         );
+    }
+
+    #[test]
+    fn signed_session_identity_binding_verifies_and_rejects_tampering() {
+        let identity = DeviceIdentity::new(
+            "neko-device-abc123",
+            "Hisakazu Mac",
+            DeviceKind::Desktop,
+            PlatformKind::Macos,
+            "sha256:abc123",
+            [
+                Capability::FileTransfer,
+                Capability::DevicePairing,
+                Capability::EncryptedSession,
+            ],
+        );
+        let binding = SessionIdentityBinding::new(
+            SessionParticipantRole::Initiator,
+            "session-1",
+            &identity,
+            "base64-local-key",
+            format!("sha256:{}", "1".repeat(64)),
+        )
+        .unwrap();
+        let signing_key = DeviceIdentitySigningKey::from_seed([7_u8; 32]);
+
+        let signed = SignedSessionIdentityBinding::sign(binding.clone(), &signing_key).unwrap();
+
+        assert_eq!(signed.algorithm, DEVICE_IDENTITY_SIGNATURE_ED25519);
+        assert_eq!(
+            signed.public_key_fingerprint,
+            signing_key.public_key_fingerprint()
+        );
+        signed.verify(&binding).unwrap();
+
+        let mut tampered = signed.clone();
+        tampered.binding.handshake_hash = format!("sha256:{}", "2".repeat(64));
+        let error = tampered.verify(&tampered.binding).unwrap_err();
+        assert!(error
+            .message
+            .contains("session identity signature verification failed"));
+
+        let other_key = DeviceIdentitySigningKey::from_seed([8_u8; 32]);
+        let error = signed
+            .verify_with_public_key(&binding, &other_key.public_key())
+            .unwrap_err();
+        assert!(error
+            .message
+            .contains("session identity signature public key mismatch"));
     }
 
     #[test]
