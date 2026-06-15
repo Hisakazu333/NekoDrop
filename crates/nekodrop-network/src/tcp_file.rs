@@ -585,6 +585,21 @@ pub fn read_session_transfer_offer(
     Ok(offer)
 }
 
+pub fn read_session_transfer_offer_once(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    replay_window: &mut nekolink_protocol::SessionReplayWindow,
+) -> NekoDropResult<TransferOffer> {
+    let offer: TransferOffer = read_session_control_payload_kind_once(
+        stream,
+        keys,
+        replay_window,
+        MessageKind::FileOffer,
+    )?;
+    offer.validate().map_err(protocol_error_to_network)?;
+    Ok(offer)
+}
+
 pub fn read_transfer_offer(stream: &mut impl Read) -> NekoDropResult<TransferOffer> {
     let envelope: Envelope<TransferOffer> = read_json_frame(stream)?;
     envelope
@@ -796,6 +811,43 @@ pub fn read_session_transfer_decision(
     }
     let decision: TransferDecision = EncryptedSessionPayload::open_control(&envelope, keys)
         .map_err(protocol_error_to_network)?;
+    decision.validate().map_err(protocol_error_to_network)?;
+    if decision.accepted && envelope.payload.inner_kind != MessageKind::FileAccept {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "accepted encrypted transfer decision must use file.accept",
+        )));
+    }
+    if !decision.accepted && envelope.payload.inner_kind != MessageKind::FileDecline {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::InvalidPayload,
+            "declined encrypted transfer decision must use file.decline",
+        )));
+    }
+    Ok(decision)
+}
+
+pub fn read_session_transfer_decision_once(
+    stream: &mut impl Read,
+    keys: &nekolink_protocol::SessionKeyMaterial,
+    replay_window: &mut nekolink_protocol::SessionReplayWindow,
+) -> NekoDropResult<TransferDecision> {
+    let envelope = read_session_control_envelope(stream)?;
+    if !matches!(
+        envelope.payload.inner_kind,
+        MessageKind::FileAccept | MessageKind::FileDecline
+    ) {
+        return Err(protocol_error_to_network(ProtocolError::new(
+            ErrorCode::UnexpectedMessageKind,
+            format!(
+                "unexpected encrypted transfer decision kind: {}",
+                envelope.payload.inner_kind.as_str()
+            ),
+        )));
+    }
+    let decision: TransferDecision =
+        EncryptedSessionPayload::open_control_once(&envelope, keys, replay_window)
+            .map_err(protocol_error_to_network)?;
     decision.validate().map_err(protocol_error_to_network)?;
     if decision.accepted && envelope.payload.inner_kind != MessageKind::FileAccept {
         return Err(protocol_error_to_network(ProtocolError::new(
@@ -1788,6 +1840,62 @@ mod tests {
     }
 
     #[test]
+    fn session_transfer_offer_once_helper_rejects_replayed_frame() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            14,
+        )
+        .unwrap();
+        let offer = TransferOffer::new(
+            "transfer-1",
+            "drop",
+            vec![TransferOfferFile {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 11,
+                sha256: "abc123".to_string(),
+            }],
+        );
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:offer-2",
+            &keys,
+            header,
+            MessageKind::FileOffer,
+            &offer,
+        )
+        .unwrap();
+        let mut first_buffer = Vec::new();
+        let mut second_buffer = Vec::new();
+        write_session_control_envelope(&mut first_buffer, &envelope).unwrap();
+        write_session_control_envelope(&mut second_buffer, &envelope).unwrap();
+        let mut replay_window = nekolink_protocol::SessionReplayWindow::default();
+
+        assert_eq!(
+            read_session_transfer_offer_once(
+                &mut Cursor::new(first_buffer),
+                &keys,
+                &mut replay_window,
+            )
+            .unwrap(),
+            offer
+        );
+        let error = read_session_transfer_offer_once(
+            &mut Cursor::new(second_buffer),
+            &keys,
+            &mut replay_window,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("replayed session frame"));
+    }
+
+    #[test]
     fn session_transfer_decision_helpers_use_encrypted_control_frames() {
         let keys = SessionKeyMaterial {
             send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
@@ -1837,6 +1945,53 @@ mod tests {
             read_session_transfer_decision(&mut Cursor::new(declined_buffer), &keys).unwrap(),
             TransferDecision::decline("busy")
         );
+    }
+
+    #[test]
+    fn session_transfer_decision_once_helper_rejects_replayed_frame() {
+        let keys = SessionKeyMaterial {
+            send_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [23_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            16,
+        )
+        .unwrap();
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "session-1:accept-2",
+            &keys,
+            header,
+            MessageKind::FileAccept,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        let mut first_buffer = Vec::new();
+        let mut second_buffer = Vec::new();
+        write_session_control_envelope(&mut first_buffer, &envelope).unwrap();
+        write_session_control_envelope(&mut second_buffer, &envelope).unwrap();
+        let mut replay_window = nekolink_protocol::SessionReplayWindow::default();
+
+        assert_eq!(
+            read_session_transfer_decision_once(
+                &mut Cursor::new(first_buffer),
+                &keys,
+                &mut replay_window,
+            )
+            .unwrap(),
+            TransferDecision::accept()
+        );
+        let error = read_session_transfer_decision_once(
+            &mut Cursor::new(second_buffer),
+            &keys,
+            &mut replay_window,
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("replayed session frame"));
     }
 
     #[test]
