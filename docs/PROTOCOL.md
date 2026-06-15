@@ -267,7 +267,7 @@ The plain `file.offer` / file-frame path is kept for old clients and manual conn
 
 - require explicit user approval
 - are never auto-accepted as trusted-device transfers
-- are rejected if the sender identity matches an existing trusted device
+- are rejected if the offer claims a known trusted device ID
 - do not refresh trusted-device `last_seen` or device name
 - are not valid for silent bundle import or local bridge automation
 

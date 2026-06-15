@@ -3483,15 +3483,12 @@ fn legacy_plain_offer_matches_trusted_device(
     let Some(sender_device_id) = offer.sender_device_id.as_deref() else {
         return false;
     };
-    let Some(sender_fingerprint) = offer.sender_public_key_fingerprint.as_deref() else {
-        return false;
-    };
     let Ok(trusted_devices) = trusted_devices.lock() else {
         return false;
     };
-    trusted_devices.iter().any(|record| {
-        record.device_id == sender_device_id && record.public_key_fingerprint == sender_fingerprint
-    })
+    trusted_devices
+        .iter()
+        .any(|record| record.device_id == sender_device_id)
 }
 
 fn should_auto_accept_receive_offer(
@@ -5602,6 +5599,38 @@ mod tests {
     }
 
     #[test]
+    fn legacy_plain_offer_rejects_known_device_id_even_with_mismatched_fingerprint() {
+        let public_key = test_public_key("device-a");
+        let pending = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(None));
+        let trusted = Arc::new(Mutex::new(vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            public_key.public_key.as_str(),
+            public_key.fingerprint.as_str(),
+        )]));
+        let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-a".to_string());
+        offer.sender_public_key_fingerprint = Some("sha256:rotated".to_string());
+
+        let accepted = wait_for_receive_decision(
+            &offer,
+            &pending,
+            &status,
+            ReceivePolicy::AlwaysAsk,
+            &trusted,
+            ReceiveTrustContext::Untrusted,
+            None,
+        );
+
+        assert!(!accepted);
+        assert!(pending.lock().unwrap().is_none());
+        let status = status.lock().unwrap().clone().unwrap();
+        assert_eq!(status.phase, "blocked");
+        assert!(status.message.contains("已认证加密"));
+    }
+
+    #[test]
     fn legacy_plain_offer_from_unknown_identity_remains_manual_compatibility() {
         let trusted_public_key = test_public_key("device-a");
         let unknown_public_key = test_public_key("device-b");
@@ -5616,6 +5645,22 @@ mod tests {
         offer.sender_public_key_fingerprint = Some(unknown_public_key.fingerprint);
 
         assert!(!legacy_plain_offer_matches_trusted_device(&offer, &trusted));
+    }
+
+    #[test]
+    fn legacy_plain_offer_matches_trusted_device_by_known_device_id() {
+        let trusted_public_key = test_public_key("device-a");
+        let trusted = Arc::new(Mutex::new(vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            trusted_public_key.public_key.as_str(),
+            trusted_public_key.fingerprint.as_str(),
+        )]));
+        let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-a".to_string());
+        offer.sender_public_key_fingerprint = Some("sha256:rotated".to_string());
+
+        assert!(legacy_plain_offer_matches_trusted_device(&offer, &trusted));
     }
 
     #[test]

@@ -105,7 +105,7 @@ Current desktop transfers have an encrypted session path:
 - desktop sessions exchange Ed25519 signed identity bindings after `session.ready`
 - each side verifies the peer owns the public key advertised by the session identity
 - if the peer is already trusted, the signed session public key must match the trusted-device record
-- the plain compatibility path is labeled `legacy_plain`, requires manual approval, rejects trusted-device identities, and cannot refresh trusted devices
+- the plain compatibility path is labeled `legacy_plain`, requires manual approval, rejects offers that claim a known trusted device ID, and cannot refresh trusted devices
 - the desktop UI shows the actual transfer mode after receive and in history when the record has it
 
 Remaining work:
