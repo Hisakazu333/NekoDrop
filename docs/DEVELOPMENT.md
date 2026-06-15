@@ -57,19 +57,23 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 ## GitHub 开发流程
 
-本项目使用 `main / develop / topic branch` 的开发流程。
+本项目使用 `main / develop / desktop-develop / topic branch` 的开发流程。
 
 ```text
-个人 topic branch -> develop -> main -> tag / release
+Rust / 核心能力 topic branch -> develop
+桌面端 topic branch -> desktop-develop
+desktop-develop -> develop -> main -> tag / release
 ```
 
-`main` 是发布主线，必须始终保持可构建、可测试、可打包。日常功能、修复、安全收口、UI、文档和测试 PR 默认合到 `develop`。`develop` 验证稳定后，再开 release / rollup PR 合到 `main`。
+`main` 是发布主线，必须始终保持可构建、可测试、可打包。它只接收从 `develop` 发起的 release / rollup PR。
 
-`develop` 是集成分支，不是个人开发分支。不要把没完成的代码直接推到 `develop`。每个人都从 `develop` 开自己的短分支，做完后通过 PR 合回 `develop`。
+`develop` 是核心功能集成分支，主要放 Rust workspace、协议、存储、网络、服务、安全、bundle 和 bridge 这些底层功能。它不是个人开发分支，不接收没完成的半成品。
 
-不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`。
+`desktop-develop` 是桌面端集成分支，主要放 Tauri、React UI、桌面 IPC、设置页、安装包脚本和 macOS / Windows 体验。桌面端后续开发都从这个分支开短分支，做完后 PR 回 `desktop-develop`。
 
-每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。
+不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`，涉及桌面端的还要同步回 `desktop-develop`。
+
+每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。桌面端要发版时，先把 `desktop-develop` 同步进 `develop`，再走 `develop -> main`。
 
 分支命名示例：
 
@@ -89,6 +93,14 @@ docs/hisakazu/release-checklist
 git checkout develop
 git pull --ff-only
 git checkout -b security/hisakazu/device-identity-signing
+```
+
+从 `desktop-develop` 开桌面端分支：
+
+```bash
+git checkout desktop-develop
+git pull --ff-only
+git checkout -b ui/hisakazu/transfer-progress-polish
 ```
 
 每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
