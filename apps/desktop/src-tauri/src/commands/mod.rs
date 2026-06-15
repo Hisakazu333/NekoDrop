@@ -50,7 +50,8 @@ use crate::app_state::{
 };
 use crate::device_identity::app_config_dir;
 use crate::local_bridge_authorizations::{
-    save_local_bridge_authorizations, save_local_bridge_authorizations_at,
+    local_bridge_authorizations_file_path, save_local_bridge_authorizations,
+    save_local_bridge_authorizations_at,
 };
 use crate::local_bridge_runtime;
 use crate::network::{local_lan_ips, primary_lan_ip};
@@ -376,6 +377,18 @@ pub struct LocalBridgeRuntimeStatusDto {
     pub pending_authorization_client: Option<String>,
     pub authorization_count: usize,
     pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgeAuthorizationListDto {
+    pub authorizations: Vec<LocalBridgeAuthorizationDto>,
+    pub pruned_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgeAuthorizationRevokeDto {
+    pub revoked: bool,
+    pub authorizations: Vec<LocalBridgeAuthorizationDto>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -734,6 +747,61 @@ pub fn get_local_bridge_runtime_status(
     Ok(local_bridge_runtime_status_to_dto(
         local_bridge_runtime::local_bridge_runtime_status(&state.local_bridge_runtime),
     ))
+}
+
+#[tauri::command]
+pub fn list_local_bridge_authorizations(
+    state: State<'_, AppState>,
+) -> Result<LocalBridgeAuthorizationListDto, String> {
+    let now_ms = now_ms();
+    let pruned_count =
+        prune_local_bridge_authorizations_and_persist(&state.local_bridge_runtime, now_ms)?;
+    Ok(LocalBridgeAuthorizationListDto {
+        authorizations: local_bridge_authorizations_to_dtos(list_local_bridge_authorizations_at(
+            &state.local_bridge_runtime,
+            now_ms,
+        )),
+        pruned_count,
+    })
+}
+
+#[tauri::command]
+pub fn revoke_local_bridge_authorization(
+    state: State<'_, AppState>,
+    client_id: String,
+    scope: String,
+) -> Result<LocalBridgeAuthorizationRevokeDto, String> {
+    let now_ms = now_ms();
+    let scope = parse_local_bridge_permission_scope(&scope)?;
+    let revoked = revoke_local_bridge_authorization_and_persist(
+        &state.local_bridge_runtime,
+        &client_id,
+        scope,
+        now_ms,
+    )?;
+    Ok(LocalBridgeAuthorizationRevokeDto {
+        revoked,
+        authorizations: local_bridge_authorizations_to_dtos(list_local_bridge_authorizations_at(
+            &state.local_bridge_runtime,
+            now_ms,
+        )),
+    })
+}
+
+#[tauri::command]
+pub fn prune_local_bridge_authorizations(
+    state: State<'_, AppState>,
+) -> Result<LocalBridgeAuthorizationListDto, String> {
+    let now_ms = now_ms();
+    let pruned_count =
+        prune_local_bridge_authorizations_and_persist(&state.local_bridge_runtime, now_ms)?;
+    Ok(LocalBridgeAuthorizationListDto {
+        authorizations: local_bridge_authorizations_to_dtos(list_local_bridge_authorizations_at(
+            &state.local_bridge_runtime,
+            now_ms,
+        )),
+        pruned_count,
+    })
 }
 
 #[tauri::command]
@@ -2806,6 +2874,106 @@ fn confirm_local_bridge_runtime_authorization_and_save_at(
     Ok(authorization)
 }
 
+fn list_local_bridge_authorizations_at(
+    runtime: &LocalBridgeRuntimeState,
+    now_ms: u128,
+) -> Vec<LocalBridgeAuthorizationRecord> {
+    let mut authorizations = runtime
+        .authorizations
+        .lock()
+        .map(|authorizations| {
+            authorizations
+                .iter()
+                .filter(|record| local_bridge_authorization_is_active(record, now_ms))
+                .cloned()
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    sort_local_bridge_authorizations(&mut authorizations);
+    authorizations
+}
+
+fn revoke_local_bridge_authorization_and_persist(
+    runtime: &LocalBridgeRuntimeState,
+    client_id: &str,
+    scope: LocalBridgePermissionScope,
+    now_ms: u128,
+) -> Result<bool, String> {
+    let path = local_bridge_authorizations_file_path()?;
+    revoke_local_bridge_authorization_at(runtime, client_id, scope, now_ms, &path)
+}
+
+fn revoke_local_bridge_authorization_at(
+    runtime: &LocalBridgeRuntimeState,
+    client_id: &str,
+    scope: LocalBridgePermissionScope,
+    now_ms: u128,
+    authorizations_path: &Path,
+) -> Result<bool, String> {
+    let mut authorizations = runtime
+        .authorizations
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut revoked = false;
+    for record in authorizations
+        .iter_mut()
+        .filter(|record| record.client_id == client_id)
+    {
+        let before_scope_count = record.scopes.len();
+        record.scopes.retain(|candidate| *candidate != scope);
+        revoked |= record.scopes.len() != before_scope_count;
+    }
+    authorizations.retain(|record| !record.scopes.is_empty());
+    save_local_bridge_authorizations_at(authorizations_path, &authorizations, now_ms)?;
+    Ok(revoked)
+}
+
+fn prune_local_bridge_authorizations_and_persist(
+    runtime: &LocalBridgeRuntimeState,
+    now_ms: u128,
+) -> Result<usize, String> {
+    let path = local_bridge_authorizations_file_path()?;
+    prune_local_bridge_authorizations_at(runtime, now_ms, &path)
+}
+
+fn prune_local_bridge_authorizations_at(
+    runtime: &LocalBridgeRuntimeState,
+    now_ms: u128,
+    authorizations_path: &Path,
+) -> Result<usize, String> {
+    let mut authorizations = runtime
+        .authorizations
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let before_len = authorizations.len();
+    authorizations.retain(|record| local_bridge_authorization_is_active(record, now_ms));
+    let pruned_count = before_len.saturating_sub(authorizations.len());
+    save_local_bridge_authorizations_at(authorizations_path, &authorizations, now_ms)?;
+    Ok(pruned_count)
+}
+
+fn local_bridge_authorization_is_active(
+    record: &LocalBridgeAuthorizationRecord,
+    now_ms: u128,
+) -> bool {
+    record
+        .expires_at_ms
+        .is_none_or(|expires_at_ms| expires_at_ms >= now_ms)
+}
+
+fn sort_local_bridge_authorizations(records: &mut [LocalBridgeAuthorizationRecord]) {
+    records.sort_by(|left, right| {
+        right
+            .granted_at_ms
+            .cmp(&left.granted_at_ms)
+            .then_with(|| left.client_id.cmp(&right.client_id))
+            .then_with(|| {
+                local_bridge_permission_scopes_label(&left.scopes)
+                    .cmp(&local_bridge_permission_scopes_label(&right.scopes))
+            })
+    });
+}
+
 fn local_bridge_client_has_scope(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],
@@ -3091,6 +3259,15 @@ fn local_bridge_authorization_to_dto(
     }
 }
 
+fn local_bridge_authorizations_to_dtos(
+    authorizations: Vec<LocalBridgeAuthorizationRecord>,
+) -> Vec<LocalBridgeAuthorizationDto> {
+    authorizations
+        .into_iter()
+        .map(local_bridge_authorization_to_dto)
+        .collect()
+}
+
 fn local_bridge_runtime_status_to_dto(
     status: local_bridge_runtime::LocalBridgeRuntimeStatusSnapshot,
 ) -> LocalBridgeRuntimeStatusDto {
@@ -3126,6 +3303,26 @@ fn local_bridge_permission_scope_label(scope: LocalBridgePermissionScope) -> &'s
         LocalBridgePermissionScope::BundleRead => "bundle.read",
         LocalBridgePermissionScope::BundleSend => "bundle.send",
         LocalBridgePermissionScope::BundleImportRequest => "bundle.import.request",
+    }
+}
+
+fn local_bridge_permission_scopes_label(scopes: &[LocalBridgePermissionScope]) -> String {
+    scopes
+        .iter()
+        .copied()
+        .map(local_bridge_permission_scope_label)
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
+fn parse_local_bridge_permission_scope(value: &str) -> Result<LocalBridgePermissionScope, String> {
+    match value {
+        "device.read" => Ok(LocalBridgePermissionScope::DeviceRead),
+        "transfer.status.read" => Ok(LocalBridgePermissionScope::TransferStatusRead),
+        "bundle.read" => Ok(LocalBridgePermissionScope::BundleRead),
+        "bundle.send" => Ok(LocalBridgePermissionScope::BundleSend),
+        "bundle.import.request" => Ok(LocalBridgePermissionScope::BundleImportRequest),
+        _ => Err(format!("未知本机接入权限: {value}")),
     }
 }
 
@@ -5558,6 +5755,87 @@ mod tests {
 
         assert_eq!(authorization.client_id, "generic-local-app");
         assert_eq!(saved, vec![authorization]);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_authorization_management_lists_revokes_and_prunes() {
+        let dir = unique_bundle_temp_dir("local-bridge-authorization-management");
+        let authorizations_path = dir.join("local_bridge_authorizations.json");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.authorizations.lock().unwrap().extend([
+            local_bridge_authorization(
+                "multi-scope-app",
+                &[
+                    LocalBridgePermissionScope::BundleSend,
+                    LocalBridgePermissionScope::BundleImportRequest,
+                ],
+                3_000,
+                40_000,
+            ),
+            local_bridge_authorization(
+                "local-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                20_000,
+            ),
+            local_bridge_authorization(
+                "local-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                2_000,
+                30_000,
+            ),
+            local_bridge_authorization(
+                "expired-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                2_000,
+            ),
+        ]);
+
+        let listed = list_local_bridge_authorizations_at(&runtime, 3_000);
+        let revoked = revoke_local_bridge_authorization_at(
+            &runtime,
+            "local-app",
+            LocalBridgePermissionScope::BundleSend,
+            3_500,
+            &authorizations_path,
+        )
+        .unwrap();
+        let pruned =
+            prune_local_bridge_authorizations_at(&runtime, 5_000, &authorizations_path).unwrap();
+        let multi_scope_revoked = revoke_local_bridge_authorization_at(
+            &runtime,
+            "multi-scope-app",
+            LocalBridgePermissionScope::BundleSend,
+            5_100,
+            &authorizations_path,
+        )
+        .unwrap();
+        let saved = crate::local_bridge_authorizations::load_local_bridge_authorizations_at(
+            &authorizations_path,
+            5_500,
+        )
+        .unwrap();
+
+        assert_eq!(listed.len(), 3);
+        assert!(revoked);
+        assert!(multi_scope_revoked);
+        assert_eq!(pruned, 1);
+        assert_eq!(saved.len(), 2);
+        assert_eq!(
+            saved
+                .iter()
+                .find(|record| record.client_id == "multi-scope-app")
+                .unwrap()
+                .scopes,
+            vec![LocalBridgePermissionScope::BundleImportRequest]
+        );
+        assert!(saved.iter().any(|record| {
+            record.client_id == "local-app"
+                && record.scopes == vec![LocalBridgePermissionScope::BundleImportRequest]
+        }));
 
         fs::remove_dir_all(dir).unwrap();
     }

@@ -145,7 +145,7 @@ fn authorization_to_persisted(
     }
 }
 
-fn local_bridge_authorizations_file_path() -> Result<PathBuf, String> {
+pub(crate) fn local_bridge_authorizations_file_path() -> Result<PathBuf, String> {
     Ok(app_config_dir()?.join("local_bridge_authorizations.json"))
 }
 

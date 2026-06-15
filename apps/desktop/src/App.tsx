@@ -61,7 +61,10 @@ import type {
   DesktopRealtimeSnapshotDto,
   DeviceDto,
   DiscoveryStatusDto,
+  LocalBridgeAuthorizationListDto,
+  LocalBridgeAuthorizationRevokeDto,
   LocalBridgeAuthorizationDto,
+  LocalBridgePermissionScope,
   LocalBridgeResponseDto,
   LocalBridgeRuntimeStatusDto,
   ManualBundleCreateDto,
@@ -163,6 +166,7 @@ export function App() {
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
+  const [localBridgeAuthorizations, setLocalBridgeAuthorizations] = useState<LocalBridgeAuthorizationDto[]>([]);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
   const [mode, setMode] = useState<ComposerMode>("overview");
@@ -232,6 +236,7 @@ export function App() {
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
     refreshLocalBridgeStatus().catch(() => undefined);
+    refreshLocalBridgeAuthorizations().catch(() => undefined);
     const slowRefreshTimer = window.setTimeout(() => {
       refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
     }, STARTUP_SLOW_REFRESH_DELAY_MS);
@@ -928,6 +933,7 @@ export function App() {
       setLocalBridgeAuthorizationCode("");
       setLocalBridgeCheck(`已授权 ${authorization.display_name} · ${authorization.scopes.join(" · ")}`);
       await refreshLocalBridgeStatus();
+      await refreshLocalBridgeAuthorizations();
     } catch (nextError) {
       setLocalBridgeCheck("授权失败");
       setError(errorMessage(nextError));
@@ -956,6 +962,49 @@ export function App() {
   async function refreshLocalBridgeStatus() {
     const status = await invokeCommand<LocalBridgeRuntimeStatusDto>("get_local_bridge_runtime_status");
     setLocalBridgeStatus((current) => keepIfEqual(current, status));
+  }
+
+  async function refreshLocalBridgeAuthorizations() {
+    const response = await invokeCommand<LocalBridgeAuthorizationListDto>("list_local_bridge_authorizations");
+    setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
+    if (response.pruned_count > 0) {
+      await refreshLocalBridgeStatus();
+    }
+  }
+
+  async function revokeLocalBridgeAuthorization(authorization: LocalBridgeAuthorizationDto, scope: LocalBridgePermissionScope) {
+    setBusy("open");
+    setError(null);
+    try {
+      const response = await invokeCommand<LocalBridgeAuthorizationRevokeDto>("revoke_local_bridge_authorization", {
+        clientId: authorization.client_id,
+        scope
+      });
+      setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
+      setLocalBridgeCheck(response.revoked ? `已撤销 ${authorization.display_name} · ${scope}` : "没有找到这条授权");
+      await refreshLocalBridgeStatus();
+    } catch (nextError) {
+      setLocalBridgeCheck("撤销失败");
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function pruneLocalBridgeAuthorizations() {
+    setBusy("open");
+    setError(null);
+    try {
+      const response = await invokeCommand<LocalBridgeAuthorizationListDto>("prune_local_bridge_authorizations");
+      setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
+      setLocalBridgeCheck(response.pruned_count > 0 ? `已清理 ${response.pruned_count} 条过期授权` : "没有过期授权");
+      await refreshLocalBridgeStatus();
+    } catch (nextError) {
+      setLocalBridgeCheck("清理失败");
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function createManualBundleForSend() {
@@ -1565,6 +1614,7 @@ export function App() {
                   deviceNameInput={deviceNameInput}
                   discoveryStatus={discoveryStatus}
                   localBridgeAuthorizationCode={localBridgeAuthorizationCode}
+                  localBridgeAuthorizations={localBridgeAuthorizations}
                   localBridgeCheck={localBridgeCheck}
                   localBridgeStatus={localBridgeStatus}
                   receiveDir={receiveDir}
@@ -1578,6 +1628,8 @@ export function App() {
                   onChooseReceiveDir={chooseReceiveDir}
                   onConfirmLocalBridgeAuthorization={confirmLocalBridgeAuthorization}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
+                  onPruneLocalBridgeAuthorizations={pruneLocalBridgeAuthorizations}
+                  onRevokeLocalBridgeAuthorization={revokeLocalBridgeAuthorization}
                   onRunLocalBridgeSelfCheck={runLocalBridgeSelfCheck}
                   onSaveReceiveDir={saveReceiveDir}
                   onSaveReceivePort={saveReceivePort}
@@ -2119,18 +2171,24 @@ function ManualBundleComposer({
 function IntegrationSettings({
   busy,
   localBridgeAuthorizationCode,
+  localBridgeAuthorizations,
   localBridgeCheck,
   localBridgeStatus,
   setLocalBridgeAuthorizationCode,
   onConfirmLocalBridgeAuthorization,
+  onPruneLocalBridgeAuthorizations,
+  onRevokeLocalBridgeAuthorization,
   onRunLocalBridgeSelfCheck
 }: {
   busy: BusyMode | null;
   localBridgeAuthorizationCode: string;
+  localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
   localBridgeCheck: string | null;
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   setLocalBridgeAuthorizationCode: (value: string) => void;
   onConfirmLocalBridgeAuthorization: () => void;
+  onPruneLocalBridgeAuthorizations: () => void;
+  onRevokeLocalBridgeAuthorization: (authorization: LocalBridgeAuthorizationDto, scope: LocalBridgePermissionScope) => void;
   onRunLocalBridgeSelfCheck: () => void;
 }) {
   const localBridgeRuntimeLine = localBridgeRuntimeStatusLine(localBridgeStatus);
@@ -2168,6 +2226,39 @@ function IntegrationSettings({
       </SettingsRow>
       <SettingsRow label="权限范围">
         <SettingsValue>读取设备、发送资料包、查看传输、申请导入</SettingsValue>
+      </SettingsRow>
+      <SettingsRow label="已授权">
+        <div className="local-bridge-auth-list">
+          {localBridgeAuthorizations.length > 0 ? (
+            localBridgeAuthorizations.map((authorization) => (
+              <div className="console-row" key={`${authorization.client_id}-${authorization.scopes.join("-")}`}>
+                <span title={`${authorization.display_name} · ${authorization.scopes.join(" · ")}`}>
+                  {authorization.display_name} · {authorization.scopes.map(localBridgeScopeLabel).join(" · ")}
+                </span>
+                <div className="settings-inline-actions">
+                  {authorization.scopes.map((scope) => (
+                    <button
+                      className="text-button"
+                      disabled={busy === "open"}
+                      key={scope}
+                      onClick={() => onRevokeLocalBridgeAuthorization(authorization, scope)}
+                      type="button"
+                    >
+                      撤销
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))
+          ) : (
+            <div className="console-empty">暂无授权</div>
+          )}
+        </div>
+      </SettingsRow>
+      <SettingsRow label="过期授权">
+        <button className="text-button" disabled={busy === "open"} onClick={onPruneLocalBridgeAuthorizations} type="button">
+          清理
+        </button>
       </SettingsRow>
     </SettingsGroup>
   );
@@ -2565,6 +2656,7 @@ function SettingsPanel({
   deviceNameInput,
   discoveryStatus,
   localBridgeAuthorizationCode,
+  localBridgeAuthorizations,
   localBridgeCheck,
   localBridgeStatus,
   receiveDir,
@@ -2578,6 +2670,8 @@ function SettingsPanel({
   onChooseReceiveDir,
   onConfirmLocalBridgeAuthorization,
   onOpenReceiveDir,
+  onPruneLocalBridgeAuthorizations,
+  onRevokeLocalBridgeAuthorization,
   onRunLocalBridgeSelfCheck,
   onSaveDeviceName,
   onSaveReceiveDir,
@@ -2589,6 +2683,7 @@ function SettingsPanel({
   deviceNameInput: string;
   discoveryStatus: DiscoveryStatusDto | null;
   localBridgeAuthorizationCode: string;
+  localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
   localBridgeCheck: string | null;
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   receiveDir: string;
@@ -2602,6 +2697,8 @@ function SettingsPanel({
   onChooseReceiveDir: () => void;
   onConfirmLocalBridgeAuthorization: () => void;
   onOpenReceiveDir: () => void;
+  onPruneLocalBridgeAuthorizations: () => void;
+  onRevokeLocalBridgeAuthorization: (authorization: LocalBridgeAuthorizationDto, scope: LocalBridgePermissionScope) => void;
   onRunLocalBridgeSelfCheck: () => void;
   onSaveDeviceName: () => void;
   onSaveReceiveDir: () => void;
@@ -2717,10 +2814,13 @@ function SettingsPanel({
       <IntegrationSettings
         busy={busy}
         localBridgeAuthorizationCode={localBridgeAuthorizationCode}
+        localBridgeAuthorizations={localBridgeAuthorizations}
         localBridgeCheck={localBridgeCheck}
         localBridgeStatus={localBridgeStatus}
         setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
         onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
+        onPruneLocalBridgeAuthorizations={onPruneLocalBridgeAuthorizations}
+        onRevokeLocalBridgeAuthorization={onRevokeLocalBridgeAuthorization}
         onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
       />
     </section>
@@ -3380,6 +3480,15 @@ function localBridgeRuntimeStatusLine(status: LocalBridgeRuntimeStatusDto | null
       ? ` · 已授权 ${status.authorization_count}`
       : "";
   return `${status.bind_host}:${status.port}${status.request_path}${auth}`;
+}
+
+function localBridgeScopeLabel(scope: LocalBridgePermissionScope) {
+  if (scope === "device.read") return "设备";
+  if (scope === "transfer.status.read") return "传输";
+  if (scope === "bundle.read") return "资料包";
+  if (scope === "bundle.send") return "发送";
+  if (scope === "bundle.import.request") return "导入";
+  return scope;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {

@@ -80,6 +80,16 @@ export interface LocalBridgeAuthorizationDto {
   expires_at_ms: number | null;
 }
 
+export interface LocalBridgeAuthorizationListDto {
+  authorizations: LocalBridgeAuthorizationDto[];
+  pruned_count: number;
+}
+
+export interface LocalBridgeAuthorizationRevokeDto {
+  revoked: boolean;
+  authorizations: LocalBridgeAuthorizationDto[];
+}
+
 export interface LocalBridgeRuntimeStatusDto {
   active: boolean;
   bind_host: string;
