@@ -119,6 +119,7 @@ docs: add release checklist
 - 合并前必须通过 CI
 - 日常 PR 默认 squash merge
 - 合并后的 topic branch 要删除
+- 长期分支同步 PR 不删除 head 分支，尤其是 `develop` 和 `desktop-develop`
 - 不允许 force push 到 `main` 或 `develop`
 - 如果 `develop -> main` 使用 rebase 合并，合并后把 `develop` 同步到 `main` 的发布点
 
