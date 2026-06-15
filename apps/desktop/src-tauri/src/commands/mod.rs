@@ -64,6 +64,12 @@ const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
 const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReceiveTrustContext {
+    Untrusted,
+    AuthenticatedTrusted,
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSnapshot {
     pub device_name: String,
@@ -945,12 +951,12 @@ fn verify_incoming_peer_against_trusted_devices(
     trusted_devices: &[TrustedDeviceRecord],
     identity: &DeviceIdentity,
     signed_binding: &SignedSessionIdentityBinding,
-) -> Result<(), String> {
+) -> Result<ReceiveTrustContext, String> {
     let Some(record) = trusted_devices
         .iter()
         .find(|record| record.device_id == identity.device_id)
     else {
-        return Ok(());
+        return Ok(ReceiveTrustContext::Untrusted);
     };
 
     verify_signed_session_against_trusted_pin(
@@ -959,7 +965,8 @@ fn verify_incoming_peer_against_trusted_devices(
         Some(record.device_id.as_str()),
         Some(record.public_key.as_str()),
         Some(record.public_key_fingerprint.as_str()),
-    )
+    )?;
+    Ok(ReceiveTrustContext::AuthenticatedTrusted)
 }
 
 fn endpoint_and_peer_from_trusted_device(
@@ -1600,6 +1607,9 @@ pub fn start_receive_once(
                 let pending_for_decision = pending_receive_offer.clone();
                 let trusted_for_decision = trusted_devices.clone();
                 let trusted_for_session = trusted_devices.clone();
+                let receive_trust_context = Arc::new(Mutex::new(ReceiveTrustContext::Untrusted));
+                let receive_trust_for_session = receive_trust_context.clone();
+                let receive_trust_for_decision = receive_trust_context.clone();
                 let pending_for_pairing = pending_pairing_request.clone();
                 let status_for_decision = transfer_status.clone();
                 let status_for_progress = transfer_status.clone();
@@ -1627,22 +1637,31 @@ pub fn start_receive_once(
                             let trusted_devices = trusted_for_session
                                 .lock()
                                 .map_err(|error| NekoDropError::Network(error.to_string()))?;
-                            verify_incoming_peer_against_trusted_devices(
+                            let trust_context = verify_incoming_peer_against_trusted_devices(
                                 &trusted_devices,
                                 identity,
                                 signed_binding,
                             )
-                            .map_err(NekoDropError::Network)
+                            .map_err(NekoDropError::Network)?;
+                            if let Ok(mut slot) = receive_trust_for_session.lock() {
+                                *slot = trust_context;
+                            }
+                            Ok(())
                         },
                         move |offer| {
                             let resume_summary =
                                 pending_resume_summary_from_offer(&receive_dir_for_decision, offer);
+                            let trust_context = receive_trust_for_decision
+                                .lock()
+                                .map(|context| *context)
+                                .unwrap_or(ReceiveTrustContext::Untrusted);
                             wait_for_receive_decision(
                                 offer,
                                 &pending_for_decision,
                                 &status_for_decision,
                                 receive_policy,
                                 &trusted_for_decision,
+                                trust_context,
                                 resume_summary,
                             )
                         },
@@ -3316,6 +3335,7 @@ fn wait_for_receive_decision(
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
     receive_policy: ReceivePolicy,
     trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    trust_context: ReceiveTrustContext,
     resume_summary: Option<PendingReceiveResumeSummary>,
 ) -> bool {
     if receive_policy == ReceivePolicy::BlockAll {
@@ -3337,7 +3357,9 @@ fn wait_for_receive_decision(
         return false;
     }
 
-    if legacy_plain_offer_matches_trusted_device(offer, trusted_devices) {
+    if trust_context == ReceiveTrustContext::Untrusted
+        && legacy_plain_offer_matches_trusted_device(offer, trusted_devices)
+    {
         set_transfer_status(
             transfer_status,
             TransferStatusState {
@@ -3356,7 +3378,7 @@ fn wait_for_receive_decision(
         return false;
     }
 
-    if should_auto_accept_receive_offer(offer, receive_policy, trusted_devices) {
+    if should_auto_accept_receive_offer(offer, receive_policy, trusted_devices, trust_context) {
         set_transfer_status(
             transfer_status,
             TransferStatusState {
@@ -3472,11 +3494,26 @@ fn should_auto_accept_receive_offer(
     offer: &TransferOffer,
     receive_policy: ReceivePolicy,
     trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+    trust_context: ReceiveTrustContext,
 ) -> bool {
-    let _ = (offer, receive_policy, trusted_devices);
-    // Auto-accept needs authenticated encrypted sessions. Current trusted records
-    // identify devices but do not prove possession on each incoming connection.
-    false
+    if receive_policy != ReceivePolicy::AutoAcceptTrusted
+        || trust_context != ReceiveTrustContext::AuthenticatedTrusted
+    {
+        return false;
+    }
+
+    let Some(sender_device_id) = offer.sender_device_id.as_deref() else {
+        return false;
+    };
+    let Some(sender_fingerprint) = offer.sender_public_key_fingerprint.as_deref() else {
+        return false;
+    };
+    let Ok(trusted_devices) = trusted_devices.lock() else {
+        return false;
+    };
+    trusted_devices.iter().any(|record| {
+        record.device_id == sender_device_id && record.public_key_fingerprint == sender_fingerprint
+    })
 }
 
 fn wait_for_pairing_decision(
@@ -5406,6 +5443,7 @@ mod tests {
             &status,
             ReceivePolicy::BlockAll,
             &trusted,
+            ReceiveTrustContext::Untrusted,
             None,
         );
 
@@ -5436,10 +5474,68 @@ mod tests {
         offer.sender_device_id = Some("device-a".to_string());
         offer.sender_public_key_fingerprint = Some(public_key.fingerprint);
 
-        let accepted =
-            should_auto_accept_receive_offer(&offer, ReceivePolicy::AutoAcceptTrusted, &trusted);
+        let accepted = should_auto_accept_receive_offer(
+            &offer,
+            ReceivePolicy::AutoAcceptTrusted,
+            &trusted,
+            ReceiveTrustContext::Untrusted,
+        );
 
         assert!(!accepted);
+    }
+
+    #[test]
+    fn receive_policy_auto_accept_trusted_accepts_authenticated_trusted_session() {
+        let public_key = test_public_key("device-a");
+        let trusted = Arc::new(Mutex::new(vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            public_key.public_key.as_str(),
+            public_key.fingerprint.as_str(),
+        )]));
+        let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-a".to_string());
+        offer.sender_public_key_fingerprint = Some(public_key.fingerprint);
+
+        let accepted = should_auto_accept_receive_offer(
+            &offer,
+            ReceivePolicy::AutoAcceptTrusted,
+            &trusted,
+            ReceiveTrustContext::AuthenticatedTrusted,
+        );
+
+        assert!(accepted);
+    }
+
+    #[test]
+    fn authenticated_trusted_receive_policy_auto_accepts_without_pending_prompt() {
+        let public_key = test_public_key("device-a");
+        let pending = Arc::new(Mutex::new(None));
+        let status = Arc::new(Mutex::new(None));
+        let trusted = Arc::new(Mutex::new(vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            public_key.public_key.as_str(),
+            public_key.fingerprint.as_str(),
+        )]));
+        let mut offer = TransferOffer::new("transfer-a", "example.txt", Vec::new());
+        offer.sender_device_id = Some("device-a".to_string());
+        offer.sender_public_key_fingerprint = Some(public_key.fingerprint);
+
+        let accepted = wait_for_receive_decision(
+            &offer,
+            &pending,
+            &status,
+            ReceivePolicy::AutoAcceptTrusted,
+            &trusted,
+            ReceiveTrustContext::AuthenticatedTrusted,
+            None,
+        );
+
+        assert!(accepted);
+        assert!(pending.lock().unwrap().is_none());
+        let status = status.lock().unwrap().clone().unwrap();
+        assert_eq!(status.phase, "auto_accepted");
     }
 
     #[test]
@@ -5463,6 +5559,7 @@ mod tests {
             &status,
             ReceivePolicy::AlwaysAsk,
             &trusted,
+            ReceiveTrustContext::Untrusted,
             None,
         );
 
