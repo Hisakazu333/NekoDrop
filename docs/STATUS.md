@@ -43,7 +43,7 @@
 | 发送端瞬时网络失败自动重试 | 已接入 | 连接拒绝、连接重置、超时等短暂网络错误会自动重试 1 次；用户取消、对方拒绝、校验失败、权限和路径错误不会自动重试。 |
 | TCP partial offset 断点续传基础 | 已接入 | 接收端可以基于 `.nekodrop-part` 生成 resume files，发送端按 offset 只补传剩余 payload，接收端追加后做 SHA-256 校验。 |
 | 接收端 resume 明细 UI | 已接入 | 接收确认卡片会在存在可续传内容时显示可继续文件数、可跳过已完成文件数和已接收字节数。 |
-| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会在 authenticated session 已验签且长期 public key 命中可信设备记录时自动接收，旧明文和未配对签名 session 仍按人工确认处理。 |
+| 接收策略 | 已接入 | `receive_policy=block_all` 时直接拒绝外部传输；`auto_accept_trusted` 只会在 authenticated session 已验签且长期 public key 命中可信设备记录时自动接收。旧明文只能走手动兼容；如果明文请求声明了已配对设备的 device_id，会在弹出确认前拒绝。 |
 | 接收目录持久化 | 已接入 | 选择或启动收件时会写入 `app_config.json`，重启后继续使用。 |
 | 失败/取消历史进度 | 已接入 | 发送失败或取消时，历史记录会保留最后一次真实已传字节数；未传完的发送记录会显示已传和剩余大小，主操作为“继续发送”，普通失败和不可续传取消显示“重试”，当前失败/取消状态、最近记录和历史详情都会保留下一步提示或备用码兜底入口；重试结果会更新同一条历史记录。 |
 | 网络/传输错误提示和地址预检 | 已接入 | 连接阶段有短超时保护；连接拒绝、超时、127.0.0.1、0.0.0.0、169.254.x.x、198.18/198.19、未接入 transport、checksum 等问题会在发送/配对前或失败后转成人能看懂的提示；当前失败状态和历史详情会给一条短的下一步建议。 |
@@ -74,7 +74,7 @@
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
 | Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256、配对和加密 session 能力，不声明未完成的 Agent host。 |
-| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。桌面真实发送/接收路径已交换并验签 `session.identity`，签名不匹配会拒绝 session；如果对方已经在可信设备记录里，authenticated session 还会钉到记录里保存的长期 public key。旧明文路径现在标记为 `legacy_plain`，只能手动确认；明文请求如果带有已配对可信设备身份会直接拒绝，不会自动接受，也不会刷新可信设备状态。 |
+| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。桌面真实发送/接收路径已交换并验签 `session.identity`，签名不匹配会拒绝 session；如果对方已经在可信设备记录里，authenticated session 还会钉到记录里保存的长期 public key。旧明文路径现在标记为 `legacy_plain`，只能手动确认；明文请求只要声明了已配对设备的 device_id 就会拒绝，不会自动接受，也不会刷新可信设备状态。 |
 | Session identity binding 签名模型 | 已接入 | `nekolink-protocol` 已能从 verified handshake 生成 initiator / responder identity binding，并提供稳定 canonical payload hash，把 session_id、设备 ID、fingerprint、session ephemeral key 和 handshake_hash 绑定到签名材料；协议层已有 Ed25519 `SignedSessionIdentityBinding`，桌面 `device_identity.json` schema v2 会持久化本机签名 seed 并迁移旧 schema v1。`session.identity` 会在 `session.ready` 后、encrypted control 前交换，双方验签通过后才继续传输。 |
 | Encrypted file stream | 部分接入 | encrypted session 发送/接收路径已经把文件 payload 切成加密 file frames，frame AAD 绑定 transfer_id、manifest_path、offset 和 plain_size；接收端会按 reader 读取逐帧解密，不再先把单文件 payload 全部解密进内存；旧明文文件流路径仍保留给 plain offer 兼容，但已经从可信设备状态更新和自动接收路径隔离。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |
