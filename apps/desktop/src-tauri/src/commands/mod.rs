@@ -23,7 +23,7 @@ use nekodrop_service::{
     create_transfer_plan as create_service_transfer_plan, create_transfer_plan_with_scan_progress,
     send_pairing_request, send_plan_with_authenticated_session_and_cancel, IncomingSessionReport,
     ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport,
-    TransferSendReport, TransferSourceFile, TransferSourcePlan,
+    TransferSecurityMode, TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, create_manual_bundle_directory,
@@ -242,6 +242,7 @@ pub struct ManualBundleCreateRequestDto {
 pub struct ReceiveReportDto {
     pub transfer_id: String,
     pub root_name: String,
+    pub security_mode: String,
     pub sender_device_id: Option<String>,
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
@@ -2227,6 +2228,7 @@ fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
     ReceiveReportDto {
         transfer_id: report.transfer_id.clone(),
         root_name: report.root_name.clone(),
+        security_mode: transfer_security_mode_label(report.security_mode).to_string(),
         sender_device_id: report.sender_device_id.clone(),
         sender_device_name: report.sender_device_name.clone(),
         sender_public_key_fingerprint: report.sender_public_key_fingerprint.clone(),
@@ -2259,6 +2261,14 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         import_allowed: bundle.import_allowed,
         staging_status: "saved".to_string(),
         can_import_now: false,
+    }
+}
+
+fn transfer_security_mode_label(mode: TransferSecurityMode) -> &'static str {
+    match mode {
+        TransferSecurityMode::LegacyPlain => "legacy_plain",
+        TransferSecurityMode::EncryptedSession => "encrypted_session",
+        TransferSecurityMode::AuthenticatedEncryptedSession => "authenticated_encrypted_session",
     }
 }
 
@@ -3089,6 +3099,10 @@ fn refresh_trusted_device_contact_from_receive_report(
     trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
     report: &TransferReceiveReport,
 ) {
+    if report.security_mode != TransferSecurityMode::AuthenticatedEncryptedSession {
+        return;
+    }
+
     let Some(sender_device_id) = report.sender_device_id.as_deref() else {
         return;
     };
@@ -3915,6 +3929,7 @@ mod tests {
         let report = TransferReceiveReport {
             transfer_id: "transfer-a".to_string(),
             root_name: "drop".to_string(),
+            security_mode: TransferSecurityMode::LegacyPlain,
             sender_device_id: None,
             sender_device_name: None,
             sender_public_key_fingerprint: None,
@@ -3932,6 +3947,7 @@ mod tests {
 
         let dto = receive_report_to_dto(&report);
 
+        assert_eq!(dto.security_mode, "legacy_plain");
         assert_eq!(dto.file_count, 100);
         assert_eq!(dto.files.len(), RECEIVE_FILE_PREVIEW_LIMIT);
         assert_eq!(dto.files[0].manifest_path, "drop/file-000.txt");
@@ -3942,6 +3958,7 @@ mod tests {
         let report = TransferReceiveReport {
             transfer_id: "transfer-a".to_string(),
             root_name: "bundle".to_string(),
+            security_mode: TransferSecurityMode::AuthenticatedEncryptedSession,
             sender_device_id: None,
             sender_device_name: None,
             sender_public_key_fingerprint: None,
@@ -3969,6 +3986,40 @@ mod tests {
         assert_eq!(bundle.total_bytes, 28);
         assert_eq!(bundle.staging_path, "/tmp/bundle_1234567890");
         assert!(bundle.import_allowed);
+    }
+
+    #[test]
+    fn legacy_plain_receive_report_does_not_refresh_trusted_device_contact() {
+        let public_key = test_public_key("device-a");
+        let trusted = Arc::new(Mutex::new(vec![TrustedDeviceRecord {
+            schema_version: 1,
+            device_id: "device-a".to_string(),
+            device_name: "Known Mac".to_string(),
+            platform: "macos".to_string(),
+            host: "192.168.1.20".to_string(),
+            port: 45821,
+            public_key: public_key.public_key,
+            public_key_fingerprint: public_key.fingerprint.clone(),
+            pairing_code: "AAA-BBB".to_string(),
+            paired_at_ms: 1,
+            last_seen_at_ms: 1,
+        }]));
+        let report = TransferReceiveReport {
+            transfer_id: "transfer-a".to_string(),
+            root_name: "drop".to_string(),
+            security_mode: TransferSecurityMode::LegacyPlain,
+            sender_device_id: Some("device-a".to_string()),
+            sender_device_name: Some("Spoofed Name".to_string()),
+            sender_public_key_fingerprint: Some(public_key.fingerprint),
+            bundle: None,
+            files: Vec::new(),
+        };
+
+        refresh_trusted_device_contact_from_receive_report(&trusted, &report);
+
+        let trusted = trusted.lock().unwrap();
+        assert_eq!(trusted[0].device_name, "Known Mac");
+        assert_eq!(trusted[0].last_seen_at_ms, 1);
     }
 
     #[test]
