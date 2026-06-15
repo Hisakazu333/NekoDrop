@@ -19,11 +19,12 @@ use nekodrop_network::{
     TransferProgress,
 };
 use nekodrop_service::{
-    accept_incoming_stream_with_authenticated_control_bundle_staging_and_cancel,
+    accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel,
     create_transfer_plan as create_service_transfer_plan, create_transfer_plan_with_scan_progress,
-    send_pairing_request, send_plan_with_authenticated_session_and_cancel, IncomingSessionReport,
-    ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent, TransferReceiveReport,
-    TransferSecurityMode, TransferSendReport, TransferSourceFile, TransferSourcePlan,
+    send_pairing_request, send_plan_with_authenticated_session_peer_verifier_and_cancel,
+    IncomingSessionReport, ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent,
+    TransferReceiveReport, TransferSecurityMode, TransferSendReport, TransferSourceFile,
+    TransferSourcePlan,
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, create_manual_bundle_directory,
@@ -36,6 +37,7 @@ use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
     BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeAuthorizationRequest,
     LocalBridgeClientIdentity, LocalBridgePermissionScope, LocalBridgeRequest,
+    SignedSessionIdentityBinding,
 };
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, State};
@@ -796,6 +798,8 @@ struct TransferPeer {
     device_id: Option<String>,
     name: Option<String>,
     fingerprint: Option<String>,
+    trusted_public_key: Option<String>,
+    trusted_public_key_fingerprint: Option<String>,
     target_host: Option<String>,
 }
 
@@ -844,18 +848,20 @@ fn trusted_peer_from_nearby_device(
     device: &Device,
     trusted_devices: &[TrustedDeviceRecord],
 ) -> Result<(Endpoint, TransferPeer), String> {
-    let is_trusted = trusted_devices
+    let trusted_record = trusted_devices
         .iter()
-        .any(|record| trusted_record_matches(device, record));
-    if !is_trusted {
+        .find(|record| trusted_record_matches(device, record));
+    let Some(trusted_record) = trusted_record else {
         return Err("这台设备还没有可信配对，请先完成配对再发送文件。".to_string());
-    }
+    };
 
     let endpoint = Endpoint::tcp(device.host.clone(), device.port);
     let peer = TransferPeer {
         device_id: Some(device.id.as_str().to_string()),
         name: Some(device.name.clone()),
         fingerprint: device.public_key_fingerprint.clone(),
+        trusted_public_key: Some(trusted_record.public_key.clone()),
+        trusted_public_key_fingerprint: Some(trusted_record.public_key_fingerprint.clone()),
         target_host: Some(endpoint_label(&endpoint)),
     };
     Ok((endpoint, peer))
@@ -870,6 +876,75 @@ fn reject_self_peer(local_identity: &DeviceIdentity, peer: &TransferPeer) -> Res
         return Err("不能把文件发送给本机，请选择另一台设备。".to_string());
     }
     Ok(())
+}
+
+fn verify_signed_session_against_trusted_pin(
+    identity: &DeviceIdentity,
+    signed_binding: &SignedSessionIdentityBinding,
+    expected_device_id: Option<&str>,
+    expected_public_key: Option<&str>,
+    expected_public_key_fingerprint: Option<&str>,
+) -> Result<(), String> {
+    if let Some(expected_device_id) = expected_device_id {
+        if identity.device_id != expected_device_id {
+            return Err("可信设备身份校验失败：device_id 不匹配".to_string());
+        }
+    }
+    if let Some(expected_fingerprint) = expected_public_key_fingerprint {
+        if identity.public_key_fingerprint != expected_fingerprint {
+            return Err("可信设备身份校验失败：session 指纹不匹配".to_string());
+        }
+        if signed_binding.public_key_fingerprint != expected_fingerprint {
+            return Err("可信设备身份校验失败：签名指纹不匹配".to_string());
+        }
+    }
+    let Some(expected_public_key) = expected_public_key else {
+        return Ok(());
+    };
+    if expected_public_key_fingerprint.is_none() {
+        return Err("可信设备身份校验失败：缺少可信指纹".to_string());
+    }
+    if signed_binding.public_key != expected_public_key {
+        return Err("可信设备身份校验失败：长期公钥不匹配".to_string());
+    }
+    Ok(())
+}
+
+fn verify_peer_matches_transfer_peer(
+    peer: &TransferPeer,
+    identity: &DeviceIdentity,
+    signed_binding: &SignedSessionIdentityBinding,
+) -> Result<(), String> {
+    verify_signed_session_against_trusted_pin(
+        identity,
+        signed_binding,
+        peer.device_id.as_deref(),
+        peer.trusted_public_key.as_deref(),
+        peer.trusted_public_key_fingerprint
+            .as_deref()
+            .or(peer.fingerprint.as_deref()),
+    )
+}
+
+fn verify_incoming_peer_against_trusted_devices(
+    trusted_devices: &[TrustedDeviceRecord],
+    identity: &DeviceIdentity,
+    signed_binding: &SignedSessionIdentityBinding,
+) -> Result<(), String> {
+    let Some(record) = trusted_devices
+        .iter()
+        .find(|record| record.device_id == identity.device_id)
+    else {
+        return Ok(());
+    };
+
+    verify_signed_session_against_trusted_pin(
+        identity,
+        signed_binding,
+        Some(record.device_id.as_str()),
+        Some(record.public_key.as_str()),
+        Some(record.public_key_fingerprint.as_str()),
+    )
 }
 
 fn endpoint_and_peer_from_trusted_device(
@@ -889,6 +964,8 @@ fn endpoint_and_peer_from_trusted_device(
                 device_id: Some(device.device_id.clone()),
                 name: Some(device.device_name.clone()),
                 fingerprint: Some(device.public_key_fingerprint.clone()),
+                trusted_public_key: Some(device.public_key.clone()),
+                trusted_public_key_fingerprint: Some(device.public_key_fingerprint.clone()),
                 target_host: Some(endpoint_label(&endpoint)),
             };
             (endpoint, peer)
@@ -913,6 +990,8 @@ fn endpoint_and_peer_for_history_record(
         device_id: record.peer_device_id.clone(),
         name: record.peer_name.clone(),
         fingerprint: None,
+        trusted_public_key: None,
+        trusted_public_key_fingerprint: None,
         target_host: Some(endpoint_label(&endpoint)),
     };
     Ok((endpoint, peer))
@@ -928,6 +1007,8 @@ fn endpoint_and_peer_from_connection_input(
                 device_id: ticket.device_id.clone(),
                 name: ticket.device_name.clone(),
                 fingerprint: ticket.fingerprint.clone(),
+                trusted_public_key: None,
+                trusted_public_key_fingerprint: None,
                 target_host: Some(endpoint_label(&endpoint)),
             };
             Ok((endpoint, peer))
@@ -939,6 +1020,8 @@ fn endpoint_and_peer_from_connection_input(
                     device_id: None,
                     name: None,
                     fingerprint: None,
+                    trusted_public_key: None,
+                    trusted_public_key_fingerprint: None,
                     target_host: Some(endpoint_label(&endpoint)),
                 };
                 return Ok((endpoint, peer));
@@ -1054,13 +1137,18 @@ fn send_paths_to_endpoint_with_history_id(
             let transfer_status = transfer_status.clone();
             let cancel_for_attempt = cancel_for_send.clone();
             let local_device_identity = local_device_identity.clone();
-            send_plan_with_authenticated_session_and_cancel(
+            let peer_for_verifier = peer.clone();
+            send_plan_with_authenticated_session_peer_verifier_and_cancel(
                 &endpoint,
                 plan.clone(),
                 &sender_identity,
                 move |binding| {
                     local_device_identity
                         .sign_session_identity_binding(binding)
+                        .map_err(NekoDropError::Network)
+                },
+                move |identity, signed_binding| {
+                    verify_peer_matches_transfer_peer(&peer_for_verifier, identity, signed_binding)
                         .map_err(NekoDropError::Network)
                 },
                 move |event| {
@@ -1496,6 +1584,7 @@ pub fn start_receive_once(
                     .unwrap_or(ReceivePolicy::AlwaysAsk);
                 let pending_for_decision = pending_receive_offer.clone();
                 let trusted_for_decision = trusted_devices.clone();
+                let trusted_for_session = trusted_devices.clone();
                 let pending_for_pairing = pending_pairing_request.clone();
                 let status_for_decision = transfer_status.clone();
                 let status_for_progress = transfer_status.clone();
@@ -1509,7 +1598,7 @@ pub fn start_receive_once(
                     *active_cancel = Some(current_receive_cancel.clone());
                 }
                 let result =
-                    accept_incoming_stream_with_authenticated_control_bundle_staging_and_cancel(
+                    accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel(
                         &mut stream,
                         &receive_dir_for_thread,
                         &bundle_staging_root_for_thread,
@@ -1518,6 +1607,17 @@ pub fn start_receive_once(
                             local_for_signing
                                 .sign_session_identity_binding(binding)
                                 .map_err(NekoDropError::Network)
+                        },
+                        move |identity, signed_binding| {
+                            let trusted_devices = trusted_for_session
+                                .lock()
+                                .map_err(|error| NekoDropError::Network(error.to_string()))?;
+                            verify_incoming_peer_against_trusted_devices(
+                                &trusted_devices,
+                                identity,
+                                signed_binding,
+                            )
+                            .map_err(NekoDropError::Network)
                         },
                         move |offer| {
                             let resume_summary =
@@ -3950,12 +4050,165 @@ mod tests {
     }
 
     #[test]
+    fn nearby_device_send_pins_saved_trusted_public_key() {
+        let public_key = test_public_key("device-a");
+        let mut device = nearby_device("device-a", public_key.fingerprint.as_str());
+        device.public_key = Some(public_key.public_key.clone());
+        let trusted = vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            public_key.public_key.as_str(),
+            public_key.fingerprint.as_str(),
+        )];
+
+        let (_endpoint, peer) = trusted_peer_from_nearby_device(&device, &trusted).unwrap();
+
+        assert_eq!(
+            peer.trusted_public_key.as_deref(),
+            Some(public_key.public_key.as_str())
+        );
+        assert_eq!(
+            peer.trusted_public_key_fingerprint.as_deref(),
+            Some(public_key.fingerprint.as_str())
+        );
+    }
+
+    #[test]
+    fn trusted_session_pin_accepts_matching_signed_public_key() {
+        let key = test_identity_signing_key("device-a");
+        let identity = test_identity_with_signing_key("device-a", &key);
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Initiator,
+            "session-trusted-pin",
+            &identity,
+            "x25519:session-key",
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+        )
+        .unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding, &key).unwrap();
+        let trusted = vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            signed.public_key.as_str(),
+            signed.public_key_fingerprint.as_str(),
+        )];
+
+        let result = verify_incoming_peer_against_trusted_devices(&trusted, &identity, &signed);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn trusted_session_pin_rejects_public_key_rotation_for_same_device() {
+        let key = test_identity_signing_key("device-a");
+        let rotated_key = test_identity_signing_key("device-a-rotated");
+        let identity = test_identity_with_signing_key("device-a", &key);
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Initiator,
+            "session-trusted-pin-rotated",
+            &identity,
+            "x25519:session-key",
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        )
+        .unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding, &key).unwrap();
+        let rotated_public_key = rotated_key.public_key();
+        let trusted = vec![trusted_record_with_public_key(
+            "device-a",
+            "MacBook",
+            rotated_public_key.public_key.as_str(),
+            rotated_public_key.fingerprint.as_str(),
+        )];
+
+        let error =
+            verify_incoming_peer_against_trusted_devices(&trusted, &identity, &signed).unwrap_err();
+
+        assert!(error.contains("可信设备身份校验失败"));
+    }
+
+    #[test]
+    fn untrusted_authenticated_session_is_not_pinned_to_trusted_devices() {
+        let key = test_identity_signing_key("device-b");
+        let identity = test_identity_with_signing_key("device-b", &key);
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Initiator,
+            "session-untrusted",
+            &identity,
+            "x25519:session-key",
+            "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+        )
+        .unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding, &key).unwrap();
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+
+        let result = verify_incoming_peer_against_trusted_devices(&trusted, &identity, &signed);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn connection_ticket_peer_rejects_session_fingerprint_mismatch() {
+        let key = test_identity_signing_key("device-a");
+        let identity = test_identity_with_signing_key("device-a", &key);
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Responder,
+            "session-ticket-peer",
+            &identity,
+            "x25519:session-key",
+            "sha256:4444444444444444444444444444444444444444444444444444444444444444",
+        )
+        .unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding, &key).unwrap();
+        let peer = TransferPeer {
+            device_id: Some("device-a".to_string()),
+            name: Some("MacBook".to_string()),
+            fingerprint: Some("sha256:different".to_string()),
+            trusted_public_key: None,
+            trusted_public_key_fingerprint: None,
+            target_host: Some("192.168.1.20:45821".to_string()),
+        };
+
+        let error = verify_peer_matches_transfer_peer(&peer, &identity, &signed).unwrap_err();
+
+        assert!(error.contains("指纹不匹配"));
+    }
+
+    #[test]
+    fn manual_endpoint_peer_without_identity_allows_authenticated_session() {
+        let key = test_identity_signing_key("device-a");
+        let identity = test_identity_with_signing_key("device-a", &key);
+        let binding = nekolink_protocol::SessionIdentityBinding::new(
+            nekolink_protocol::SessionParticipantRole::Responder,
+            "session-manual-peer",
+            &identity,
+            "x25519:session-key",
+            "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        )
+        .unwrap();
+        let signed = SignedSessionIdentityBinding::sign(binding, &key).unwrap();
+        let peer = TransferPeer {
+            device_id: None,
+            name: None,
+            fingerprint: None,
+            trusted_public_key: None,
+            trusted_public_key_fingerprint: None,
+            target_host: Some("192.168.1.20:45821".to_string()),
+        };
+
+        let result = verify_peer_matches_transfer_peer(&peer, &identity, &signed);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
     fn self_peer_is_rejected_by_device_id() {
         let identity = test_identity("device-a");
         let peer = TransferPeer {
             device_id: Some("device-a".to_string()),
             name: Some("This Mac".to_string()),
             fingerprint: Some("sha256:self".to_string()),
+            trusted_public_key: None,
+            trusted_public_key_fingerprint: None,
             target_host: Some("192.168.1.20:45821".to_string()),
         };
 
@@ -3971,6 +4224,8 @@ mod tests {
             device_id: None,
             name: None,
             fingerprint: None,
+            trusted_public_key: None,
+            trusted_public_key_fingerprint: None,
             target_host: Some("192.168.1.30:45821".to_string()),
         };
 
@@ -4918,6 +5173,20 @@ mod tests {
         public_key_fingerprint: &str,
     ) -> TrustedDeviceRecord {
         let public_key = test_public_key(device_id);
+        trusted_record_with_public_key(
+            device_id,
+            device_name,
+            public_key.public_key.as_str(),
+            public_key_fingerprint,
+        )
+    }
+
+    fn trusted_record_with_public_key(
+        device_id: &str,
+        device_name: &str,
+        public_key: &str,
+        public_key_fingerprint: &str,
+    ) -> TrustedDeviceRecord {
         TrustedDeviceRecord {
             schema_version: 1,
             device_id: device_id.to_string(),
@@ -4925,7 +5194,7 @@ mod tests {
             platform: "macos".to_string(),
             host: "192.168.1.20".to_string(),
             port: 45821,
-            public_key: public_key.public_key,
+            public_key: public_key.to_string(),
             public_key_fingerprint: public_key_fingerprint.to_string(),
             pairing_code: "AAA-BBB".to_string(),
             paired_at_ms: 1,
@@ -4965,6 +5234,29 @@ mod tests {
             nekolink_protocol::PlatformKind::Macos,
             "sha256:self",
             [],
+        )
+    }
+
+    fn test_identity_signing_key(device_id: &str) -> nekolink_protocol::DeviceIdentitySigningKey {
+        let mut seed = [0_u8; nekolink_protocol::DEVICE_IDENTITY_SIGNING_KEY_LEN];
+        for (index, byte) in device_id.as_bytes().iter().enumerate() {
+            seed[index % seed.len()] ^= byte.rotate_left((index % 8) as u32);
+        }
+        nekolink_protocol::DeviceIdentitySigningKey::from_seed(seed)
+    }
+
+    fn test_identity_with_signing_key(
+        device_id: &str,
+        signing_key: &nekolink_protocol::DeviceIdentitySigningKey,
+    ) -> DeviceIdentity {
+        let public_key = signing_key.public_key();
+        DeviceIdentity::new(
+            device_id,
+            "This Mac",
+            nekolink_protocol::DeviceKind::Desktop,
+            nekolink_protocol::PlatformKind::Macos,
+            public_key.fingerprint,
+            [nekolink_protocol::Capability::EncryptedSession],
         )
     }
 
