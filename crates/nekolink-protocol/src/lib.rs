@@ -26,6 +26,7 @@ pub const SESSION_PUBLIC_KEY_BASE64_LEN: usize = 43;
 pub const SESSION_AES256GCM_NONCE_LEN: usize = 12;
 pub const SESSION_XCHACHA20POLY1305_NONCE_LEN: usize = 24;
 pub const SESSION_REPLAY_WINDOW_SIZE: u64 = 64;
+pub const SESSION_FILE_FRAME_MAX_PLAINTEXT_LEN: u64 = 64 * 1024;
 pub const BUNDLE_SCHEMA_V1: &str = "nekolink.bundle.v1";
 pub const BUNDLE_CHECKSUM_SHA256: &str = "sha256";
 
@@ -648,6 +649,21 @@ pub struct EncryptedSessionPayload {
     pub ciphertext: Vec<u8>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptedFileFrameHeader {
+    pub transfer_id: String,
+    pub manifest_path: String,
+    pub offset: u64,
+    pub plain_size: u64,
+    pub traffic: SessionTrafficFrameHeader,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EncryptedFileFrame {
+    pub header: EncryptedFileFrameHeader,
+    pub ciphertext: Vec<u8>,
+}
+
 impl EncryptedSessionPayload {
     pub fn seal_control<T: Serialize>(
         session_id: impl Into<String>,
@@ -729,6 +745,122 @@ impl EncryptedSessionPayload {
                 format!("failed to deserialize session control payload: {error}"),
             )
         })
+    }
+}
+
+impl EncryptedFileFrameHeader {
+    pub fn new(
+        transfer_id: impl Into<String>,
+        manifest_path: impl Into<String>,
+        offset: u64,
+        plain_size: u64,
+        traffic: SessionTrafficFrameHeader,
+    ) -> Result<Self, ProtocolError> {
+        let header = Self {
+            transfer_id: transfer_id.into(),
+            manifest_path: manifest_path.into(),
+            offset,
+            plain_size,
+            traffic,
+        };
+        header.validate()?;
+        Ok(header)
+    }
+
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("transfer_id", &self.transfer_id)?;
+        validate_transfer_manifest_path(&self.manifest_path)?;
+        if self.plain_size == 0 {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "encrypted file frame plain_size cannot be zero",
+            ));
+        }
+        if self.plain_size > SESSION_FILE_FRAME_MAX_PLAINTEXT_LEN {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                format!(
+                    "encrypted file frame plain_size exceeds maximum: {} > {}",
+                    self.plain_size, SESSION_FILE_FRAME_MAX_PLAINTEXT_LEN
+                ),
+            ));
+        }
+        if self.traffic.kind != SessionFrameKind::File {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "encrypted file frame requires a file traffic header",
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn associated_data(&self) -> Result<Vec<u8>, ProtocolError> {
+        self.validate()?;
+        let mut data = Vec::new();
+        append_aad_field(&mut data, "transfer_id", &self.transfer_id);
+        append_aad_field(&mut data, "manifest_path", &self.manifest_path);
+        append_aad_field(&mut data, "offset", &self.offset.to_string());
+        append_aad_field(&mut data, "plain_size", &self.plain_size.to_string());
+        append_aad_field(&mut data, "frame_kind", "file");
+        append_aad_field(&mut data, "traffic.cipher", &self.traffic.cipher);
+        append_aad_field(&mut data, "traffic.kind", "file");
+        append_aad_field(
+            &mut data,
+            "traffic.direction",
+            self.traffic.direction.as_str(),
+        );
+        append_aad_field(
+            &mut data,
+            "traffic.counter",
+            &self.traffic.counter.to_string(),
+        );
+        append_aad_field(
+            &mut data,
+            "traffic.nonce",
+            &hex::encode(&self.traffic.nonce),
+        );
+        Ok(data)
+    }
+}
+
+impl EncryptedFileFrame {
+    pub fn seal(
+        keys: &SessionKeyMaterial,
+        header: EncryptedFileFrameHeader,
+        plaintext: &[u8],
+    ) -> Result<Self, ProtocolError> {
+        header.validate()?;
+        if plaintext.len() as u64 != header.plain_size {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                format!(
+                    "encrypted file frame plaintext length mismatch: {} != {}",
+                    plaintext.len(),
+                    header.plain_size
+                ),
+            ));
+        }
+        let associated_data = header.associated_data()?;
+        let ciphertext = keys.seal_send_payload(&header.traffic, &associated_data, plaintext)?;
+        Ok(Self { header, ciphertext })
+    }
+
+    pub fn open(&self, keys: &SessionKeyMaterial) -> Result<Vec<u8>, ProtocolError> {
+        self.header.validate()?;
+        let associated_data = self.header.associated_data()?;
+        let plaintext =
+            keys.open_receive_payload(&self.header.traffic, &associated_data, &self.ciphertext)?;
+        if plaintext.len() as u64 != self.header.plain_size {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                format!(
+                    "encrypted file frame plaintext length mismatch: {} != {}",
+                    plaintext.len(),
+                    self.header.plain_size
+                ),
+            ));
+        }
+        Ok(plaintext)
     }
 }
 
@@ -852,6 +984,15 @@ impl SessionTrafficFrameHeader {
             counter,
             nonce: session_frame_nonce(cipher, counter)?,
         })
+    }
+}
+
+impl SessionFrameDirection {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+            Self::Receive => "receive",
+        }
     }
 }
 
@@ -3787,6 +3928,48 @@ mod tests {
 
         assert_eq!(error.code, ErrorCode::InvalidPayload);
         assert!(error.message.contains("failed to open session payload"));
+    }
+
+    #[test]
+    fn encrypted_file_frame_binds_transfer_path_offset_and_size_to_aad() {
+        let keys = SessionKeyMaterial {
+            send_key: [31_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [31_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let traffic_header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::File,
+            SessionFrameDirection::Send,
+            12,
+        )
+        .unwrap();
+        let frame_header =
+            EncryptedFileFrameHeader::new("transfer-1", "drop/sample.txt", 6, 5, traffic_header)
+                .unwrap();
+        let sealed = EncryptedFileFrame::seal(&keys, frame_header.clone(), b"world").unwrap();
+
+        assert_eq!(sealed.open(&keys).unwrap(), b"world");
+        assert_ne!(sealed.ciphertext, b"world");
+
+        let mut tampered_transfer = sealed.clone();
+        tampered_transfer.header.transfer_id = "transfer-2".to_string();
+        assert!(tampered_transfer.open(&keys).is_err());
+
+        let mut tampered_path = sealed.clone();
+        tampered_path.header.manifest_path = "drop/other.txt".to_string();
+        assert!(tampered_path.open(&keys).is_err());
+
+        let mut tampered_offset = sealed.clone();
+        tampered_offset.header.offset = 7;
+        assert!(tampered_offset.open(&keys).is_err());
+
+        let mut tampered_size = sealed.clone();
+        tampered_size.header.plain_size = 6;
+        assert!(tampered_size.open(&keys).is_err());
+
+        let mut tampered_traffic = sealed.clone();
+        tampered_traffic.header.traffic.direction = SessionFrameDirection::Receive;
+        assert!(tampered_traffic.open(&keys).is_err());
     }
 
     #[test]
