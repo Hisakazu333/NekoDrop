@@ -1427,9 +1427,28 @@ button:disabled {
   font-size: 12px;
 }
 
+.bundle-list {
+  display: grid;
+  gap: 9px;
+}
+
+.bundle-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
 .bundle-line span {
   min-width: 0;
   overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bundle-line small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
   text-overflow: ellipsis;
   white-space: nowrap;
 }

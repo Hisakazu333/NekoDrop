@@ -191,7 +191,7 @@ export interface ReceivedBundleDto {
   total_bytes: number;
   staging_path: string;
   import_allowed: boolean;
-  staging_status: "saved" | "imported" | "deleted" | string;
+  staging_status: "saved" | "imported" | "deleted" | "import_failed" | "expired" | string;
   can_import_now: boolean;
   import_path: string | null;
 }
