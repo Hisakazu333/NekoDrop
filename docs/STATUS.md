@@ -53,10 +53,10 @@
 | mDNS / DNS-SD 发现 | 已接入 | 同局域网自动发现附近设备。 |
 | 发现诊断短提示 | 已接入 | 无设备、未广播、广播异常、发现异常时给出克制的下一步提示；提示会按本机平台聚焦 Windows 专用网络或 macOS 本地网络，并保留备用码作为兜底路径。 |
 | 设备离线过期 | 已接入 | 附近设备不会永久假在线。 |
-| 设备身份 | 已接入 | 每台设备有稳定 device_id 和 fingerprint。 |
-| 可信配对基础 | 已接入 | 配对请求、配对码、接受、拒绝、忘记设备；拒绝、超时、配对码不匹配、设备离线和身份缺失会转成短的下一步提示。 |
-| 可信发送校验 | 已接入 | 后端发送到附近设备前会校验 device_id + fingerprint 已在可信设备中，未配对设备不能绕过 UI 直接收文件。 |
-| 可信设备地址刷新 | 已接入 | 自动发现扫到可信设备时，会用 device_id + fingerprint 更新可信记录里的 host、port 和 last_seen；收到可信设备真实来件或主动发送成功后也会刷新 last_seen；可信设备列表按最近活跃优先恢复，并按 device_id 去重。 |
+| 设备身份 | 已接入 | 每台设备有稳定 device_id、Ed25519 public key 和 fingerprint。 |
+| 可信配对基础 | 已接入 | 配对请求、配对码、接受、拒绝、忘记设备；发现广播和配对请求会带长期 public key，可信记录会保存 public key + fingerprint，并拒绝二者不匹配的记录；拒绝、超时、配对码不匹配、设备离线和身份缺失会转成短的下一步提示。 |
+| 可信发送校验 | 已接入 | 后端发送到附近设备前会校验 device_id + public key + fingerprint 已在可信设备中，未配对设备不能绕过 UI 直接收文件。 |
+| 可信设备地址刷新 | 已接入 | 自动发现扫到可信设备时，会用 device_id + public key + fingerprint 更新可信记录里的 host、port 和 last_seen；收到可信设备真实来件或主动发送成功后也会刷新 last_seen；可信设备列表按最近活跃优先恢复，并按 device_id 去重。 |
 | 备用码复制兜底 | 已接入 | 系统剪贴板写入失败时会尝试 DOM fallback，并给出失败提示。 |
 | 设备管理页 | 已接入 | 展示附近设备和可信设备；附近设备会区分已信任、未配对和暂不可配对，可信设备会显示在线状态或上次地址兜底发送；无附近设备时显示扫描中、未广播或发现异常，不再只显示 `0 附近在线`；选中离线可信设备后，发送页会标明正在使用上次地址。 |
 | 设置页 | 已接入 | 独立入口展示并保存本机设备名，展示 fingerprint、收件状态、监听地址、发现广播运行状态、托盘基础状态、接收目录、默认端口和接收策略；接收目录可选择或手动保存，默认端口可保存并用于下次打开收件，收件开启时锁定目录和端口，接收策略和收件开关来自现有真实能力；本机接入状态收在设置页，并提供内部只读自测，不作为日常主导航入口。 |
@@ -73,7 +73,7 @@
 | Capability | 已接入 | 文件、配对、加密、Agent、状态同步等能力枚举。 |
 | Device identity model | 已接入 | desktop / phone / tablet / OpenHarmony / NAS / Agent 等设备类型。 |
 | Device hello | 已接入 | 用于设备发现和能力说明；桌面端只声明当前已实现的文件传输、SHA-256、配对和加密 session 能力，不声明未完成的 Agent host。 |
-| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。桌面真实发送/接收路径已交换并验签 `session.identity`，签名不匹配会拒绝 session。可信设备记录里的长期 public key 钉住还没接入。 |
+| Encrypted session control | 部分接入 | 桌面 TCP 传输主线已经建立 `session.hello` / `session.ready`，基于 X25519 和 HKDF-SHA256 派生会话 key，并让 `file.offer` / `file.accept` / `file.decline` 走 encrypted `session.control`；接收端会校验 session identity 和实际发送方身份一致，offer / decision 控制消息读取路径已接入 replay window。桌面真实发送/接收路径已交换并验签 `session.identity`，签名不匹配会拒绝 session。可信设备记录已保存长期 public key；下一步是把 authenticated session 验签强制钉到已保存的 trusted public key。 |
 | Session identity binding 签名模型 | 已接入 | `nekolink-protocol` 已能从 verified handshake 生成 initiator / responder identity binding，并提供稳定 canonical payload hash，把 session_id、设备 ID、fingerprint、session ephemeral key 和 handshake_hash 绑定到签名材料；协议层已有 Ed25519 `SignedSessionIdentityBinding`，桌面 `device_identity.json` schema v2 会持久化本机签名 seed 并迁移旧 schema v1。`session.identity` 会在 `session.ready` 后、encrypted control 前交换，双方验签通过后才继续传输。 |
 | Encrypted file stream | 部分接入 | encrypted session 发送/接收路径已经把文件 payload 切成加密 file frames，frame AAD 绑定 transfer_id、manifest_path、offset 和 plain_size；接收端会按 reader 读取逐帧解密，不再先把单文件 payload 全部解密进内存；旧明文文件流路径仍保留给 plain offer 兼容。长期身份密钥认证和 legacy plain 路径策略还没收口。 |
 | Pairing message | 已接入 | request / accept / reject 基础消息。 |

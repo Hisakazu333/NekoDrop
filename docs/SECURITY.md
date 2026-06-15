@@ -51,9 +51,12 @@ Current status:
 - old schema v1 desktop identities are migrated to schema v2 on load
 - connection codes include the receiver's public identity fields
 - this is the foundation for trusted pairing and current desktop identity checks
+- discovery and pairing messages advertise the Ed25519 public key and matching fingerprint
+- trusted device records store the peer public key and reject records where the key and fingerprint do not match
+- old trusted-device records without a stored public key are dropped on load and must be paired again
 - desktop authenticated sessions exchange and verify signed session identity bindings during handshake
 
-The later trusted-pairing stage should exchange and verify these long-term public keys between paired devices.
+The later session-policy stage should pin authenticated session verification to the stored trusted-device public key.
 
 ## Pairing
 
@@ -102,10 +105,10 @@ Current desktop transfers have an encrypted session path:
 
 Remaining work:
 
-- store and pin trusted-device public keys after pairing
+- require authenticated sessions to verify against the stored trusted-device public key where a trusted record exists
 - decide how and when to retire the plain compatibility transfer path
 
-Do not describe a transfer as fully trusted just because it uses authenticated session handshakes. The current path proves ownership of the key advertised in the session. It still needs trusted-device public-key pinning before it can prove the peer is the same device that was paired earlier.
+Do not describe a transfer as fully trusted just because it uses authenticated session handshakes. The current path proves ownership of the key advertised in the session, and trusted records now store the long-term public key. The next step is enforcing that stored key during session verification.
 
 ## File Manifest Safety
 

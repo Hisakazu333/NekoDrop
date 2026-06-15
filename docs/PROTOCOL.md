@@ -49,7 +49,8 @@ Each device advertises:
   "app_version": "0.1.0",
   "host": "192.168.1.24",
   "port": 45821,
-  "public_key_fingerprint": "base64url"
+  "public_key": "base64url-ed25519-public-key",
+  "public_key_fingerprint": "sha256:hex"
 }
 ```
 
@@ -349,6 +350,7 @@ Sent by the device requesting trust.
   "device_id": "sender-device-id",
   "device_name": "Hisakazu MacBook",
   "platform": "macos",
+  "public_key": "base64url-ed25519-public-key",
   "public_key_fingerprint": "sha256:hex",
   "pairing_code": "A1B-2C3",
   "listen_port": 45821
@@ -377,7 +379,7 @@ Sent after user confirmation.
 }
 ```
 
-When accepted, both sides persist `trusted_devices.json`. The current pairing establishes device trust state, but it is not yet an encrypted session.
+When accepted, both sides persist `trusted_devices.json` with the peer device ID, Ed25519 public key, public-key fingerprint, endpoint, and pairing code. The current pairing establishes device trust state; the encrypted transfer session is established separately by `session.hello` / `session.ready` / `session.identity`.
 
 ## Bundle messages
 

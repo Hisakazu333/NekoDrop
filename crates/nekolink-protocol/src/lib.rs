@@ -192,6 +192,7 @@ pub struct PairingRequestPayload {
     pub device_id: String,
     pub device_name: String,
     pub platform: String,
+    pub public_key: String,
     pub public_key_fingerprint: String,
     pub pairing_code: String,
     pub listen_port: u16,
@@ -221,6 +222,13 @@ impl PairingRequestPayload {
             return Err(ProtocolError::new(
                 ErrorCode::InvalidPayload,
                 "public_key_fingerprint cannot be empty",
+            ));
+        }
+        let public_key = DeviceIdentityPublicKey::from_encoded(&self.public_key)?;
+        if self.public_key_fingerprint != public_key.fingerprint {
+            return Err(ProtocolError::new(
+                ErrorCode::InvalidPayload,
+                "public_key_fingerprint must match public_key",
             ));
         }
         if self.pairing_code.trim().is_empty() {
@@ -3125,6 +3133,32 @@ mod tests {
 
         let hello = DeviceHello::new(identity, "NekoDrop", "0.1.0");
         hello.validate().unwrap();
+    }
+
+    #[test]
+    fn pairing_request_requires_public_key_matching_fingerprint() {
+        let signing_key = DeviceIdentitySigningKey::from_seed([17_u8; 32]);
+        let public_key = signing_key.public_key();
+        let request = PairingRequestPayload {
+            request_id: "pairing-1".to_string(),
+            device_id: "neko-device-local".to_string(),
+            device_name: "Local Mac".to_string(),
+            platform: "macos".to_string(),
+            public_key: public_key.public_key.clone(),
+            public_key_fingerprint: public_key.fingerprint.clone(),
+            pairing_code: "ABC-123".to_string(),
+            listen_port: 45821,
+        };
+
+        request.validate().unwrap();
+
+        let mut tampered = request;
+        tampered.public_key_fingerprint = format!("sha256:{}", "0".repeat(64));
+        let error = tampered.validate().unwrap_err();
+
+        assert!(error
+            .message
+            .contains("public_key_fingerprint must match public_key"));
     }
 
     #[test]
