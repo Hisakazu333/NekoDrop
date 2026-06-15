@@ -1240,10 +1240,13 @@ fn send_paths_to_endpoint_with_history_id(
         },
     );
     let transfer_status = state.transfer_status.clone();
+    let local_bridge_runtime = state.local_bridge_runtime.clone();
     let cancel_for_send = cancel.clone();
     let report = send_with_auto_retry(
         || {
             let transfer_status = transfer_status.clone();
+            let runtime_for_progress = local_bridge_runtime.clone();
+            let transfer_id_for_progress = transfer_id.clone();
             let cancel_for_attempt = cancel_for_send.clone();
             let local_device_identity = local_device_identity.clone();
             let peer_for_verifier = peer.clone();
@@ -1262,7 +1265,12 @@ fn send_paths_to_endpoint_with_history_id(
                 },
                 move |event| {
                     if let Some(status) = status_from_progress_event("send", None, event) {
-                        set_transfer_status(&transfer_status, status);
+                        set_transfer_status_and_push_bridge_event(
+                            &transfer_status,
+                            &runtime_for_progress,
+                            &transfer_id_for_progress,
+                            status,
+                        );
                     }
                 },
                 || cancel_for_attempt.load(Ordering::SeqCst),
@@ -1303,8 +1311,10 @@ fn send_paths_to_endpoint_with_history_id(
         let (file_index, current_file, bytes_transferred, _) =
             current_transfer_progress(&state.transfer_status);
         clear_active_send_cancel(&state.active_send_cancel, &cancel);
-        set_transfer_status(
+        set_transfer_status_and_push_bridge_event(
             &state.transfer_status,
+            &state.local_bridge_runtime,
+            &transfer_id,
             TransferStatusState {
                 direction: "send".to_string(),
                 phase: status_phase.to_string(),
@@ -1341,8 +1351,10 @@ fn send_paths_to_endpoint_with_history_id(
     })?;
     clear_active_send_cancel(&state.active_send_cancel, &cancel);
     let transferred_bytes = report.plan.total_bytes();
-    set_transfer_status(
+    set_transfer_status_and_push_bridge_event(
         &state.transfer_status,
+        &state.local_bridge_runtime,
+        &transfer_id,
         TransferStatusState {
             direction: "send".to_string(),
             phase: "completed".to_string(),
@@ -1636,6 +1648,7 @@ pub fn start_receive_once(
     let trusted_devices = state.trusted_devices.clone();
     let transfer_history = state.transfer_history.clone();
     let active_receive_cancel = state.active_receive_cancel.clone();
+    let local_bridge_runtime = state.local_bridge_runtime.clone();
     let local_device_identity = state.device_identity.clone();
     let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
@@ -1700,6 +1713,7 @@ pub fn start_receive_once(
                 let pending_for_pairing = pending_pairing_request.clone();
                 let status_for_decision = transfer_status.clone();
                 let status_for_progress = transfer_status.clone();
+                let runtime_for_progress = local_bridge_runtime.clone();
                 let receive_dir_for_decision = receive_dir_for_thread.clone();
                 let trusted_for_pairing = trusted_devices.clone();
                 let local_for_pairing = local_identity.clone();
@@ -1764,7 +1778,17 @@ pub fn start_receive_once(
                         move |event| {
                             if let Some(status) = status_from_progress_event("receive", None, event)
                             {
-                                set_transfer_status(&status_for_progress, status);
+                                let transfer_id_for_event = status
+                                    .root_name
+                                    .as_deref()
+                                    .unwrap_or("receive")
+                                    .to_string();
+                                set_transfer_status_and_push_bridge_event(
+                                    &status_for_progress,
+                                    &runtime_for_progress,
+                                    &transfer_id_for_event,
+                                    status,
+                                );
                             }
                         },
                         || {
@@ -1817,8 +1841,10 @@ pub fn start_receive_once(
                         IncomingSessionReport::Transfer(report) => {
                             let total_bytes =
                                 report.files.iter().map(|file| file.bytes_written).sum();
-                            set_transfer_status(
+                            set_transfer_status_and_push_bridge_event(
                                 &transfer_status,
+                                &local_bridge_runtime,
+                                &report.transfer_id,
                                 TransferStatusState {
                                     direction: "receive".to_string(),
                                     phase: "completed".to_string(),
@@ -1859,6 +1885,13 @@ pub fn start_receive_once(
                                 &report,
                             );
                             let _ = push_transfer_history_record(&transfer_history, record);
+                            if let Some(bundle) = report.bundle.as_ref() {
+                                let _ = push_local_bridge_bundle_received_event(
+                                    &local_bridge_runtime,
+                                    &report.transfer_id,
+                                    bundle,
+                                );
+                            }
                             if let Ok(mut last_report) = last_receive_report.lock() {
                                 *last_report = Some(report);
                             }
@@ -2872,6 +2905,81 @@ fn push_local_bridge_runtime_event(
         events.drain(0..excess);
     }
     Ok(())
+}
+
+fn push_local_bridge_transfer_status_event(
+    runtime: &LocalBridgeRuntimeState,
+    transfer_id: &str,
+    status: &TransferStatusState,
+) -> Result<(), String> {
+    let Some(phase) = local_bridge_transfer_phase_from_status(&status.phase) else {
+        return Ok(());
+    };
+    push_local_bridge_runtime_event(
+        runtime,
+        LocalBridgeEvent::TransferUpdated(nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+            event_id: format!(
+                "transfer:{transfer_id}:{}:{}",
+                status.phase, status.updated_at_ms
+            ),
+            transfer_id: transfer_id.to_string(),
+            phase,
+            bytes_transferred: status.bytes_transferred.min(status.total_bytes),
+            total_bytes: status.total_bytes,
+        }),
+    )
+}
+
+fn push_local_bridge_bundle_received_event(
+    runtime: &LocalBridgeRuntimeState,
+    transfer_id: &str,
+    bundle: &ReceivedBundleReport,
+) -> Result<(), String> {
+    push_local_bridge_runtime_event(
+        runtime,
+        LocalBridgeEvent::BundleReceived(nekolink_protocol::LocalBridgeBundleReceivedEvent {
+            event_id: format!("bundle:{transfer_id}:{}", bundle.bundle_id),
+            transfer_id: transfer_id.to_string(),
+            bundle_id: bundle.bundle_id.clone(),
+            bundle_type: bundle.bundle_type,
+            display_name: bundle.display_name.clone(),
+            source_app: bundle.source_app.clone(),
+            file_count: bundle.file_count,
+            total_bytes: bundle.total_bytes,
+            import_allowed: bundle.import_allowed,
+        }),
+    )
+}
+
+fn set_transfer_status_and_push_bridge_event(
+    transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
+    runtime: &LocalBridgeRuntimeState,
+    transfer_id: &str,
+    status: TransferStatusState,
+) {
+    set_transfer_status(transfer_status, status.clone());
+    let _ = push_local_bridge_transfer_status_event(runtime, transfer_id, &status);
+}
+
+fn local_bridge_transfer_phase_from_status(
+    phase: &str,
+) -> Option<nekolink_protocol::LocalBridgeTransferPhase> {
+    match phase {
+        "queued" | "connecting" | "awaiting_approval" | "accepted" | "auto_accepted" => {
+            Some(nekolink_protocol::LocalBridgeTransferPhase::Queued)
+        }
+        "sending" | "transferring" | "retrying" => {
+            Some(nekolink_protocol::LocalBridgeTransferPhase::Sending)
+        }
+        "receiving" => Some(nekolink_protocol::LocalBridgeTransferPhase::Receiving),
+        "verifying" => Some(nekolink_protocol::LocalBridgeTransferPhase::Receiving),
+        "completed" => Some(nekolink_protocol::LocalBridgeTransferPhase::Completed),
+        "failed" | "blocked" | "expired" | "declined" => {
+            Some(nekolink_protocol::LocalBridgeTransferPhase::Failed)
+        }
+        "cancelled" | "closed" => Some(nekolink_protocol::LocalBridgeTransferPhase::Cancelled),
+        _ => None,
+    }
 }
 
 fn local_bridge_events_after(
@@ -6032,6 +6140,146 @@ mod tests {
         assert_eq!(response.status, "pending_auth");
         assert_eq!(response.security_state, "requires_user_confirmation");
         assert!(response.events.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_transfer_status_producer_pushes_transfer_updated_event() {
+        let runtime = LocalBridgeRuntimeState::default();
+        let status = TransferStatusState {
+            direction: "send".to_string(),
+            phase: "completed".to_string(),
+            root_name: Some("drop".to_string()),
+            file_count: 2,
+            file_index: 2,
+            current_file: None,
+            bytes_transferred: 200,
+            total_bytes: 200,
+            message: "发送完成".to_string(),
+            updated_at_ms: 42,
+        };
+
+        push_local_bridge_transfer_status_event(&runtime, "transfer-1", &status).unwrap();
+
+        let events = runtime.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            nekolink_protocol::LocalBridgeEvent::TransferUpdated(event) => {
+                assert_eq!(event.event_id, "transfer:transfer-1:completed:42");
+                assert_eq!(event.transfer_id, "transfer-1");
+                assert_eq!(
+                    event.phase,
+                    nekolink_protocol::LocalBridgeTransferPhase::Completed
+                );
+                assert_eq!(event.bytes_transferred, 200);
+                assert_eq!(event.total_bytes, 200);
+            }
+            other => panic!("expected transfer.updated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_bridge_bundle_report_producer_pushes_bundle_received_event() {
+        let runtime = LocalBridgeRuntimeState::default();
+        let bundle = ReceivedBundleReport {
+            bundle_id: "bundle_1234567890".to_string(),
+            bundle_type: BundleType::Skill,
+            display_name: "voice_transcribe".to_string(),
+            source_app: "Generic Agent App".to_string(),
+            file_count: 2,
+            total_bytes: 28,
+            staging_path: std::path::PathBuf::from("/tmp/staged/bundle_1234567890"),
+            import_allowed: true,
+        };
+
+        push_local_bridge_bundle_received_event(&runtime, "transfer-1", &bundle).unwrap();
+
+        let events = runtime.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            nekolink_protocol::LocalBridgeEvent::BundleReceived(event) => {
+                assert_eq!(event.event_id, "bundle:transfer-1:bundle_1234567890");
+                assert_eq!(event.transfer_id, "transfer-1");
+                assert_eq!(event.bundle_id, "bundle_1234567890");
+                assert_eq!(event.bundle_type, BundleType::Skill);
+                assert!(event.import_allowed);
+            }
+            other => panic!("expected bundle.received, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn local_bridge_event_poll_reads_events_from_producers() {
+        let dir = unique_bundle_temp_dir("local-bridge-produced-events-poll");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[
+                    LocalBridgePermissionScope::BundleRead,
+                    LocalBridgePermissionScope::TransferStatusRead,
+                ],
+                1_000,
+                5_000,
+            ));
+        let status = TransferStatusState {
+            direction: "receive".to_string(),
+            phase: "completed".to_string(),
+            root_name: Some("drop".to_string()),
+            file_count: 2,
+            file_index: 2,
+            current_file: None,
+            bytes_transferred: 28,
+            total_bytes: 28,
+            message: "接收完成".to_string(),
+            updated_at_ms: 42,
+        };
+        let bundle = ReceivedBundleReport {
+            bundle_id: "bundle_1234567890".to_string(),
+            bundle_type: BundleType::Skill,
+            display_name: "voice_transcribe".to_string(),
+            source_app: "Generic Agent App".to_string(),
+            file_count: 2,
+            total_bytes: 28,
+            staging_path: std::path::PathBuf::from("/tmp/staged/bundle_1234567890"),
+            import_allowed: true,
+        };
+        push_local_bridge_transfer_status_event(&runtime, "transfer-1", &status).unwrap();
+        push_local_bridge_bundle_received_event(&runtime, "transfer-1", &bundle).unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-produced",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 2);
+        assert_eq!(response.events[0]["kind"], "transfer.updated");
+        assert_eq!(response.events[1]["kind"], "bundle.received");
 
         fs::remove_dir_all(dir).unwrap();
     }
