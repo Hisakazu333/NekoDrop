@@ -248,7 +248,14 @@ handshake_hash
 
 `SignedSessionIdentityBinding` uses Ed25519. The signed payload is the binding's canonical SHA-256 hash, not ad-hoc JSON serialization. The public key and signature are base64url without padding, and the public key fingerprint is derived from the Ed25519 public key bytes.
 
-Current status: the protocol model and desktop local signing key persistence exist. Desktop session handshake exchange and peer verification are the next step.
+Desktop authenticated sessions exchange a `session.identity` frame after `session.ready` and before encrypted `session.control` traffic:
+
+```text
+initiator -> responder: session.identity signed initiator binding
+responder -> initiator: session.identity signed responder binding
+```
+
+Each side verifies that the signed binding matches the verified handshake, the peer device identity, and the advertised public-key fingerprint. Trusted-device public-key pinning is tracked separately; until that lands, this proves the peer owns the key advertised in the handshake, but does not yet prove it is the same key recorded during pairing.
 
 ### Session Traffic Frames
 

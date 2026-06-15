@@ -125,6 +125,8 @@ pub enum MessageKind {
     SessionHello,
     #[serde(rename = "session.ready")]
     SessionReady,
+    #[serde(rename = "session.identity")]
+    SessionIdentity,
     #[serde(rename = "session.control")]
     SessionControl,
     #[serde(rename = "pairing.request")]
@@ -164,6 +166,7 @@ impl MessageKind {
             Self::DeviceHeartbeat => "device.heartbeat",
             Self::SessionHello => "session.hello",
             Self::SessionReady => "session.ready",
+            Self::SessionIdentity => "session.identity",
             Self::SessionControl => "session.control",
             Self::PairingRequest => "pairing.request",
             Self::PairingAccept => "pairing.accept",

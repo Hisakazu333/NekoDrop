@@ -51,7 +51,7 @@ Current status:
 - old schema v1 desktop identities are migrated to schema v2 on load
 - connection codes include the receiver's public identity fields
 - this is the foundation for trusted pairing and current desktop identity checks
-- protocol-level signed session identity bindings exist, but the desktop session handshake does not exchange or verify them yet
+- desktop authenticated sessions exchange and verify signed session identity bindings during handshake
 
 The later trusted-pairing stage should exchange and verify these long-term public keys between paired devices.
 
@@ -97,15 +97,15 @@ Current desktop transfers have an encrypted session path:
 - encrypted file frames protect file payloads on the encrypted session path
 - file-frame AAD binds transfer id, manifest path, offset, plain size, cipher, direction, counter, and nonce
 - encrypted receive reads decrypt frames on demand instead of buffering a whole file payload
-- protocol-level Ed25519 signed session identity bindings exist
-- desktop identities can sign a session identity binding with the persisted local signing key
+- desktop sessions exchange Ed25519 signed identity bindings after `session.ready`
+- each side verifies the peer owns the public key advertised by the session identity
 
 Remaining work:
 
-- exchange and verify signed session identity bindings in the desktop session handshake
+- store and pin trusted-device public keys after pairing
 - decide how and when to retire the plain compatibility transfer path
 
-Do not describe a transfer as fully authenticated just because it uses the current encrypted session path. It has confidentiality and integrity for encrypted frames, plus replay protection for encrypted control readers, but long-term device-key authentication is not complete.
+Do not describe a transfer as fully trusted just because it uses authenticated session handshakes. The current path proves ownership of the key advertised in the session. It still needs trusted-device public-key pinning before it can prove the peer is the same device that was paired earlier.
 
 ## File Manifest Safety
 
