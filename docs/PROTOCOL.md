@@ -130,6 +130,7 @@ device.hello
 device.heartbeat
 session.hello
 session.ready
+session.identity
 session.control
 pairing.request
 pairing.accept
@@ -147,7 +148,7 @@ companion.state
 state.sync
 ```
 
-NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `session.hello`, `session.ready`, and `session.control`. Desktop file transfer sends `file.offer`, `file.accept`, and `file.decline` inside encrypted `session.control` envelopes. On the encrypted session path, file payloads are sent as encrypted file frames. The older plain file-frame path remains for compatibility.
+NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `session.hello`, `session.ready`, `session.identity`, and `session.control`. Desktop file transfer sends `file.offer`, `file.accept`, and `file.decline` inside encrypted `session.control` envelopes. On the encrypted session path, file payloads are sent as encrypted file frames. The older plain file-frame path remains only as a manual compatibility path.
 
 ### DEVICE_HELLO
 
@@ -257,6 +258,19 @@ responder -> initiator: session.identity signed responder binding
 ```
 
 Each side verifies that the signed binding matches the verified handshake, the peer device identity, and the advertised public-key fingerprint. Trusted-device public-key pinning is tracked separately; until that lands, this proves the peer owns the key advertised in the handshake, but does not yet prove it is the same key recorded during pairing.
+
+### Legacy Plain Policy
+
+The plain `file.offer` / file-frame path is kept for old clients and manual connection-code compatibility only. Desktop receivers mark this path as `legacy_plain`.
+
+`legacy_plain` transfers:
+
+- require explicit user approval
+- are never auto-accepted as trusted-device transfers
+- do not refresh trusted-device `last_seen` or device name
+- are not valid for silent bundle import or local bridge automation
+
+Trusted-device flows should use authenticated encrypted sessions.
 
 ### Session Traffic Frames
 

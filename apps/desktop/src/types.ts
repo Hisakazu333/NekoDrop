@@ -205,6 +205,7 @@ export interface ManualBundleCreateDto {
 export interface ReceiveReportDto {
   transfer_id: string;
   root_name: string;
+  security_mode: "legacy_plain" | "encrypted_session" | "authenticated_encrypted_session";
   sender_device_id: string | null;
   sender_device_name: string | null;
   sender_public_key_fingerprint: string | null;

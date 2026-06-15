@@ -45,11 +45,19 @@ pub struct TransferSendReport {
 pub struct TransferReceiveReport {
     pub transfer_id: String,
     pub root_name: String,
+    pub security_mode: TransferSecurityMode,
     pub sender_device_id: Option<String>,
     pub sender_device_name: Option<String>,
     pub sender_public_key_fingerprint: Option<String>,
     pub files: Vec<ReceivedFile>,
     pub bundle: Option<ReceivedBundleReport>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransferSecurityMode {
+    LegacyPlain,
+    EncryptedSession,
+    AuthenticatedEncryptedSession,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -534,6 +542,7 @@ where
                 receive_dir,
                 None,
                 offer,
+                TransferSecurityMode::EncryptedSession,
                 session,
                 decide,
                 on_progress,
@@ -579,6 +588,7 @@ where
                 receive_dir,
                 Some(bundle_staging_root),
                 offer,
+                TransferSecurityMode::EncryptedSession,
                 session,
                 decide,
                 on_progress,
@@ -631,6 +641,7 @@ where
                 receive_dir,
                 Some(bundle_staging_root),
                 offer,
+                TransferSecurityMode::AuthenticatedEncryptedSession,
                 session,
                 decide,
                 on_progress,
@@ -775,6 +786,7 @@ fn accept_transfer_offer_stream_with_encrypted_decision_and_cancel<D, P, C>(
     receive_dir: &Path,
     bundle_staging_root: Option<&Path>,
     offer: TransferOffer,
+    security_mode: TransferSecurityMode,
     mut session: ActiveSessionControl,
     decide: D,
     on_progress: P,
@@ -792,6 +804,7 @@ where
         receive_dir,
         bundle_staging_root,
         offer,
+        security_mode,
         &keys,
         decide,
         on_progress,
@@ -947,6 +960,7 @@ where
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
         root_name: offer.root_name,
+        security_mode: TransferSecurityMode::LegacyPlain,
         sender_device_id: offer.sender_device_id,
         sender_device_name: offer.sender_device_name,
         sender_public_key_fingerprint: offer.sender_public_key_fingerprint,
@@ -960,6 +974,7 @@ fn accept_encrypted_transfer_offer_stream_with_decision_writer_and_cancel<D, P, 
     receive_dir: &Path,
     bundle_staging_root: Option<&Path>,
     offer: TransferOffer,
+    security_mode: TransferSecurityMode,
     keys: &SessionKeyMaterial,
     decide: D,
     on_progress: P,
@@ -1096,6 +1111,7 @@ where
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
         root_name: offer.root_name,
+        security_mode,
         sender_device_id: offer.sender_device_id,
         sender_device_name: offer.sender_device_name,
         sender_public_key_fingerprint: offer.sender_public_key_fingerprint,
@@ -1559,6 +1575,10 @@ mod tests {
 
         assert_eq!(send_report.plan.file_count(), 2);
         assert_eq!(send_report.sent_files.len(), 2);
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::LegacyPlain
+        );
         assert_eq!(receive_report.files.len(), 2);
         assert_eq!(receive_report.bundle, None);
         assert!(receive_report.files.iter().all(|file| file.verified));
@@ -1647,6 +1667,10 @@ mod tests {
         };
 
         assert_eq!(send_report.sent_files.len(), 1);
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::EncryptedSession
+        );
         assert_eq!(receive_report.files.len(), 1);
         assert_eq!(
             fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
@@ -1901,6 +1925,10 @@ mod tests {
         };
 
         assert_eq!(send_report.sent_files.len(), 1);
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::AuthenticatedEncryptedSession
+        );
         assert_eq!(receive_report.files.len(), 1);
         assert_eq!(
             fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
