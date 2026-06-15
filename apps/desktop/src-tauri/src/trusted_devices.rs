@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{Device, DevicePlatform};
-use nekolink_protocol::DeviceIdentity;
+use nekolink_protocol::{DeviceIdentity, DeviceIdentityPublicKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
@@ -20,6 +20,7 @@ pub struct TrustedDeviceRecord {
     pub platform: String,
     pub host: String,
     pub port: u16,
+    pub public_key: String,
     pub public_key_fingerprint: String,
     pub pairing_code: String,
     pub paired_at_ms: u128,
@@ -37,9 +38,7 @@ pub fn load_trusted_devices() -> Result<Vec<TrustedDeviceRecord>, String> {
     let records = serde_json::from_str::<Vec<TrustedDeviceRecord>>(&content)
         .map_err(|error| format!("可信设备文件格式无效 {}: {error}", path.display()))?;
     let mut records = records;
-    for record in &records {
-        validate_trusted_device(record)?;
-    }
+    retain_usable_trusted_devices(&mut records);
     normalize_trusted_devices(&mut records);
     Ok(records)
 }
@@ -63,6 +62,10 @@ pub fn trust_device_record(
     let Some(public_key_fingerprint) = device.public_key_fingerprint.clone() else {
         return Err("这个设备缺少公开指纹，当前不能加入可信设备。".to_string());
     };
+    let Some(public_key) = device.public_key.clone() else {
+        return Err("这个设备缺少长期公钥，当前不能加入可信设备。".to_string());
+    };
+    validate_public_key_pair(&public_key, &public_key_fingerprint)?;
     let now = now_ms();
     Ok(TrustedDeviceRecord {
         schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
@@ -71,6 +74,7 @@ pub fn trust_device_record(
         platform: platform_to_string(device.platform).to_string(),
         host: device.host.clone(),
         port: device.port,
+        public_key,
         pairing_code: pairing_code_for_values(
             &local_identity.device_id,
             &local_identity.public_key_fingerprint,
@@ -100,10 +104,12 @@ pub fn trusted_device_record_from_remote(
     platform: String,
     host: String,
     port: u16,
+    public_key: String,
     public_key_fingerprint: String,
-) -> TrustedDeviceRecord {
+) -> Result<TrustedDeviceRecord, String> {
+    validate_public_key_pair(&public_key, &public_key_fingerprint)?;
     let now = now_ms();
-    TrustedDeviceRecord {
+    Ok(TrustedDeviceRecord {
         schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
         pairing_code: pairing_code_for_values(
             &local_identity.device_id,
@@ -116,10 +122,11 @@ pub fn trusted_device_record_from_remote(
         platform,
         host,
         port,
+        public_key,
         public_key_fingerprint,
         paired_at_ms: now,
         last_seen_at_ms: now,
-    }
+    })
 }
 
 pub fn upsert_trusted_device(
@@ -140,14 +147,14 @@ pub fn upsert_trusted_device(
 pub fn refresh_trusted_device_contact(
     records: &mut Vec<TrustedDeviceRecord>,
     device_id: &str,
+    public_key: &str,
     public_key_fingerprint: &str,
     device_name: Option<&str>,
     seen_at_ms: u128,
 ) -> bool {
-    let Some(record) = records
-        .iter_mut()
-        .find(|record| trusted_record_matches_identity(device_id, public_key_fingerprint, record))
-    else {
+    let Some(record) = records.iter_mut().find(|record| {
+        trusted_record_matches_identity(device_id, public_key, public_key_fingerprint, record)
+    }) else {
         return false;
     };
 
@@ -176,6 +183,10 @@ fn normalize_trusted_devices(records: &mut Vec<TrustedDeviceRecord>) {
     records.retain(|record| seen_device_ids.insert(record.device_id.clone()));
 }
 
+fn retain_usable_trusted_devices(records: &mut Vec<TrustedDeviceRecord>) {
+    records.retain(|record| validate_trusted_device(record).is_ok());
+}
+
 fn sort_trusted_devices(records: &mut [TrustedDeviceRecord]) {
     records.sort_by(|left, right| {
         right
@@ -189,19 +200,23 @@ fn sort_trusted_devices(records: &mut [TrustedDeviceRecord]) {
 
 pub fn trusted_record_matches(device: &Device, record: &TrustedDeviceRecord) -> bool {
     device
-        .public_key_fingerprint
+        .public_key
         .as_ref()
-        .is_some_and(|fingerprint| {
-            trusted_record_matches_identity(device.id.as_str(), fingerprint, record)
+        .zip(device.public_key_fingerprint.as_ref())
+        .is_some_and(|(public_key, fingerprint)| {
+            trusted_record_matches_identity(device.id.as_str(), public_key, fingerprint, record)
         })
 }
 
 pub fn trusted_record_matches_identity(
     device_id: &str,
+    public_key: &str,
     public_key_fingerprint: &str,
     record: &TrustedDeviceRecord,
 ) -> bool {
-    record.device_id == device_id && record.public_key_fingerprint == public_key_fingerprint
+    record.device_id == device_id
+        && record.public_key == public_key
+        && record.public_key_fingerprint == public_key_fingerprint
 }
 
 fn validate_trusted_device(record: &TrustedDeviceRecord) -> Result<(), String> {
@@ -211,11 +226,21 @@ fn validate_trusted_device(record: &TrustedDeviceRecord) -> Result<(), String> {
     if record.device_id.trim().is_empty() {
         return Err("可信设备缺少 device_id".to_string());
     }
-    if record.public_key_fingerprint.trim().is_empty() {
-        return Err("可信设备缺少 public_key_fingerprint".to_string());
+    if record.public_key.trim().is_empty() {
+        return Err("可信设备缺少 public_key".to_string());
     }
+    validate_public_key_pair(&record.public_key, &record.public_key_fingerprint)?;
     if record.pairing_code.trim().is_empty() {
         return Err("可信设备缺少 pairing_code".to_string());
+    }
+    Ok(())
+}
+
+fn validate_public_key_pair(public_key: &str, fingerprint: &str) -> Result<(), String> {
+    let public_key = DeviceIdentityPublicKey::from_encoded(public_key)
+        .map_err(|error| format!("{:?}: {}", error.code, error.message))?;
+    if public_key.fingerprint != fingerprint {
+        return Err("可信设备 public_key_fingerprint 与 public_key 不匹配".to_string());
     }
     Ok(())
 }
@@ -295,15 +320,16 @@ mod tests {
             trusted_record("device-a", "New Mac", 300),
             trusted_record("device-b", "Windows", 200),
         ];
-        records[0].public_key_fingerprint = "sha256:old".to_string();
-        records[1].public_key_fingerprint = "sha256:new".to_string();
 
         normalize_trusted_devices(&mut records);
 
         assert_eq!(records.len(), 2);
         assert_eq!(records[0].device_id, "device-a");
         assert_eq!(records[0].device_name, "New Mac");
-        assert_eq!(records[0].public_key_fingerprint, "sha256:new");
+        assert_eq!(
+            records[0].public_key_fingerprint,
+            test_public_key("device-a").fingerprint
+        );
         assert_eq!(records[1].device_id, "device-b");
     }
 
@@ -317,7 +343,8 @@ mod tests {
         let changed = refresh_trusted_device_contact(
             &mut records,
             "device-a",
-            "sha256:device-a",
+            &test_public_key("device-a").public_key,
+            &test_public_key("device-a").fingerprint,
             Some("New Name"),
             300,
         );
@@ -330,7 +357,8 @@ mod tests {
         let rejected = refresh_trusted_device_contact(
             &mut records,
             "device-a",
-            "sha256:wrong",
+            &test_public_key("device-a").public_key,
+            &test_public_key("device-b").fingerprint,
             Some("Wrong"),
             400,
         );
@@ -340,23 +368,74 @@ mod tests {
         assert_eq!(records[0].last_seen_at_ms, 300);
     }
 
+    #[test]
+    fn trusted_records_require_public_key_and_match_it() {
+        let mut device = Device::new(
+            nekodrop_core::DeviceId::new("device-a").unwrap(),
+            "MacBook",
+            DevicePlatform::MacOS,
+            "192.168.1.20",
+            45821,
+        )
+        .unwrap();
+        let device_key = test_public_key("device-a");
+        let other_key = test_public_key("device-b");
+        device.public_key_fingerprint = Some(device_key.fingerprint.clone());
+        device.public_key = Some(device_key.public_key.clone());
+        let record = trusted_record("device-a", "MacBook", 100);
+
+        assert!(trusted_record_matches(&device, &record));
+
+        device.public_key = Some(other_key.public_key);
+
+        assert!(!trusted_record_matches(&device, &record));
+
+        let mut legacy = record;
+        legacy.public_key.clear();
+        assert!(validate_trusted_device(&legacy).is_err());
+    }
+
+    #[test]
+    fn drops_unusable_legacy_records_before_normalizing() {
+        let mut records = vec![
+            trusted_record("device-a", "MacBook", 100),
+            trusted_record("device-b", "Old Windows", 200),
+        ];
+        records[1].public_key.clear();
+
+        retain_usable_trusted_devices(&mut records);
+
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].device_id, "device-a");
+    }
+
     fn trusted_record(
         device_id: impl Into<String>,
         device_name: impl Into<String>,
         last_seen_at_ms: u128,
     ) -> TrustedDeviceRecord {
         let device_id = device_id.into();
+        let public_key = test_public_key(&device_id);
         TrustedDeviceRecord {
             schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
             device_name: device_name.into(),
             platform: "macos".to_string(),
             host: "192.168.1.20".to_string(),
             port: 45821,
-            public_key_fingerprint: format!("sha256:{device_id}"),
+            public_key: public_key.public_key,
+            public_key_fingerprint: public_key.fingerprint,
             pairing_code: "ABC-123".to_string(),
             paired_at_ms: 1,
             last_seen_at_ms,
             device_id,
         }
+    }
+
+    fn test_public_key(label: &str) -> DeviceIdentityPublicKey {
+        let mut seed = [0_u8; nekolink_protocol::DEVICE_IDENTITY_SIGNING_KEY_LEN];
+        for (index, byte) in label.as_bytes().iter().enumerate() {
+            seed[index % seed.len()] ^= *byte;
+        }
+        nekolink_protocol::DeviceIdentitySigningKey::from_seed(seed).public_key()
     }
 }

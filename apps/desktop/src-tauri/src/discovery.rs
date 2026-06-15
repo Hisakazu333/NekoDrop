@@ -131,6 +131,18 @@ fn spawn_service_advertiser(
             }
 
             let identity = device_identity.public_identity();
+            let Ok(public_key) = device_identity.public_key() else {
+                update_discovery_status(&discovery_status, |status| {
+                    status.advertised = false;
+                    status.port = None;
+                    status.message = "本机身份公钥不可用，无法广播".to_string();
+                    status.last_error = Some(
+                        "请重启应用或删除损坏的 device_identity.json 后重新生成身份。".to_string(),
+                    );
+                });
+                thread::sleep(REGISTER_INTERVAL);
+                continue;
+            };
             let Some(host_ip) = primary_lan_ip() else {
                 if let Some(fullname) = last_fullname.take() {
                     let _ = daemon.unregister(&fullname);
@@ -160,6 +172,7 @@ fn spawn_service_advertiser(
                 ("device_id", identity.device_id.as_str()),
                 ("device_name", identity.device_name.as_str()),
                 ("platform", identity.platform.as_str()),
+                ("public_key", public_key.as_str()),
                 ("fingerprint", identity.public_key_fingerprint.as_str()),
             ];
             let Ok(info) = ServiceInfo::new(
@@ -238,6 +251,7 @@ fn add_or_update_device(
         return false;
     };
     device.public_key_fingerprint = info.get_property_val_str("fingerprint").map(str::to_string);
+    device.public_key = info.get_property_val_str("public_key").map(str::to_string);
     device.trust_state = DeviceTrustState::Untrusted;
 
     refresh_trusted_device_endpoint(trusted_devices, &device);

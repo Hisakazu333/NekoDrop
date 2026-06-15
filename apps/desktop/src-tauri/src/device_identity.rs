@@ -47,6 +47,14 @@ impl LocalDeviceIdentity {
             .clone()
     }
 
+    pub fn public_key(&self) -> Result<String, String> {
+        let signing_key = {
+            let persisted = self.persisted.lock().map_err(|error| error.to_string())?;
+            signing_key_from_seed_hex(&persisted.signing_seed_hex)?
+        };
+        Ok(signing_key.public_key().public_key)
+    }
+
     pub fn set_device_name(&self, device_name: &str) -> Result<String, String> {
         let device_name = normalize_device_name(device_name)?;
         let mut persisted = self.persisted.lock().map_err(|error| error.to_string())?;
