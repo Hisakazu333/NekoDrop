@@ -61,6 +61,7 @@ import type {
   DesktopRealtimeSnapshotDto,
   DeviceDto,
   DiscoveryStatusDto,
+  LocalBridgeAuthorizationDto,
   LocalBridgeResponseDto,
   ManualBundleCreateDto,
   PendingPairingRequestDto,
@@ -161,6 +162,7 @@ export function App() {
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
+  const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
   const [mode, setMode] = useState<ComposerMode>("overview");
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
@@ -907,6 +909,28 @@ export function App() {
     }
   }
 
+  async function confirmLocalBridgeAuthorization() {
+    const authorizationCode = localBridgeAuthorizationCode.trim();
+    if (!authorizationCode) {
+      setLocalBridgeCheck("请输入授权码");
+      return;
+    }
+    setBusy("open");
+    setError(null);
+    try {
+      const authorization = await invokeCommand<LocalBridgeAuthorizationDto>("confirm_local_bridge_authorization", {
+        authorizationCode
+      });
+      setLocalBridgeAuthorizationCode("");
+      setLocalBridgeCheck(`已授权 ${authorization.display_name} · ${authorization.scopes.join(" · ")}`);
+    } catch (nextError) {
+      setLocalBridgeCheck("授权失败");
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function chooseManualBundleSourceDir() {
     setBusy("pick-folders");
     setError(null);
@@ -1530,15 +1554,18 @@ export function App() {
                   busy={busy}
                   deviceNameInput={deviceNameInput}
                   discoveryStatus={discoveryStatus}
+                  localBridgeAuthorizationCode={localBridgeAuthorizationCode}
                   localBridgeCheck={localBridgeCheck}
                   receiveDir={receiveDir}
                   receivePolicy={receivePolicy}
                   receiveSession={receiveSession}
                   setBindPort={setBindPort}
                   setDeviceNameInput={setDeviceNameInput}
+                  setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
                   setReceiveDir={setReceiveDir}
                   snapshot={snapshot}
                   onChooseReceiveDir={chooseReceiveDir}
+                  onConfirmLocalBridgeAuthorization={confirmLocalBridgeAuthorization}
                   onOpenReceiveDir={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
                   onRunLocalBridgeSelfCheck={runLocalBridgeSelfCheck}
                   onSaveReceiveDir={saveReceiveDir}
@@ -2080,11 +2107,17 @@ function ManualBundleComposer({
 
 function IntegrationSettings({
   busy,
+  localBridgeAuthorizationCode,
   localBridgeCheck,
+  setLocalBridgeAuthorizationCode,
+  onConfirmLocalBridgeAuthorization,
   onRunLocalBridgeSelfCheck
 }: {
   busy: BusyMode | null;
+  localBridgeAuthorizationCode: string;
   localBridgeCheck: string | null;
+  setLocalBridgeAuthorizationCode: (value: string) => void;
+  onConfirmLocalBridgeAuthorization: () => void;
   onRunLocalBridgeSelfCheck: () => void;
 }) {
   return (
@@ -2099,7 +2132,22 @@ function IntegrationSettings({
         </button>
       </SettingsRow>
       <SettingsRow label="授权请求">
-        <SettingsValue>暂无待处理</SettingsValue>
+        <div className="settings-inline-field">
+          <input
+            aria-label="本机接入授权码"
+            placeholder="授权码"
+            value={localBridgeAuthorizationCode}
+            onChange={(event) => setLocalBridgeAuthorizationCode(event.target.value)}
+          />
+          <button
+            className="tool-button"
+            disabled={busy === "open" || localBridgeAuthorizationCode.trim().length === 0}
+            onClick={onConfirmLocalBridgeAuthorization}
+            type="button"
+          >
+            确认
+          </button>
+        </div>
       </SettingsRow>
       <SettingsRow label="权限范围">
         <SettingsValue>读取设备、发送资料包、查看传输、申请导入</SettingsValue>
@@ -2499,15 +2547,18 @@ function SettingsPanel({
   busy,
   deviceNameInput,
   discoveryStatus,
+  localBridgeAuthorizationCode,
   localBridgeCheck,
   receiveDir,
   receivePolicy,
   receiveSession,
   setBindPort,
   setDeviceNameInput,
+  setLocalBridgeAuthorizationCode,
   setReceiveDir,
   snapshot,
   onChooseReceiveDir,
+  onConfirmLocalBridgeAuthorization,
   onOpenReceiveDir,
   onRunLocalBridgeSelfCheck,
   onSaveDeviceName,
@@ -2519,15 +2570,18 @@ function SettingsPanel({
   busy: BusyMode | null;
   deviceNameInput: string;
   discoveryStatus: DiscoveryStatusDto | null;
+  localBridgeAuthorizationCode: string;
   localBridgeCheck: string | null;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
   receiveSession: ReceiveSessionDto | null;
   setBindPort: (value: string) => void;
   setDeviceNameInput: (value: string) => void;
+  setLocalBridgeAuthorizationCode: (value: string) => void;
   setReceiveDir: (value: string) => void;
   snapshot: AppSnapshot | null;
   onChooseReceiveDir: () => void;
+  onConfirmLocalBridgeAuthorization: () => void;
   onOpenReceiveDir: () => void;
   onRunLocalBridgeSelfCheck: () => void;
   onSaveDeviceName: () => void;
@@ -2643,7 +2697,10 @@ function SettingsPanel({
 
       <IntegrationSettings
         busy={busy}
+        localBridgeAuthorizationCode={localBridgeAuthorizationCode}
         localBridgeCheck={localBridgeCheck}
+        setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
+        onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
         onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
       />
     </section>

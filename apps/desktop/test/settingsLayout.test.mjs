@@ -58,6 +58,8 @@ test("local integration settings expose a generic read-only bridge self check", 
   assert.match(appSource, /const \[localBridgeCheck, setLocalBridgeCheck\]/);
   assert.match(appSource, /function runLocalBridgeSelfCheck/);
   assert.match(appSource, /invokeCommand<LocalBridgeResponseDto>\("handle_local_bridge_request"/);
+  assert.match(appSource, /invokeCommand<LocalBridgeAuthorizationDto>\("confirm_local_bridge_authorization"/);
+  assert.match(appSource, /localBridgeAuthorizationCode/);
   assert.match(appSource, /"kind": "devices.list"/);
   assert.match(appSource, /<IntegrationSettings[\s\S]+localBridgeCheck=\{localBridgeCheck\}/);
   assert.match(appSource, /onRunLocalBridgeSelfCheck=\{runLocalBridgeSelfCheck\}/);

@@ -59,7 +59,8 @@ pub fn run() {
             commands::prune_staged_bundles,
             commands::delete_staged_bundle,
             commands::import_staged_bundle,
-            commands::handle_local_bridge_request
+            commands::handle_local_bridge_request,
+            commands::confirm_local_bridge_authorization
         ])
         .setup(|app| {
             tray::setup_tray(app)?;

@@ -60,7 +60,7 @@
 | 可信设备地址刷新 | 已接入 | 自动发现扫到可信设备时，会用 device_id + public key + fingerprint 更新可信记录里的 host、port 和 last_seen；收到可信设备真实来件或主动发送成功后也会刷新 last_seen；可信设备列表按最近活跃优先恢复，并按 device_id 去重。 |
 | 备用码复制兜底 | 已接入 | 系统剪贴板写入失败时会尝试 DOM fallback，并给出失败提示。 |
 | 设备管理页 | 已接入 | 展示附近设备和可信设备；附近设备会区分已信任、未配对和暂不可配对，可信设备会显示在线状态或上次地址兜底发送；无附近设备时显示扫描中、未广播或发现异常，不再只显示 `0 附近在线`；选中离线可信设备后，发送页会标明正在使用上次地址。 |
-| 设置页 | 已接入 | 独立入口展示并保存本机设备名，展示 fingerprint、收件状态、监听地址、发现广播运行状态、托盘基础状态、接收目录、默认端口和接收策略；接收目录可选择或手动保存，默认端口可保存并用于下次打开收件，收件开启时锁定目录和端口，接收策略和收件开关来自现有真实能力；本机接入状态收在设置页，并提供内部只读自测，不作为日常主导航入口。 |
+| 设置页 | 已接入 | 独立入口展示并保存本机设备名，展示 fingerprint、收件状态、监听地址、发现广播运行状态、托盘基础状态、接收目录、默认端口和接收策略；接收目录可选择或手动保存，默认端口可保存并用于下次打开收件，收件开启时锁定目录和端口，接收策略和收件开关来自现有真实能力；本机接入状态收在设置页，并提供内部只读自测和授权码确认，不作为日常主导航入口。 |
 | 桌面状态刷新 | 已接入 | 实时收件、待确认、配对、传输和发现状态通过一个桌面 snapshot 刷新；设备列表、可信设备和传输历史改为按页面需要慢刷新并避免重叠轮询；相同状态不会重复写入 React state，降低 macOS 和 Windows 启动后持续卡顿。 |
 | macOS DMG | 已接入 | `scripts/package-desktop.sh --dmg`。 |
 | Windows NSIS / MSI | 已接入 | `scripts/package-windows.ps1`。 |
@@ -84,7 +84,7 @@
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
 | NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录；桌面端会清理过期暂存，删除和导入失败状态会留在收件流程里。上层应用自动导出 session / skill / workspace、local bridge 真实发送和导入执行还没有接入。 |
-| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测。授权申请响应会带回 scope、reason、ttl 和短授权码；内部授权记录可以让已授权 client 通过发送/导入门控，但真实 send/import runtime 仍未接。localhost server、授权持久化和外部应用接入还没有接入。 |
+| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入和查询传输状态；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测。授权申请响应会带回 scope、reason、ttl 和短授权码；用户确认授权码后，进程内 runtime 会记录该 client 的临时权限，并让已授权 client 通过发送/导入门控，但真实 send/import runtime 仍未接。localhost server、授权持久化和外部应用接入还没有接入。 |
 
 ## 当前不能宣传为已完成
 
@@ -95,7 +95,7 @@
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - 上层应用自动导出和直接写入 NekoLink bundle
-- 本机 local bridge runtime
+- 本机 local bridge localhost server
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储
