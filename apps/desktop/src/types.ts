@@ -71,6 +71,15 @@ export interface LocalBridgeResponseDto {
   transfer_status: TransferStatusDto | null;
 }
 
+export interface LocalBridgeAuthorizationDto {
+  client_id: string;
+  display_name: string;
+  app_kind: string | null;
+  scopes: LocalBridgePermissionScope[];
+  granted_at_ms: number;
+  expires_at_ms: number | null;
+}
+
 export interface DiscoveryStatusDto {
   phase: string;
   message: string;
