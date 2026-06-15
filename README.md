@@ -217,6 +217,8 @@ docs/                   状态、协议、安全、路线图和测试记录
 scripts/                打包和审计脚本
 ```
 
+Adapter 边界写在 [docs/ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md)。bundle 样例在 [docs/bundle-samples](docs/bundle-samples/)。
+
 ## 后续路线
 
 短期优先级：

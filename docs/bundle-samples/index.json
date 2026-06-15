@@ -1,0 +1,30 @@
+{
+  "schema": "nekolink.bundle.samples.v1",
+  "samples": [
+    {
+      "path": "skill-basic",
+      "bundle_type": "skill",
+      "description": "A small skill bundle with a manifest and one source file."
+    },
+    {
+      "path": "session-summary",
+      "bundle_type": "session",
+      "description": "A redacted session export that avoids secrets and provider tokens."
+    },
+    {
+      "path": "workspace-fragment",
+      "bundle_type": "workspace",
+      "description": "A small workspace fragment with one document."
+    },
+    {
+      "path": "agent-profile",
+      "bundle_type": "agent_profile",
+      "description": "A portable agent profile without credentials."
+    },
+    {
+      "path": "config-snapshot",
+      "bundle_type": "config_snapshot",
+      "description": "A redacted app configuration snapshot."
+    }
+  ]
+}

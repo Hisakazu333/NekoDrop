@@ -1,0 +1,35 @@
+{
+  "schema": "nekolink.bundle.v1",
+  "bundle_id": "sample_skill_basic",
+  "bundle_type": "skill",
+  "display_name": "summarize_selection",
+  "source_app": "Generic Agent App",
+  "created_at": "2026-06-16T00:00:00Z",
+  "sender": {
+    "device_id": "neko-device-sample",
+    "device_name": "Sample Device",
+    "fingerprint": "sha256:sample"
+  },
+  "compatibility": {
+    "min_nekolink_version": 1,
+    "required_capabilities": ["bundle_transfer"]
+  },
+  "summary": {
+    "file_count": 2,
+    "total_bytes": 247
+  },
+  "files": [
+    {
+      "path": "files/skill.json",
+      "size": 144,
+      "sha256": "d04cf9206d24121735ae00b440b87a3758f92ac1a522230da525584357920ddc",
+      "role": "manifest"
+    },
+    {
+      "path": "files/main.ts",
+      "size": 103,
+      "sha256": "4e48e526ce529c1299efad1c8259a500f47e508fc702dace1d7e5ad256aaf237",
+      "role": "payload"
+    }
+  ]
+}

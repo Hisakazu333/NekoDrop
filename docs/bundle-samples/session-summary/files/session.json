@@ -1,0 +1,15 @@
+{
+  "session_id": "sample-session",
+  "title": "Planning notes",
+  "messages": [
+    {
+      "role": "user",
+      "text": "Collect the open tasks."
+    },
+    {
+      "role": "assistant",
+      "text": "Three tasks remain."
+    }
+  ],
+  "redacted": true
+}

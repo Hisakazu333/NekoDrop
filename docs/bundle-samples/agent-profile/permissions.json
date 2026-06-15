@@ -1,0 +1,13 @@
+{
+  "requested_scopes": ["agent_profile.import"],
+  "writes": [
+    {
+      "target": "agent.profiles",
+      "mode": "manual_import"
+    }
+  ],
+  "secrets": {
+    "contains_secrets": false,
+    "redacted_fields": []
+  }
+}

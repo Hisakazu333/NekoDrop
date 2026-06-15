@@ -1,0 +1,7 @@
+{
+  "algorithm": "sha256",
+  "files": {
+    "files/skill.json": "d04cf9206d24121735ae00b440b87a3758f92ac1a522230da525584357920ddc",
+    "files/main.ts": "4e48e526ce529c1299efad1c8259a500f47e508fc702dace1d7e5ad256aaf237"
+  }
+}
