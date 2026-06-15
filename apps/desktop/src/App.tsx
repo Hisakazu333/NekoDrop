@@ -26,6 +26,15 @@ import {
   type TransferSecurityViewModel
 } from "./securityState";
 import {
+  bundleStatusLabel,
+  bundleTypeLabel,
+  markBundleDeleted,
+  markBundleImportFailed,
+  receiveBundleImportHint,
+  receiveBundleStatusLabel,
+  receiveBundleSummaryLine
+} from "./bundleState";
+import {
   shouldRunDiagnosticsRefresh,
   REALTIME_REFRESH_INTERVAL_MS,
   shouldRefreshDirectoryOnModeActivation,
@@ -141,6 +150,7 @@ export function App() {
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
   const [transfers, setTransfers] = useState<TransferDto[]>([]);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDeviceDto[]>([]);
+  const [stagedBundles, setStagedBundles] = useState<ReceivedBundleDto[]>([]);
   const [manualBundleType, setManualBundleType] = useState("workspace");
   const [manualBundleSourcePath, setManualBundleSourcePath] = useState("");
   const [manualBundleDisplayName, setManualBundleDisplayName] = useState("");
@@ -408,14 +418,17 @@ export function App() {
     if (directoryRefreshInFlight.current) return;
     directoryRefreshInFlight.current = true;
     try {
-      const [devices, trusted, nextTransfers] = await Promise.all([
+      await invokeCommand<string[]>("prune_staged_bundles");
+      const [devices, trusted, nextTransfers, nextStagedBundles] = await Promise.all([
         invokeCommand<DeviceDto[]>("list_nearby_devices"),
         invokeCommand<TrustedDeviceDto[]>("list_trusted_devices"),
-        invokeCommand<TransferDto[]>("list_transfers")
+        invokeCommand<TransferDto[]>("list_transfers"),
+        invokeCommand<ReceivedBundleDto[]>("list_staged_bundles")
       ]);
       setNearbyDevices((current) => keepIfEqual(current, devices));
       setTrustedDevices((current) => keepIfEqual(current, trusted));
       setTransfers((current) => keepIfEqual(current, nextTransfers));
+      setStagedBundles((current) => keepIfEqual(current, nextStagedBundles));
       lastDirectoryRefreshAt.current = Date.now();
     } finally {
       directoryRefreshInFlight.current = false;
@@ -822,11 +835,12 @@ export function App() {
       await invokeCommand<boolean>("delete_staged_bundle", {
         bundleId: bundle.bundle_id
       });
+      setStagedBundles((current) => current.filter((item) => item.bundle_id !== bundle.bundle_id));
       setReceiveReport((current) => {
         if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
-        return { ...current, bundle: null };
+        return { ...current, bundle: markBundleDeleted(current.bundle) };
       });
-      setToast("已删除暂存 bundle");
+      setToast("已删除暂存资料包");
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -841,12 +855,22 @@ export function App() {
       const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", {
         bundleId: bundle.bundle_id
       });
+      setStagedBundles((current) =>
+        current.map((item) => item.bundle_id === imported.bundle_id ? imported : item)
+      );
       setReceiveReport((current) => {
         if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
         return { ...current, bundle: imported };
       });
       setToast(`已导入：${imported.display_name}`);
     } catch (nextError) {
+      setStagedBundles((current) =>
+        current.map((item) => item.bundle_id === bundle.bundle_id ? markBundleImportFailed(item) : item)
+      );
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: markBundleImportFailed(current.bundle) };
+      });
       setError(errorMessage(nextError));
     } finally {
       setBusy(null);
@@ -1406,6 +1430,7 @@ export function App() {
                   receiveSession={receiveSession}
                   receiveState={receiveState}
                   selectedTransferId={selectedTransferId}
+                  stagedBundles={stagedBundles}
                   transferMetrics={transferMetrics}
                   transferStatus={transferStatus}
                   transfers={transfers}
@@ -1434,6 +1459,7 @@ export function App() {
                   pendingPairingRequest={pendingPairingRequest}
                   receiveReport={receiveReport}
                   receiveSession={receiveSession}
+                  stagedBundles={stagedBundles}
                   setBindPort={setBindPort}
                   setReceiveDir={setReceiveDir}
                   onChooseReceiveDir={chooseReceiveDir}
@@ -1830,6 +1856,7 @@ function OverviewPanel({
   receiveSession,
   receiveState,
   selectedTransferId,
+  stagedBundles,
   transferMetrics,
   transferStatus,
   transfers,
@@ -1853,6 +1880,7 @@ function OverviewPanel({
   receiveSession: ReceiveSessionDto | null;
   receiveState: string;
   selectedTransferId: string | null;
+  stagedBundles: ReceivedBundleDto[];
   transferMetrics: TransferMetrics;
   transferStatus: TransferStatusDto | null;
   transfers: TransferDto[];
@@ -1867,6 +1895,7 @@ function OverviewPanel({
   onUseFallbackCode: () => void;
 }) {
   const latestBundle = receiveReport?.bundle ?? null;
+  const pendingBundleCount = stagedBundles.filter((bundle) => bundle.can_import_now).length;
   const activeTransfer = transferStatus && shouldShowActiveTransferBar(transferStatus);
   const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
 
@@ -1891,7 +1920,7 @@ function OverviewPanel({
           <span>可信设备</span>
         </button>
         <button className="overview-status-item" type="button" onClick={() => onSelectMode("receive")}>
-          <strong>{latestBundle ? "1" : "0"}</strong>
+          <strong>{pendingBundleCount > 0 ? pendingBundleCount : latestBundle ? "1" : "0"}</strong>
           <span>待处理资料包</span>
         </button>
       </div>
@@ -2167,6 +2196,7 @@ function ReceivePanel({
   pendingPairingRequest,
   receiveReport,
   receiveSession,
+  stagedBundles,
   setBindPort,
   setReceiveDir,
   onChooseReceiveDir,
@@ -2189,6 +2219,7 @@ function ReceivePanel({
   pendingPairingRequest: PendingPairingRequestDto | null;
   receiveReport: ReceiveReportDto | null;
   receiveSession: ReceiveSessionDto | null;
+  stagedBundles: ReceivedBundleDto[];
   setBindPort: (value: string) => void;
   setReceiveDir: (value: string) => void;
   onChooseReceiveDir: () => void;
@@ -2223,6 +2254,7 @@ function ReceivePanel({
     : null;
   const receiveSecuritySummary = receiveReport ? receiveSecuritySummaryLine(receiveReport) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
+  const visibleStagedBundles = stagedBundles.filter((bundle) => bundle.staging_status !== "imported");
 
   return (
     <section className="receive-page">
@@ -2368,6 +2400,45 @@ function ReceivePanel({
           </div>
         </div>
       </section>
+
+      {visibleStagedBundles.length > 0 ? (
+        <section className="receive-section">
+          <h2 className="receive-section-title">暂存区</h2>
+          <div className="bundle-list">
+            {visibleStagedBundles.map((bundle) => (
+              <div className="bundle-line" key={bundle.bundle_id}>
+                <div className="bundle-copy">
+                  <span>
+                    {bundle.display_name} · {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {formatBytes(bundle.total_bytes)}
+                  </span>
+                  <small>{receiveBundleImportHint(bundle)}</small>
+                </div>
+                <div className="bundle-actions">
+                  <strong>{bundleStatusLabel(bundle)}</strong>
+                  {bundle.can_import_now ? (
+                    <button
+                      className="primary-button"
+                      disabled={busy === "bundle-import"}
+                      onClick={() => onImportStagedBundle(bundle)}
+                      type="button"
+                    >
+                      导入
+                    </button>
+                  ) : null}
+                  <button
+                    className="text-button"
+                    disabled={busy === "receive"}
+                    onClick={() => onDeleteStagedBundle(bundle)}
+                    type="button"
+                  >
+                    删除
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       {receiveReport ? (
         <section className="receive-section">
@@ -3212,46 +3283,6 @@ function lastPathSegment(path: string) {
   const normalized = path.trim().replace(/\\/g, "/").replace(/\/+$/, "");
   if (!normalized) return "资料包";
   return normalized.split("/").pop() || "资料包";
-}
-
-function receiveBundleSummaryLine(report: ReceiveReportDto) {
-  const bundle = report.bundle;
-  if (!bundle) return null;
-  return `${bundle.display_name} · ${bundleTypeLabel(bundle.bundle_type)} · ${bundle.source_app} · ${formatBytes(bundle.total_bytes)}`;
-}
-
-function receiveBundleStatusLabel(report: ReceiveReportDto) {
-  const bundle = report.bundle;
-  if (!bundle) return null;
-  if (bundle.staging_status === "imported") return "已导入";
-  if (bundle.can_import_now) return "可导入";
-  return bundle.import_allowed ? "等待导入" : "仅保存";
-}
-
-function receiveBundleImportHint(bundle: ReceivedBundleDto) {
-  if (bundle.staging_status === "imported") {
-    return bundle.import_path ? `已导入到 ${bundle.import_path}` : "已导入";
-  }
-  if (bundle.can_import_now) return "可导入，导入前仍需要确认";
-  if (bundle.import_allowed) return "已暂存，等待本机应用申请导入";
-  return "已暂存，但缺少导入权限或包含敏感内容";
-}
-
-function bundleTypeLabel(type: string) {
-  switch (type) {
-    case "skill":
-      return "Skill";
-    case "session":
-      return "Session";
-    case "workspace":
-      return "Workspace";
-    case "agent_profile":
-      return "Agent profile";
-    case "config_snapshot":
-      return "Config";
-    default:
-      return type;
-  }
 }
 
 function localBridgeStatusLabel(status: string) {
