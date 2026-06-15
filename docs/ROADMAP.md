@@ -43,7 +43,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 仍未完成：
 
-- 长期身份密钥认证
+- 长期身份密钥、签名和桌面主线校验
 - legacy plain file stream 的迁移或拒绝策略
 - iroh runtime
 - relay server
@@ -66,6 +66,22 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - 给 encrypted file frame 增加更完整的乱序、截断和重放测试。
 - 明确 legacy plain file stream 的兼容策略和迁移策略。
 - checksum 继续作为落盘后的完整性校验。
+
+## 下一阶段：Session Identity Binding
+
+目标：把 encrypted session 从“ephemeral 会话加密”推进到“可绑定长期设备身份”的路径。
+
+已经接入：
+
+- `nekolink-protocol` 可以从 verified handshake 生成 initiator / responder identity binding。
+- binding 的 canonical payload hash 绑定 session_id、设备 ID、fingerprint、session ephemeral key 和 handshake_hash。
+
+后续范围：
+
+- 生成或迁移长期设备身份密钥。
+- 用长期身份密钥签名 session identity binding。
+- 接收端验证签名和可信设备记录。
+- 明确旧 seed-derived fingerprint 的兼容和迁移策略。
 
 完成标准：
 

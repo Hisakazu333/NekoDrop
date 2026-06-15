@@ -103,7 +103,8 @@ full single-file plaintext buffer.
 
 Long-term device identity keys are not wired yet. Current session encryption is
 ephemeral and tied to the existing desktop identity checks, not a full
-authenticated device-key system.
+authenticated device-key system. The protocol crate has session identity binding
+material for later signatures, but desktop signing and verification are not wired.
 
 ### Bundle Staging
 
@@ -172,7 +173,7 @@ NekoDrop currently enforces these boundaries:
 
 Known gaps:
 
-- long-term identity keys are not wired into session authentication
+- long-term identity keys and signatures are not wired into session authentication
 - legacy plain transfer compatibility still needs a retirement or migration policy
 - local bridge has no runtime server or persisted authorization yet
 - iroh / relay / P2P are not implemented transports
