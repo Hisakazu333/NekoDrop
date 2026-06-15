@@ -77,7 +77,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 }
 ```
 
-`client_id` 是本机应用自报身份，不是凭证。发送、导入这类动作必须先通过授权码确认，并且授权可以在设置页撤销。当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看和移除，内部 consumer 可以取出下一条动作；真正执行发送、导入和失败回滚还在后续阶段。
+`client_id` 是本机应用自报身份，不是凭证。发送、导入这类动作必须先通过授权码确认，并且授权可以在设置页撤销。当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看和移除。内部 worker 可以取出 `bundle.send` 动作并做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。preflight 通过只表示可以进入桌面发送 worker，不代表文件已经发出。
 
 ## 类型建议
 
@@ -105,7 +105,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 - 上层应用自动导出
 - 上层应用真实导入
-- local bridge 待执行动作消费、真实发送和真实导入
+- local bridge 真实发送和真实导入
 - local bridge 事件订阅
 - 跨网络 iroh / relay / P2P 传输
 
