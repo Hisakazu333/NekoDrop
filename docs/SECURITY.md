@@ -94,11 +94,11 @@ Current desktop transfers have an encrypted session path:
 - encrypted control readers use a replay window
 - encrypted file frames protect file payloads on the encrypted session path
 - file-frame AAD binds transfer id, manifest path, offset, plain size, cipher, direction, counter, and nonce
+- encrypted receive reads decrypt frames on demand instead of buffering a whole file payload
 
 Remaining work:
 
 - bind sessions to long-term authenticated device identity keys
-- replace the encrypted receive helper's full-file plaintext buffer with streaming decrypt
 - decide how and when to retire the plain compatibility transfer path
 
 Do not describe a transfer as fully authenticated just because it uses the current encrypted session path. It has confidentiality and integrity for encrypted frames, plus replay protection for encrypted control readers, but long-term device-key authentication is not complete.

@@ -32,8 +32,8 @@ Current implemented path:
 
 Future:
 
-- streaming decrypt on the encrypted receive path
 - long-term identity keys for authenticated sessions
+- legacy plain transfer migration or retirement policy
 - iroh / relay / P2P transports under the same session and file-frame semantics
 
 ## Device Advertisement
@@ -306,9 +306,9 @@ Changing the transfer id, path, offset, size, direction, counter, nonce, or
 cipher makes decryption fail. SHA-256 still verifies the final file after it is
 written.
 
-Current limitation: the encrypted receive helper decrypts a complete single-file
-payload before handing it to storage. The next implementation step is streaming
-decrypt on receive so very large files do not require a full plaintext buffer.
+The receive helper exposes decrypted payload through a streaming reader. It reads
+and opens encrypted file frames as the storage layer asks for bytes, instead of
+building one full plaintext buffer for the file.
 
 ## Pairing Messages
 
