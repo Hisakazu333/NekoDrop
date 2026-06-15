@@ -689,6 +689,23 @@ impl EncryptedSessionPayload {
         envelope: &Envelope<Self>,
         keys: &SessionKeyMaterial,
     ) -> Result<T, ProtocolError> {
+        Self::open_control_inner(envelope, keys)
+    }
+
+    pub fn open_control_once<T: for<'de> Deserialize<'de>>(
+        envelope: &Envelope<Self>,
+        keys: &SessionKeyMaterial,
+        replay_window: &mut SessionReplayWindow,
+    ) -> Result<T, ProtocolError> {
+        let payload = Self::open_control_inner(envelope, keys)?;
+        replay_window.accept(&envelope.payload.header)?;
+        Ok(payload)
+    }
+
+    fn open_control_inner<T: for<'de> Deserialize<'de>>(
+        envelope: &Envelope<Self>,
+        keys: &SessionKeyMaterial,
+    ) -> Result<T, ProtocolError> {
         envelope.validate_kind(MessageKind::SessionControl)?;
         if envelope.payload.header.kind != SessionFrameKind::Control {
             return Err(ProtocolError::new(
@@ -782,13 +799,6 @@ impl SessionReplayWindow {
     }
 
     pub fn accept(&mut self, header: &SessionTrafficFrameHeader) -> Result<(), ProtocolError> {
-        if header.direction != SessionFrameDirection::Receive {
-            return Err(ProtocolError::new(
-                ErrorCode::InvalidPayload,
-                "replay window accepts receive frames only",
-            ));
-        }
-
         if let Some(highest_counter) = self.highest_counter {
             let minimum_counter =
                 highest_counter.saturating_sub(self.window_size.saturating_sub(1));
@@ -3664,6 +3674,88 @@ mod tests {
         assert!(!envelope.payload.ciphertext.is_empty());
         assert!(!String::from_utf8_lossy(&envelope.payload.ciphertext).contains("accepted"));
         assert_eq!(opened.accepted, payload.accepted);
+    }
+
+    #[test]
+    fn opens_encrypted_session_control_envelope_once_with_replay_window() {
+        let keys = SessionKeyMaterial {
+            send_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            9,
+        )
+        .unwrap();
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "message-1",
+            &keys,
+            header,
+            MessageKind::FileAccept,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        let mut replay_window = SessionReplayWindow::default();
+
+        let opened: TransferDecision =
+            EncryptedSessionPayload::open_control_once(&envelope, &keys, &mut replay_window)
+                .unwrap();
+        let error = EncryptedSessionPayload::open_control_once::<TransferDecision>(
+            &envelope,
+            &keys,
+            &mut replay_window,
+        )
+        .unwrap_err();
+
+        assert!(opened.accepted);
+        assert_eq!(error.code, ErrorCode::InvalidPayload);
+        assert!(error.message.contains("replayed session frame"));
+    }
+
+    #[test]
+    fn tampered_encrypted_session_control_does_not_advance_replay_window() {
+        let keys = SessionKeyMaterial {
+            send_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [11_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let header = SessionTrafficFrameHeader::new(
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            SessionFrameKind::Control,
+            SessionFrameDirection::Send,
+            9,
+        )
+        .unwrap();
+        let envelope = EncryptedSessionPayload::seal_control(
+            "session-1",
+            "message-1",
+            &keys,
+            header,
+            MessageKind::FileAccept,
+            &TransferDecision::accept(),
+        )
+        .unwrap();
+        let mut tampered = envelope.clone();
+        tampered.message_id = "message-2".to_string();
+        let mut replay_window = SessionReplayWindow::default();
+
+        let tampered_error = EncryptedSessionPayload::open_control_once::<TransferDecision>(
+            &tampered,
+            &keys,
+            &mut replay_window,
+        )
+        .unwrap_err();
+        let opened: TransferDecision =
+            EncryptedSessionPayload::open_control_once(&envelope, &keys, &mut replay_window)
+                .unwrap();
+
+        assert_eq!(tampered_error.code, ErrorCode::InvalidPayload);
+        assert!(tampered_error
+            .message
+            .contains("failed to open session payload"));
+        assert!(opened.accepted);
     }
 
     #[test]
