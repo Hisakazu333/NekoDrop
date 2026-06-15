@@ -41,6 +41,7 @@ type CommandName =
   | "delete_transfer"
   | "clear_transfer_history"
   | "list_staged_bundles"
+  | "prune_staged_bundles"
   | "delete_staged_bundle"
   | "import_staged_bundle"
   | "handle_local_bridge_request";

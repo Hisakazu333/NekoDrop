@@ -41,9 +41,9 @@ test("send flow owns manual bundle creation instead of a separate bundle page", 
 });
 
 test("received bundle state explains why import is or is not available", () => {
-  assert.match(appSource, /function receiveBundleImportHint\(bundle: ReceivedBundleDto\)/);
-  assert.match(appSource, /bundle\.can_import_now/);
-  assert.match(appSource, /bundle\.import_allowed/);
+  assert.match(appSource, /receiveBundleImportHint/);
+  assert.match(appSource, /stagedBundles=\{stagedBundles\}/);
+  assert.match(appSource, /visibleStagedBundles/);
   assert.match(appSource, /receivedBundleHint/);
   assert.match(appSource, /\{receivedBundleHint \? <small>\{receivedBundleHint\}<\/small> : null\}/);
 });

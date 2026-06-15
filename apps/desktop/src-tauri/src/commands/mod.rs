@@ -30,8 +30,8 @@ use nekodrop_storage::{
     build_resume_plan_for_files, create_manual_bundle_directory,
     delete_staged_bundle as delete_staged_bundle_storage,
     import_staged_bundle as import_staged_bundle_storage,
-    list_staged_bundles as list_staged_bundles_storage, ManualBundleCreateRequest,
-    ResumeExpectedFile, ResumePlan, StagedBundle,
+    list_staged_bundles as list_staged_bundles_storage, prune_staged_bundles_older_than,
+    ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan, StagedBundle,
 };
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
@@ -61,6 +61,7 @@ use crate::trusted_devices::{
 
 const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
 const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
+const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct AppSnapshot {
@@ -613,6 +614,15 @@ pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> 
 pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
     let staging_root = bundle_staging_root()?;
     list_staged_bundle_dtos_at(&staging_root)
+}
+
+#[tauri::command]
+pub fn prune_staged_bundles() -> Result<Vec<String>, String> {
+    let staging_root = bundle_staging_root()?;
+    let cutoff = SystemTime::now()
+        .checked_sub(Duration::from_secs(STAGED_BUNDLE_RETENTION_SECS))
+        .unwrap_or(UNIX_EPOCH);
+    prune_staged_bundle_dtos_at(&staging_root, cutoff)
 }
 
 #[tauri::command]
@@ -2443,6 +2453,13 @@ fn find_staged_bundle_dto_at(
     Ok(list_staged_bundle_dtos_at(staging_root)?
         .into_iter()
         .find(|bundle| bundle.bundle_id == bundle_id))
+}
+
+fn prune_staged_bundle_dtos_at(
+    staging_root: &std::path::Path,
+    cutoff: SystemTime,
+) -> Result<Vec<String>, String> {
+    prune_staged_bundles_older_than(staging_root, cutoff).map_err(|error| error.to_string())
 }
 
 fn delete_staged_bundle_at(
@@ -4670,6 +4687,26 @@ mod tests {
 
         assert!(removed);
         assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn prune_staged_bundle_dtos_at_removes_expired_bundles() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-prune");
+        let staging_root = dir.join("bundle_staging");
+        let expired_root = create_desktop_test_bundle(&dir, "expired", "bundle_expired");
+        let fresh_root = create_desktop_test_bundle(&dir, "fresh", "bundle_fresh");
+        nekodrop_storage::stage_bundle_directory(&expired_root, &staging_root).unwrap();
+        let cutoff = std::time::SystemTime::now();
+        nekodrop_storage::stage_bundle_directory(&fresh_root, &staging_root).unwrap();
+
+        let pruned = prune_staged_bundle_dtos_at(&staging_root, cutoff).unwrap();
+
+        assert_eq!(pruned, vec!["bundle_expired"]);
+        let remaining = list_staged_bundle_dtos_at(&staging_root).unwrap();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0].bundle_id, "bundle_fresh");
 
         fs::remove_dir_all(dir).unwrap();
     }
