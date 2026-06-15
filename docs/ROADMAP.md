@@ -35,9 +35,15 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - 让 `file.offer`、`file.accept`、`file.decline` 走 encrypted `session.control`。
 - 给 offer / decision 控制消息读取路径接入 replay window。
 
+已经接入：
+
+- encrypted session 发送/接收路径的文件 payload 已切成加密 file frames。
+- file frame AAD 绑定 transfer_id、manifest_path、offset 和 plain_size。
+- encrypted session resume 仍按 partial offset 补传剩余 payload。
+
 仍未完成：
 
-- 文件 payload 加密
+- 接收端 streaming 解密优化，当前加密路径会先解密单文件 payload 再交给 storage 写入
 - 长期身份密钥认证
 - iroh runtime
 - relay server
@@ -45,18 +51,16 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - skills/session bundle
 - 手机端互通
 
-## 下一阶段：Encrypted File Stream
+## 下一阶段：Encrypted File Stream 收口
 
-目标：把文件 payload 也放进 session 保护边界。
+目标：把加密文件流从“功能闭环”收成适合大文件长期使用的实现。
 
 范围：
 
-- 定义 encrypted file frame header。
-- 使用 session traffic counter 生成 nonce。
-- 加密文件 payload 或 chunk payload。
-- 校验 AAD，绑定 transfer_id、manifest_path、offset、size。
-- 断点续传继续可用。
-- checksum 仍作为落盘后的完整性校验。
+- 接收端改成 streaming 解密，不再为单文件完整 payload 分配内存。
+- 给 encrypted file frame 增加更完整的乱序、截断和重放测试。
+- 明确 legacy plain file stream 的兼容策略和迁移策略。
+- checksum 继续作为落盘后的完整性校验。
 
 完成标准：
 

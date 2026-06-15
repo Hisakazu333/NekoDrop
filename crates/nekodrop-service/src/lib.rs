@@ -8,7 +8,8 @@ use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
     connect_endpoint, read_incoming_control_frame, read_pairing_decision,
     read_session_transfer_decision_once, read_session_transfer_offer_once, read_transfer_decision,
-    read_verified_session_ready, receive_file_frames_with_expected_count,
+    read_verified_session_ready, receive_encrypted_file_frames_with_expected_count,
+    receive_file_frames_with_expected_count, send_encrypted_file_frames_with_resume_and_cancel,
     send_file_frames_with_resume_and_cancel, write_pairing_decision, write_pairing_request,
     write_session_hello, write_session_ready, write_session_transfer_decision,
     write_session_transfer_offer, write_transfer_decision_for_transfer, write_transfer_offer,
@@ -243,11 +244,15 @@ where
         )));
     }
 
-    let sent_files = send_file_frames_with_resume_and_cancel(
+    let sent_files = send_encrypted_file_frames_with_resume_and_cancel(
         &mut stream,
+        &offer.transfer_id,
         &outgoing,
         plan.total_bytes(),
         &decision.resume_files,
+        &session.keys,
+        &mut session.counters,
+        &session.cipher,
         |progress| on_progress(TransferProgressEvent::Sending(progress)),
         || should_cancel(),
     )?;
@@ -661,11 +666,13 @@ where
     C: FnMut() -> bool,
 {
     validate_offer_sender_identity_matches_session(&offer, &session.peer_identity)?;
-    accept_transfer_offer_stream_with_decision_writer_and_cancel(
+    let keys = session.keys.clone();
+    accept_encrypted_transfer_offer_stream_with_decision_writer_and_cancel(
         stream,
         receive_dir,
         bundle_staging_root,
         offer,
+        &keys,
         decide,
         on_progress,
         || should_cancel(),
@@ -808,6 +815,155 @@ where
             });
             Ok(received)
         })?;
+    if files.len() != offer.file_count {
+        return Err(NekoDropError::Network(format!(
+            "received file count does not match accepted offer: {} != {}",
+            files.len(),
+            offer.file_count
+        )));
+    }
+    let bundle = maybe_stage_received_bundle(receive_dir, &offer.root_name, bundle_staging_root)?;
+
+    Ok(TransferReceiveReport {
+        transfer_id: offer.transfer_id,
+        root_name: offer.root_name,
+        sender_device_id: offer.sender_device_id,
+        sender_device_name: offer.sender_device_name,
+        sender_public_key_fingerprint: offer.sender_public_key_fingerprint,
+        files,
+        bundle,
+    })
+}
+
+fn accept_encrypted_transfer_offer_stream_with_decision_writer_and_cancel<D, P, C, W>(
+    stream: &mut TcpStream,
+    receive_dir: &Path,
+    bundle_staging_root: Option<&Path>,
+    offer: TransferOffer,
+    keys: &SessionKeyMaterial,
+    decide: D,
+    on_progress: P,
+    mut should_cancel: C,
+    mut write_decision: W,
+) -> NekoDropResult<TransferReceiveReport>
+where
+    D: FnOnce(&TransferOffer) -> bool,
+    P: FnMut(TransferProgressEvent),
+    C: FnMut() -> bool,
+    W: FnMut(&mut TcpStream, &TransferOffer, &TransferDecision) -> NekoDropResult<()>,
+{
+    if !decide(&offer) {
+        write_decision(
+            stream,
+            &offer,
+            &TransferDecision::decline("receiver declined this transfer"),
+        )?;
+        return Err(NekoDropError::Network(
+            "transfer declined by receiver".into(),
+        ));
+    }
+    let resume_plan = match resume_plan_from_offer(receive_dir, &offer) {
+        Ok(plan) => plan,
+        Err(error) => {
+            let _ = write_decision(
+                stream,
+                &offer,
+                &TransferDecision::decline("receiver resume state is not usable"),
+            );
+            return Err(error);
+        }
+    };
+    if let Err(error) = check_receive_space(receive_dir, offer.total_bytes, &resume_plan) {
+        let _ = write_decision(
+            stream,
+            &offer,
+            &TransferDecision::decline("insufficient receive space"),
+        );
+        return Err(error);
+    }
+    let decision = TransferDecision::accept_with_resume(resume_files_from_plan(&resume_plan)?);
+    write_decision(stream, &offer, &decision)?;
+    let resume_offsets = resume_offsets_by_path(&decision.resume_files)?;
+
+    let mut bytes_transferred = resume_plan.total_received_bytes();
+    let mut file_index = 0_usize;
+    let mut on_progress = on_progress;
+    let files = receive_encrypted_file_frames_with_expected_count(
+        stream,
+        offer.file_count,
+        keys,
+        |header, stream| {
+            if should_cancel() {
+                return Err(NekoDropError::Network("transfer cancelled".into()));
+            }
+            let expected = offer.files.get(file_index).ok_or_else(|| {
+                NekoDropError::Network(format!(
+                    "received unexpected extra file frame: {}",
+                    header.manifest_path
+                ))
+            })?;
+            if header.manifest_path != expected.manifest_path
+                || header.size != expected.size
+                || !header.sha256.eq_ignore_ascii_case(&expected.sha256)
+            {
+                return Err(NekoDropError::Network(format!(
+                    "incoming file does not match accepted offer: {}",
+                    header.manifest_path
+                )));
+            }
+            let expected_offset = resume_offsets
+                .get(header.manifest_path.as_str())
+                .copied()
+                .unwrap_or(0);
+            if header.offset != expected_offset {
+                return Err(NekoDropError::Network(format!(
+                    "incoming file resume offset does not match accepted decision for {}: {} != {}",
+                    header.manifest_path, header.offset, expected_offset
+                )));
+            }
+            file_index += 1;
+            on_progress(TransferProgressEvent::Receiving(TransferProgress {
+                manifest_path: header.manifest_path.clone(),
+                file_index,
+                file_count: offer.file_count,
+                file_bytes_transferred: header.offset,
+                file_size: header.size,
+                bytes_transferred,
+                total_bytes: offer.total_bytes,
+            }));
+            let mut last_file_bytes = header.offset;
+            let received = write_received_file_with_resume_and_cancel(
+                receive_dir,
+                &header.manifest_path,
+                header.size,
+                &header.sha256,
+                header.offset,
+                stream,
+                |file_bytes| {
+                    let delta = file_bytes.saturating_sub(last_file_bytes);
+                    last_file_bytes = file_bytes;
+                    on_progress(TransferProgressEvent::Receiving(TransferProgress {
+                        manifest_path: header.manifest_path.clone(),
+                        file_index,
+                        file_count: offer.file_count,
+                        file_bytes_transferred: file_bytes,
+                        file_size: header.size,
+                        bytes_transferred: bytes_transferred.saturating_add(delta),
+                        total_bytes: offer.total_bytes,
+                    }));
+                },
+                || should_cancel(),
+            )?;
+            bytes_transferred = bytes_transferred
+                .saturating_add(received.bytes_written.saturating_sub(header.offset));
+            on_progress(TransferProgressEvent::Verifying {
+                manifest_path: received.manifest_path.clone(),
+                bytes_transferred,
+                total_bytes: offer.total_bytes,
+            });
+            Ok(received)
+        },
+    )?;
     if files.len() != offer.file_count {
         return Err(NekoDropError::Network(format!(
             "received file count does not match accepted offer: {} != {}",
@@ -1196,13 +1352,13 @@ mod tests {
     }
 
     #[test]
-    fn encrypted_control_transfer_sends_offer_and_decision_before_plain_file_payload() {
-        let dir = unique_temp_dir("service-encrypted-control-loopback");
+    fn encrypted_session_transfer_sends_control_and_file_payload_through_session() {
+        let dir = unique_temp_dir("service-encrypted-session-loopback");
         let source_root = dir.join("source").join("drop");
         let receive_dir = dir.join("receive");
         fs::create_dir_all(&source_root).unwrap();
         fs::create_dir_all(&receive_dir).unwrap();
-        fs::write(source_root.join("sample.txt"), b"encrypted control only").unwrap();
+        fs::write(source_root.join("sample.txt"), b"encrypted file payload").unwrap();
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
         let sender = test_identity("neko-device-sender", "Sender Mac");
@@ -1238,12 +1394,118 @@ mod tests {
         assert_eq!(receive_report.files.len(), 1);
         assert_eq!(
             fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
-            "encrypted control only"
+            "encrypted file payload"
         );
         assert_eq!(
             receive_report.sender_device_id.as_deref(),
             Some("neko-device-sender")
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_session_transfer_does_not_write_plain_file_payload_on_wire() {
+        let dir = unique_temp_dir("service-encrypted-session-wire");
+        let source_root = dir.join("source").join("drop");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::write(source_root.join("sample.txt"), b"secret-payload-marker").unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let frame = read_incoming_control_frame(&mut stream).unwrap();
+                let IncomingControlFrame::SessionHello(hello) = frame else {
+                    panic!("expected encrypted session hello");
+                };
+                let mut session = accept_responder_session(&mut stream, &receiver_identity, hello)
+                    .expect("session should be established");
+                let offer = session.read_transfer_offer(&mut stream).unwrap();
+                let message_id = session.next_message_id("decision");
+                let header = session.next_send_control_header().unwrap();
+                write_session_transfer_decision(
+                    &mut stream,
+                    session.session_id.clone(),
+                    message_id,
+                    &session.keys,
+                    header,
+                    &TransferDecision::accept(),
+                )
+                .unwrap();
+                let mut raw_payload = Vec::new();
+                stream.read_to_end(&mut raw_payload).unwrap();
+                assert_eq!(offer.file_count, 1);
+                raw_payload
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        send_plan_with_encrypted_control_and_cancel(&endpoint, plan, &sender, |_| {}, || false)
+            .unwrap();
+        let raw_payload = receiver.join().unwrap();
+
+        assert!(!String::from_utf8_lossy(&raw_payload).contains("secret-payload-marker"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_session_transfer_resumes_from_existing_partial_file() {
+        let dir = unique_temp_dir("service-encrypted-session-resume");
+        let source_root = dir.join("source").join("drop");
+        let receive_dir = dir.join("receive");
+        fs::create_dir_all(&source_root).unwrap();
+        fs::create_dir_all(receive_dir.join("drop")).unwrap();
+        fs::write(source_root.join("sample.txt"), b"hello encrypted resume").unwrap();
+        fs::write(
+            receive_dir.join("drop/sample.txt.nekodrop-part"),
+            b"hello encrypted ",
+        )
+        .unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on encrypted transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        let send_report =
+            send_plan_with_encrypted_control_and_cancel(&endpoint, plan, &sender, |_| {}, || false)
+                .unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+
+        assert_eq!(send_report.sent_files.len(), 1);
+        assert_eq!(send_report.sent_files[0].bytes_sent, 6);
+        assert_eq!(receive_report.files.len(), 1);
+        assert_eq!(
+            fs::read_to_string(receive_dir.join("drop/sample.txt")).unwrap(),
+            "hello encrypted resume"
+        );
+        assert!(!receive_dir.join("drop/sample.txt.nekodrop-part").exists());
 
         fs::remove_dir_all(dir).unwrap();
     }

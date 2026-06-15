@@ -38,7 +38,7 @@ NekoDrop 不只是在做“传文件按钮”。最近几轮已经把后续 Neko
 | 桌面 LAN 互传 | 已接入，当前主要可用能力 |
 | encrypted `session.control` | 已接入控制消息，`file.offer` / `file.accept` / `file.decline` 已走加密 session |
 | replay-aware control reader | 已接入 offer / decision 控制消息读取路径 |
-| 文件 payload 加密 | 未接入，文件内容仍走 TCP payload 流 |
+| 文件 payload 加密 | encrypted session 路径已接入加密 file frames；旧 plain 路径仍保留兼容 |
 | bundle manifest | 已有协议模型、校验、checksums、permissions 和 staging |
 | 手动资料包 | 已有创建、发送入口和收到后的暂存查看 |
 | 自动导出 session / skill / workspace | 未接入 |
@@ -205,7 +205,7 @@ scripts/                打包和审计脚本
 
 短期优先级：
 
-1. 加密文件流：把文件 payload 放进 session 保护边界
+1. 加密文件流收口：把接收端改成 streaming 解密，降低大文件内存占用
 2. bundle 闭环：完善 staging 生命周期、预览、导入确认和失败回滚
 3. 本机接入：让本机应用通过受控 API 请求发送和导入 bundle
 4. 长期身份认证：把可信设备和 session 绑定到长期身份密钥

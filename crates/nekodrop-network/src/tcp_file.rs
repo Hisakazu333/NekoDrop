@@ -5,13 +5,17 @@ use std::net::{TcpListener, TcpStream};
 use std::path::Path;
 
 pub use nekolink_protocol::{
-    DeviceHello, EncryptedSessionPayload, PairingDecisionPayload, PairingRequestPayload,
-    SessionHelloPayload, SessionReadyPayload, TransferDecision, TransferOffer, TransferOfferFile,
-    TransferResumeFile, VerifiedSessionHandshake,
+    DeviceHello, EncryptedFileFrame, EncryptedFileFrameHeader, EncryptedSessionPayload,
+    PairingDecisionPayload, PairingRequestPayload, SessionHelloPayload, SessionReadyPayload,
+    TransferDecision, TransferOffer, TransferOfferFile, TransferResumeFile,
+    VerifiedSessionHandshake,
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
-use nekolink_protocol::{Capability, Envelope, ErrorCode, MessageKind, ProtocolError};
+use nekolink_protocol::{
+    Capability, Envelope, ErrorCode, MessageKind, ProtocolError, SessionFrameKind,
+    SessionKeyMaterial, SessionTrafficCounters,
+};
 use serde::{Deserialize, Serialize};
 
 const COPY_BUFFER_SIZE: usize = 64 * 1024;
@@ -364,6 +368,225 @@ where
     }
 
     Ok(sent)
+}
+
+pub fn send_encrypted_file_frames_with_resume_and_cancel<W, F, C>(
+    stream: &mut W,
+    transfer_id: &str,
+    files: &[OutgoingFileFrame],
+    total_bytes: u64,
+    resume_files: &[TransferResumeFile],
+    keys: &SessionKeyMaterial,
+    counters: &mut SessionTrafficCounters,
+    cipher: &str,
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<Vec<SentFileFrame>>
+where
+    W: Write,
+    F: FnMut(TransferProgress),
+    C: FnMut() -> bool,
+{
+    let count = u32::try_from(files.len())
+        .map_err(|_| NekoDropError::Network("too many files in one transfer".into()))?;
+    stream
+        .write_all(&count.to_be_bytes())
+        .map_err(|error| NekoDropError::Network(format!("failed to write file count: {error}")))?;
+
+    let resolved_total_bytes = if total_bytes == 0 {
+        files
+            .iter()
+            .filter_map(|file| {
+                file.file_path
+                    .metadata()
+                    .ok()
+                    .map(|metadata| metadata.len())
+            })
+            .sum()
+    } else {
+        total_bytes
+    };
+    let resume_offsets = resume_offsets_by_path(resume_files)?;
+    let mut bytes_transferred = initial_resumed_bytes(files, &resume_offsets)?;
+    let mut sent = Vec::with_capacity(files.len());
+
+    for (index, file) in files.iter().enumerate() {
+        if should_cancel() {
+            return Err(NekoDropError::Network("transfer cancelled".into()));
+        }
+
+        let file_size = file
+            .file_path
+            .metadata()
+            .map_err(|error| {
+                NekoDropError::Network(format!(
+                    "failed to read metadata for {}: {error}",
+                    file.file_path.display()
+                ))
+            })?
+            .len();
+        let offset = resume_offsets
+            .get(file.manifest_path.as_str())
+            .copied()
+            .unwrap_or(0);
+        if offset > file_size {
+            return Err(NekoDropError::Network(format!(
+                "resume offset is larger than file size for {}: {} > {}",
+                file.manifest_path, offset, file_size
+            )));
+        }
+        let mut last_file_bytes = offset;
+        let sent_frame = send_single_encrypted_file_frame_from_offset_with_progress_and_cancel(
+            stream,
+            transfer_id,
+            file.manifest_path.clone(),
+            &file.file_path,
+            file.sha256.clone(),
+            offset,
+            keys,
+            counters,
+            cipher,
+            |file_bytes| {
+                let delta = file_bytes.saturating_sub(last_file_bytes);
+                last_file_bytes = file_bytes;
+                bytes_transferred = bytes_transferred.saturating_add(delta);
+                on_progress(TransferProgress {
+                    manifest_path: file.manifest_path.clone(),
+                    file_index: index + 1,
+                    file_count: files.len(),
+                    file_bytes_transferred: file_bytes,
+                    file_size,
+                    bytes_transferred,
+                    total_bytes: resolved_total_bytes,
+                });
+            },
+            || should_cancel(),
+        )?;
+        if offset == file_size {
+            on_progress(TransferProgress {
+                manifest_path: file.manifest_path.clone(),
+                file_index: index + 1,
+                file_count: files.len(),
+                file_bytes_transferred: file_size,
+                file_size,
+                bytes_transferred,
+                total_bytes: resolved_total_bytes,
+            });
+        }
+        sent.push(sent_frame);
+    }
+
+    Ok(sent)
+}
+
+pub fn send_single_encrypted_file_frame_from_offset_with_progress_and_cancel<W, F, C>(
+    stream: &mut W,
+    transfer_id: &str,
+    manifest_path: impl Into<String>,
+    file_path: &Path,
+    sha256: impl Into<String>,
+    offset: u64,
+    keys: &SessionKeyMaterial,
+    counters: &mut SessionTrafficCounters,
+    cipher: &str,
+    mut on_progress: F,
+    mut should_cancel: C,
+) -> NekoDropResult<SentFileFrame>
+where
+    W: Write,
+    F: FnMut(u64),
+    C: FnMut() -> bool,
+{
+    let manifest_path = manifest_path.into();
+    let metadata = file_path.metadata().map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to read metadata for {}: {error}",
+            file_path.display()
+        ))
+    })?;
+    if !metadata.is_file() {
+        return Err(NekoDropError::Network(format!(
+            "path is not a file: {}",
+            file_path.display()
+        )));
+    }
+    if offset > metadata.len() {
+        return Err(NekoDropError::Network(format!(
+            "resume offset is larger than file size for {}: {} > {}",
+            file_path.display(),
+            offset,
+            metadata.len()
+        )));
+    }
+
+    let header = FileFrameHeader {
+        manifest_path: manifest_path.clone(),
+        size: metadata.len(),
+        sha256: sha256.into(),
+        offset,
+    };
+    write_header(stream, &header)?;
+
+    let mut file = File::open(file_path).map_err(|error| {
+        NekoDropError::Network(format!("failed to open {}: {error}", file_path.display()))
+    })?;
+    if offset > 0 {
+        file.seek(SeekFrom::Start(offset)).map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to seek {} to resume offset {offset}: {error}",
+                file_path.display()
+            ))
+        })?;
+        on_progress(offset);
+    }
+
+    let mut buffer = [0_u8; COPY_BUFFER_SIZE];
+    let mut file_bytes_transferred = offset;
+    let mut bytes_sent = 0_u64;
+    loop {
+        if should_cancel() {
+            return Err(NekoDropError::Network("transfer cancelled".into()));
+        }
+
+        let read = file.read(&mut buffer).map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to read {} while sending: {error}",
+                file_path.display()
+            ))
+        })?;
+        if read == 0 {
+            break;
+        }
+
+        let traffic_header = counters
+            .next_send_header(cipher, SessionFrameKind::File)
+            .map_err(protocol_error_to_network)?;
+        let frame_header = EncryptedFileFrameHeader::new(
+            transfer_id,
+            manifest_path.clone(),
+            file_bytes_transferred,
+            read as u64,
+            traffic_header,
+        )
+        .map_err(protocol_error_to_network)?;
+        let frame = EncryptedFileFrame::seal(keys, frame_header, &buffer[..read])
+            .map_err(protocol_error_to_network)?;
+        write_encrypted_file_frame(stream, &frame)?;
+
+        bytes_sent += read as u64;
+        file_bytes_transferred += read as u64;
+        on_progress(file_bytes_transferred);
+    }
+    stream.flush().map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to flush TCP stream after encrypted file send: {error}"
+        ))
+    })?;
+
+    Ok(SentFileFrame {
+        manifest_path,
+        bytes_sent,
+    })
 }
 
 pub fn write_transfer_offer(stream: &mut impl Write, offer: &TransferOffer) -> NekoDropResult<()> {
@@ -911,6 +1134,54 @@ where
     receive_file_frames_checked(stream, Some(expected_count), &mut receive_file)
 }
 
+pub fn receive_encrypted_file_frames_with_expected_count<R, F, T>(
+    stream: &mut R,
+    expected_count: usize,
+    keys: &SessionKeyMaterial,
+    mut receive_file: F,
+) -> NekoDropResult<Vec<T>>
+where
+    R: Read,
+    F: FnMut(&FileFrameHeader, &mut std::io::Cursor<Vec<u8>>) -> NekoDropResult<T>,
+{
+    let expected_count = u32::try_from(expected_count).map_err(|_| {
+        NekoDropError::Network(format!(
+            "expected file frame count exceeds maximum: {expected_count}"
+        ))
+    })?;
+    receive_encrypted_file_frames_checked(stream, Some(expected_count), keys, &mut receive_file)
+}
+
+fn receive_encrypted_file_frames_checked<R, F, T>(
+    stream: &mut R,
+    expected_count: Option<u32>,
+    keys: &SessionKeyMaterial,
+    receive_file: &mut F,
+) -> NekoDropResult<Vec<T>>
+where
+    R: Read,
+    F: FnMut(&FileFrameHeader, &mut std::io::Cursor<Vec<u8>>) -> NekoDropResult<T>,
+{
+    let count = read_file_count(stream)?;
+    if let Some(expected_count) = expected_count {
+        if count != expected_count {
+            return Err(NekoDropError::Network(format!(
+                "file frame count mismatch: {count} != {expected_count}"
+            )));
+        }
+    }
+    let mut received = Vec::with_capacity(count as usize);
+
+    for _ in 0..count {
+        let header = read_header(stream)?;
+        let plaintext = read_encrypted_file_payload(stream, keys, &header)?;
+        let mut reader = std::io::Cursor::new(plaintext);
+        received.push(receive_file(&header, &mut reader)?);
+    }
+
+    Ok(received)
+}
+
 fn receive_file_frames_checked<R, F, T>(
     stream: &mut R,
     expected_count: Option<u32>,
@@ -984,6 +1255,133 @@ fn read_header(stream: &mut impl Read) -> NekoDropResult<FileFrameHeader> {
 
     serde_json::from_slice(&payload)
         .map_err(|error| NekoDropError::Network(format!("failed to decode file header: {error}")))
+}
+
+fn write_encrypted_file_frame(
+    stream: &mut impl Write,
+    frame: &EncryptedFileFrame,
+) -> NekoDropResult<()> {
+    let header = serde_json::to_vec(&frame.header).map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to encode encrypted file frame header: {error}"
+        ))
+    })?;
+    let header_len = u32::try_from(header.len())
+        .map_err(|_| NekoDropError::Network("encrypted file frame header is too large".into()))?;
+    let ciphertext_len = u32::try_from(frame.ciphertext.len()).map_err(|_| {
+        NekoDropError::Network("encrypted file frame ciphertext is too large".into())
+    })?;
+    stream
+        .write_all(&header_len.to_be_bytes())
+        .map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to write encrypted file frame header length: {error}"
+            ))
+        })?;
+    stream.write_all(&header).map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to write encrypted file frame header: {error}"
+        ))
+    })?;
+    stream
+        .write_all(&ciphertext_len.to_be_bytes())
+        .map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to write encrypted file frame ciphertext length: {error}"
+            ))
+        })?;
+    stream.write_all(&frame.ciphertext).map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to write encrypted file frame ciphertext: {error}"
+        ))
+    })?;
+    Ok(())
+}
+
+fn read_encrypted_file_payload(
+    stream: &mut impl Read,
+    keys: &SessionKeyMaterial,
+    file_header: &FileFrameHeader,
+) -> NekoDropResult<Vec<u8>> {
+    let remaining = file_header.size.saturating_sub(file_header.offset);
+    let mut plaintext = Vec::with_capacity(remaining.min(usize::MAX as u64) as usize);
+    let mut expected_offset = file_header.offset;
+    while expected_offset < file_header.size {
+        let frame = read_encrypted_file_frame(stream)?;
+        if frame.header.manifest_path != file_header.manifest_path {
+            return Err(NekoDropError::Network(format!(
+                "encrypted file frame path mismatch: {} != {}",
+                frame.header.manifest_path, file_header.manifest_path
+            )));
+        }
+        if frame.header.offset != expected_offset {
+            return Err(NekoDropError::Network(format!(
+                "encrypted file frame offset mismatch for {}: {} != {}",
+                file_header.manifest_path, frame.header.offset, expected_offset
+            )));
+        }
+        let chunk = frame.open(keys).map_err(protocol_error_to_network)?;
+        expected_offset = expected_offset.saturating_add(chunk.len() as u64);
+        plaintext.extend_from_slice(&chunk);
+    }
+    if expected_offset != file_header.size {
+        return Err(NekoDropError::Network(format!(
+            "encrypted file payload size mismatch for {}: {} != {}",
+            file_header.manifest_path, expected_offset, file_header.size
+        )));
+    }
+    Ok(plaintext)
+}
+
+fn read_encrypted_file_frame(stream: &mut impl Read) -> NekoDropResult<EncryptedFileFrame> {
+    let mut header_len_bytes = [0_u8; 4];
+    stream.read_exact(&mut header_len_bytes).map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to read encrypted file frame header length: {error}"
+        ))
+    })?;
+    let header_len = u32::from_be_bytes(header_len_bytes) as usize;
+    if header_len == 0 || header_len > 64 * 1024 {
+        return Err(NekoDropError::Network(format!(
+            "invalid encrypted file frame header length: {header_len}"
+        )));
+    }
+    let mut header_payload = vec![0_u8; header_len];
+    stream.read_exact(&mut header_payload).map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to read encrypted file frame header: {error}"
+        ))
+    })?;
+    let header: EncryptedFileFrameHeader =
+        serde_json::from_slice(&header_payload).map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to decode encrypted file frame header: {error}"
+            ))
+        })?;
+    header.validate().map_err(protocol_error_to_network)?;
+
+    let mut ciphertext_len_bytes = [0_u8; 4];
+    stream
+        .read_exact(&mut ciphertext_len_bytes)
+        .map_err(|error| {
+            NekoDropError::Network(format!(
+                "failed to read encrypted file frame ciphertext length: {error}"
+            ))
+        })?;
+    let ciphertext_len = u32::from_be_bytes(ciphertext_len_bytes) as usize;
+    if ciphertext_len == 0 || ciphertext_len > COPY_BUFFER_SIZE + 32 {
+        return Err(NekoDropError::Network(format!(
+            "invalid encrypted file frame ciphertext length: {ciphertext_len}"
+        )));
+    }
+    let mut ciphertext = vec![0_u8; ciphertext_len];
+    stream.read_exact(&mut ciphertext).map_err(|error| {
+        NekoDropError::Network(format!(
+            "failed to read encrypted file frame ciphertext: {error}"
+        ))
+    })?;
+
+    Ok(EncryptedFileFrame { header, ciphertext })
 }
 
 fn read_file_count(stream: &mut impl Read) -> NekoDropResult<u32> {
@@ -1419,6 +1817,92 @@ mod tests {
             progress.last().map(|event| event.bytes_transferred),
             Some(11)
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_file_frames_round_trip_and_reject_tampered_chunk_header() {
+        let dir = unique_temp_dir("tcp-encrypted-file-frame");
+        let file = dir.join("sample.txt");
+        fs::write(&file, b"hello encrypted file payload").unwrap();
+        let outgoing = vec![OutgoingFileFrame::new(
+            "drop/sample.txt",
+            file,
+            "sha256-placeholder",
+        )];
+        let keys = SessionKeyMaterial {
+            send_key: [41_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [41_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut counters = nekolink_protocol::SessionTrafficCounters::default();
+        let mut stream = Cursor::new(Vec::new());
+
+        send_encrypted_file_frames_with_resume_and_cancel(
+            &mut stream,
+            "transfer-1",
+            &outgoing,
+            28,
+            &[],
+            &keys,
+            &mut counters,
+            SESSION_CIPHER_XCHACHA20POLY1305,
+            |_| {},
+            || false,
+        )
+        .unwrap();
+
+        let payload = stream.into_inner();
+
+        let received = receive_encrypted_file_frames_with_expected_count(
+            &mut Cursor::new(payload.clone()),
+            1,
+            &keys,
+            |header, reader| {
+                let mut plaintext = Vec::new();
+                reader.read_to_end(&mut plaintext).unwrap();
+                Ok((header.clone(), plaintext))
+            },
+        )
+        .unwrap();
+        assert_eq!(received[0].0.manifest_path, "drop/sample.txt");
+        assert_eq!(received[0].1, b"hello encrypted file payload");
+
+        let mut tampered_payload = payload;
+        let manifest_header_len =
+            u32::from_be_bytes(tampered_payload[4..8].try_into().unwrap()) as usize;
+        let encrypted_header_len_start = 8 + manifest_header_len;
+        let encrypted_header_len = u32::from_be_bytes(
+            tampered_payload[encrypted_header_len_start..encrypted_header_len_start + 4]
+                .try_into()
+                .unwrap(),
+        ) as usize;
+        let encrypted_header_start = encrypted_header_len_start + 4;
+        let mut encrypted_header: nekolink_protocol::EncryptedFileFrameHeader =
+            serde_json::from_slice(
+                &tampered_payload
+                    [encrypted_header_start..encrypted_header_start + encrypted_header_len],
+            )
+            .unwrap();
+        encrypted_header.transfer_id = "transfer-2".to_string();
+        let tampered_header = serde_json::to_vec(&encrypted_header).unwrap();
+        assert_eq!(tampered_header.len(), encrypted_header_len);
+        tampered_payload[encrypted_header_start..encrypted_header_start + encrypted_header_len]
+            .copy_from_slice(&tampered_header);
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut Cursor::new(tampered_payload),
+            1,
+            &keys,
+            |header, reader| {
+                let mut plaintext = Vec::new();
+                reader.read_to_end(&mut plaintext).unwrap();
+                Ok((header.clone(), plaintext))
+            },
+        )
+        .unwrap_err();
+
+        assert!(error.to_string().contains("failed to open session payload"));
 
         fs::remove_dir_all(dir).unwrap();
     }
