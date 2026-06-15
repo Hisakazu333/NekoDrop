@@ -78,6 +78,7 @@ type BusyMode =
   | "forget"
   | "history"
   | "resend"
+  | "bundle-import"
   | "open";
 
 type ComposerMode =
@@ -828,6 +829,25 @@ export function App() {
     }
   }
 
+  async function importCurrentStagedBundle(bundle: ReceivedBundleDto) {
+    setBusy("bundle-import");
+    setError(null);
+    try {
+      const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", {
+        bundleId: bundle.bundle_id
+      });
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: imported };
+      });
+      setToast(`已导入：${imported.display_name}`);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runLocalBridgeSelfCheck() {
     setBusy("open");
     setError(null);
@@ -1415,6 +1435,7 @@ export function App() {
                   onStartReceive={startReceive}
                   onStopReceive={stopReceive}
                   onDeleteStagedBundle={deleteCurrentStagedBundle}
+                  onImportStagedBundle={importCurrentStagedBundle}
                   onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
@@ -2143,6 +2164,7 @@ function ReceivePanel({
   onCopyConnectionCode,
   onOpenPath,
   onDeleteStagedBundle,
+  onImportStagedBundle,
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
@@ -2164,6 +2186,7 @@ function ReceivePanel({
   onCopyConnectionCode: () => void;
   onOpenPath: (path: string) => void;
   onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
+  onImportStagedBundle: (bundle: ReceivedBundleDto) => void;
   onRespondReceiveOffer: (accept: boolean) => void;
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
@@ -2349,16 +2372,28 @@ function ReceivePanel({
               <span>{receivedBundleSummary}</span>
               {receivedBundleHint ? <small>{receivedBundleHint}</small> : null}
               <div className="bundle-actions">
-                {receivedBundleStatus ? <strong>{receivedBundleStatus} · 已保存</strong> : null}
+                {receivedBundleStatus ? <strong>{receivedBundleStatus}</strong> : null}
                 {receivedBundle ? (
-                  <button
-                    className="text-button"
-                    disabled={busy === "receive"}
-                    onClick={() => onDeleteStagedBundle(receivedBundle)}
-                    type="button"
-                  >
-                    删除暂存
-                  </button>
+                  <>
+                    {receivedBundle.can_import_now ? (
+                      <button
+                        className="primary-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(receivedBundle)}
+                        type="button"
+                      >
+                        导入
+                      </button>
+                    ) : null}
+                    <button
+                      className="text-button"
+                      disabled={busy === "receive"}
+                      onClick={() => onDeleteStagedBundle(receivedBundle)}
+                      type="button"
+                    >
+                      删除暂存
+                    </button>
+                  </>
                 ) : null}
               </div>
             </div>
@@ -3152,11 +3187,15 @@ function receiveBundleSummaryLine(report: ReceiveReportDto) {
 function receiveBundleStatusLabel(report: ReceiveReportDto) {
   const bundle = report.bundle;
   if (!bundle) return null;
+  if (bundle.staging_status === "imported") return "已导入";
   if (bundle.can_import_now) return "可导入";
   return bundle.import_allowed ? "等待导入" : "仅保存";
 }
 
 function receiveBundleImportHint(bundle: ReceivedBundleDto) {
+  if (bundle.staging_status === "imported") {
+    return bundle.import_path ? `已导入到 ${bundle.import_path}` : "已导入";
+  }
   if (bundle.can_import_now) return "可导入，导入前仍需要确认";
   if (bundle.import_allowed) return "已暂存，等待本机应用申请导入";
   return "已暂存，但缺少导入权限或包含敏感内容";

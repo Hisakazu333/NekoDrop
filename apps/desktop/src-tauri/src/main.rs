@@ -57,6 +57,7 @@ pub fn run() {
             commands::clear_transfer_history,
             commands::list_staged_bundles,
             commands::delete_staged_bundle,
+            commands::import_staged_bundle,
             commands::handle_local_bridge_request
         ])
         .setup(|app| {

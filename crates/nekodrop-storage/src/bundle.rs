@@ -37,6 +37,17 @@ pub struct StagedBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportedBundle {
+    pub bundle_id: String,
+    pub bundle_type: BundleType,
+    pub display_name: String,
+    pub source_app: String,
+    pub destination_path: PathBuf,
+    pub file_count: usize,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualBundleCreateRequest {
     pub source_path: PathBuf,
     pub output_root: PathBuf,
@@ -404,6 +415,83 @@ pub fn prune_staged_bundles_older_than(
     Ok(pruned)
 }
 
+pub fn import_staged_bundle(
+    staged_bundle_root: &Path,
+    import_root: &Path,
+) -> NekoDropResult<ImportedBundle> {
+    let detected = detect_bundle_directory(staged_bundle_root)?.ok_or_else(|| {
+        NekoDropError::Storage(format!(
+            "staged bundle is missing bundle.json: {}",
+            staged_bundle_root.display()
+        ))
+    })?;
+    if detected.import_policy != BundleImportPolicy::ImportAllowed {
+        return Err(NekoDropError::Storage(format!(
+            "bundle is not importable: {}",
+            detected.manifest.bundle_id
+        )));
+    }
+    validate_bundle_id_for_staging(&detected.manifest.bundle_id)?;
+
+    fs::create_dir_all(import_root).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to create bundle import root {}: {error}",
+            import_root.display()
+        ))
+    })?;
+
+    let destination_path = import_root.join(&detected.manifest.bundle_id);
+    let temp_path = import_root.join(format!("{}.importing", detected.manifest.bundle_id));
+    if destination_path.exists() {
+        return Err(NekoDropError::Storage(format!(
+            "bundle import destination already exists: {}",
+            destination_path.display()
+        )));
+    }
+    if temp_path.exists() {
+        fs::remove_dir_all(&temp_path).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to clean stale bundle import temp {}: {error}",
+                temp_path.display()
+            ))
+        })?;
+    }
+
+    fs::create_dir_all(&temp_path).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to create bundle import temp {}: {error}",
+            temp_path.display()
+        ))
+    })?;
+
+    let copy_result =
+        detected.manifest.files.iter().try_for_each(|file| {
+            copy_import_payload_file(staged_bundle_root, &temp_path, &file.path)
+        });
+    if let Err(error) = copy_result {
+        let _ = fs::remove_dir_all(&temp_path);
+        return Err(error);
+    }
+
+    fs::rename(&temp_path, &destination_path).map_err(|error| {
+        let _ = fs::remove_dir_all(&temp_path);
+        NekoDropError::Storage(format!(
+            "failed to finalize bundle import {}: {error}",
+            destination_path.display()
+        ))
+    })?;
+
+    Ok(ImportedBundle {
+        bundle_id: detected.manifest.bundle_id,
+        bundle_type: detected.manifest.bundle_type,
+        display_name: detected.manifest.display_name,
+        source_app: detected.manifest.source_app,
+        destination_path,
+        file_count: detected.manifest.summary.file_count,
+        total_bytes: detected.manifest.summary.total_bytes,
+    })
+}
+
 fn read_json_file<T: for<'de> serde::Deserialize<'de>>(path: &Path) -> NekoDropResult<T> {
     let bytes = fs::read(path).map_err(|error| {
         NekoDropError::Storage(format!("failed to read {}: {error}", path.display()))
@@ -636,6 +724,35 @@ fn copy_bundle_file(
         NekoDropError::Storage(format!(
             "failed to copy bundle file {}: {error}",
             relative_path
+        ))
+    })?;
+    Ok(())
+}
+
+fn copy_import_payload_file(
+    staged_bundle_root: &Path,
+    import_temp_path: &Path,
+    bundle_manifest_path: &str,
+) -> NekoDropResult<()> {
+    let payload_path = bundle_manifest_path.strip_prefix("files/").ok_or_else(|| {
+        NekoDropError::Storage(format!(
+            "bundle import payload path must be under files/: {bundle_manifest_path}"
+        ))
+    })?;
+    let source = staged_bundle_root.join(bundle_manifest_path);
+    let destination = import_temp_path.join(payload_path);
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to create bundle import directory {}: {error}",
+                parent.display()
+            ))
+        })?;
+    }
+    fs::copy(&source, &destination).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to import bundle payload {}: {error}",
+            bundle_manifest_path
         ))
     })?;
     Ok(())
@@ -994,6 +1111,65 @@ mod tests {
         assert!(!staging_root.join("bundle_old_b").exists());
         assert!(staging_root.join("bundle_cutoff").is_dir());
         assert!(staging_root.join("bundle_new").is_dir());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn imports_staged_bundle_payload_into_destination_directory() {
+        let dir = unique_temp_dir("bundle-import-confirm");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+
+        let imported = import_staged_bundle(&staged.staging_path, &import_root).unwrap();
+
+        assert_eq!(imported.bundle_id, "bundle_1234567890");
+        assert_eq!(
+            imported.destination_path,
+            import_root.join("bundle_1234567890")
+        );
+        assert_eq!(imported.file_count, 2);
+        assert_eq!(imported.total_bytes, 28);
+        assert_eq!(
+            fs::read(imported.destination_path.join("content.bin")).unwrap(),
+            b"hello bundle"
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn import_rejects_save_only_bundle() {
+        let dir = unique_temp_dir("bundle-import-save-only");
+        let source = create_valid_bundle(&dir, false);
+        fs::remove_file(source.join("permissions.json")).unwrap();
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+
+        let error = import_staged_bundle(&staged.staging_path, &import_root).unwrap_err();
+
+        assert!(error.to_string().contains("not importable"));
+        assert!(!import_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn failed_import_does_not_leave_partial_destination() {
+        let dir = unique_temp_dir("bundle-import-rollback");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
+
+        let error = import_staged_bundle(&staged.staging_path, &import_root).unwrap_err();
+
+        assert!(error.to_string().contains("already exists"));
+        assert!(!import_root.join("bundle_1234567890.importing").exists());
 
         fs::remove_dir_all(dir).unwrap();
     }
