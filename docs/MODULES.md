@@ -20,7 +20,7 @@ NekoDrop Network
   TCP file frames, connection codes, discovery, transport abstraction
 
 NekoLink Protocol
-  Message envelope, device identity, capabilities, transfer offer/decision payloads
+  Message envelope, device identity, encrypted session, replay window, bundle and bridge models
 
 Future Integrations
   iroh, Relay, mobile apps, NekoState, OpenNeko Agent channels
@@ -45,10 +45,10 @@ Until then, keep NekoLink code isolated in `crates/nekolink-protocol` and keep p
 | --- | --- | --- |
 | `apps/desktop` | React UI, desktop interaction, Tauri IPC calls | Protocol rules, file hashing, transport internals |
 | `apps/desktop/src-tauri` | Tauri command handlers, app state, persisted config, device/history stores | Core protocol definitions |
-| `crates/nekolink-protocol` | Envelope, message kinds, capabilities, device identity payloads, transfer offer/decision payloads | TCP sockets, files, UI, Tauri |
-| `crates/nekodrop-network` | Endpoint parsing, connection code, TCP transport, file frames, discovery models | UI state, receive directory policy |
-| `crates/nekodrop-storage` | Manifest building, SHA-256, safe receive paths, partial files, resume plan inspection | TCP streams, device pairing |
-| `crates/nekodrop-service` | Product workflows built from protocol, network, and storage | Rendering, component layout |
+| `crates/nekolink-protocol` | Envelope, message kinds, capabilities, device identity payloads, encrypted session payloads, replay window, encrypted file frame headers, bundle and local bridge JSON models | TCP sockets, files, UI, Tauri |
+| `crates/nekodrop-network` | Endpoint parsing, connection code, TCP transport, encrypted/plain file frames, discovery models | UI state, receive directory policy |
+| `crates/nekodrop-storage` | Manifest building, SHA-256, safe receive paths, partial files, resume plan inspection, bundle detection and staging | TCP streams, device pairing |
+| `crates/nekodrop-service` | Product workflows built from protocol, network, and storage; send/receive; pairing; staged bundle reports; local bridge handler skeleton | Rendering, component layout |
 | `apps/sidecar` | CLI/sidecar experiments and diagnostics | Main desktop UX |
 | `docs/` | Current status, architecture, protocol, security, roadmap | Unverified feature claims |
 
@@ -102,16 +102,23 @@ Implemented in the current desktop path:
 - stable device identity
 - trusted pairing foundation
 - transfer history
+- encrypted `session.control` for file offer / accept / decline
+- replay window on encrypted transfer control readers
+- encrypted file frames on the encrypted session transfer path
+- bundle manifest validation, staging, and manual bundle creation
+- local bridge protocol model and internal read-only handler skeleton
 - macOS and Windows packaging scripts
 
 Experimental or planned:
 
-- encrypted sessions
+- streaming decrypt for encrypted file receive
+- long-term authenticated device identity keys
 - iroh transport
 - Relay / P2P transport
 - mobile main flow
 - NekoState synchronization
 - OpenNeko Agent command channel
+- public local bridge runtime, persisted authorization, and import execution
 
 See [Current Status](STATUS.md) for the authoritative feature list.
 

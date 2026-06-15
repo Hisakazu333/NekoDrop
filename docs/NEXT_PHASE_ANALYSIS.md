@@ -1,71 +1,62 @@
 # 下一阶段为什么这样排
 
-这份文档解释 NekoDrop / NekoLink 接下来为什么先做加密文件流和 bundle，再做 CCS/OpenNeko 本地桥，最后才做 iroh / relay / P2P。它不替代 [STATUS.md](STATUS.md) 和 [ROADMAP.md](ROADMAP.md)：状态看 STATUS，阶段列表看 ROADMAP，取舍理由看这里。
+这份文档解释 NekoDrop / NekoLink 接下来为什么先收口加密文件流，再做 bundle 闭环和本机 local bridge，最后才做 iroh / relay / P2P。真实完成状态以 [STATUS.md](STATUS.md) 为准，阶段列表以 [ROADMAP.md](ROADMAP.md) 为准。
 
 ## 当前基线
 
-当前 beta 已经能完成 macOS 和 Windows 的局域网文件互传。桌面主线包含自动发现、连接码兜底、可信配对、传输历史、进度、失败恢复、大目录 offer、partial/resume 基础和安装包打包。
+当前 beta 已经能完成 macOS 和 Windows 的局域网文件互传。桌面主线包含自动发现、连接码兜底、可信配对、传输历史、进度、失败恢复、大目录 offer、partial/resume 基础、安装包打包和刷新减负。
 
-NekoLink 安全层也已经进入桌面传输主线：`file.offer`、`file.accept`、`file.decline` 已经走 encrypted `session.control`。这意味着传输前的控制消息不再只依赖明文 LAN JSON 帧，但文件 payload 仍是明文 TCP 流。
+NekoLink 安全层已经进入桌面传输主线：
 
-因此，下一阶段不能直接跳到 iroh 或上层 Agent。底层还缺三个关键边界：
+- `session.hello` / `session.ready` 建立 ephemeral encrypted session
+- `file.offer`、`file.accept`、`file.decline` 走 encrypted `session.control`
+- offer / decision 控制消息读取路径有 replay window
+- encrypted session 路径的文件 payload 已经切成加密 file frames
 
-- 文件内容还没进入 session 保护边界
-- 上层数据还没有 bundle 包格式
-- 本机插件还没有受控调用 NekoLink 的 local bridge
+这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。但还有三个边界没有收口：
 
-## 阶段 1：加密文件流
+- 接收端 encrypted file frame 目前会先解密单文件 payload，再交给 storage 写入；大文件场景需要 streaming decrypt
+- session 还没有绑定长期设备身份密钥
+- bundle/local bridge 还没有形成“上层应用请求、用户确认、导入回滚”的完整闭环
 
-加密文件流必须排在 bundle 和跨网络 transport 之前。否则后面传 skills、session、workspace、agent profile 时，只是把敏感数据放进普通文件流里。
+所以现在不应该直接跳到 iroh、跨公网或 Agent 上层能力。跨网络 transport 解决的是“怎么连”，不能替代加密、权限和导入边界。
+
+## 阶段 1：Encrypted File Stream 收口
+
+加密文件流已经接进 encrypted session 路径。下一刀不是重新设计协议，而是把接收端实现从“整文件解密后写入”改成“边解密边写入”。
 
 这一阶段要完成：
 
-- 定义 encrypted file frame
-- 用 session traffic counter 生成 nonce
-- 把 transfer_id、manifest_path、offset、size 绑定进 associated data
-- 保留 partial/resume 语义
-- 保留 SHA-256 作为落盘后的完整性校验
-- 增加重放、乱序、篡改 payload 的测试
+- 接收端 streaming decrypt
+- 保持 partial/resume 的 offset 语义
+- 保持 cancel、history、progress 不倒退
+- 增加截断、乱序、重放和 AAD 篡改测试
+- 明确 legacy plain file stream 的兼容策略
 
 主要风险：
 
-- 断点续传和加密 chunk 边界容易冲突
-- nonce 复用会变成严重安全问题
-- 文件流加密后，失败恢复不能只看普通 TCP offset
-- 性能不能让大文件传输明显退化
+- nonce/counter 不能复用
+- encrypted chunk 边界不能破坏 resume
+- 失败恢复不能只看普通 TCP offset
+- 大文件性能不能退回到高内存占用
 
 完成标准：
 
 - 控制消息和文件 payload 都在 session 保护边界内
+- 接收大文件不需要把单文件 payload 全部解密进内存
 - 失败恢复、取消、历史记录不倒退
-- 明文兼容路径有清楚的迁移或拒绝策略
 
-## 阶段 2：NekoLink bundle
+## 阶段 2：NekoLink Bundle 闭环
 
 bundle 要解决的是“上层数据怎么传”，不是“网络怎么连”。skills、session、workspace、agent profile 不能当普通散文件发，因为接收端需要知道它们是什么、能不能导入、会改哪些本机状态。
 
-bundle 应该先跑在现有 LAN TCP + encrypted session 上。这样可以在稳定网络里把包格式、权限、预览、校验和导入确认压实，再换 transport。
+仓库里已经有 bundle manifest、checksums、permissions、staging 和手动创建入口。下一阶段要补的是闭环：
 
-建议包结构：
-
-```text
-bundle.json
-files/
-checksums.json
-permissions.json
-```
-
-`bundle.json` 至少记录：
-
-- bundle id
-- bundle type
-- schema version
-- source app
-- created_at
-- sender device identity
-- file list
-- total bytes
-- compatibility hints
+- staging 生命周期：列表、删除、过期清理
+- 收件预览：可导入、仅保存、不可导入原因
+- 导入确认：必须由用户或授权上层应用触发
+- 失败回滚：导入失败不能留下半套配置
+- 样例 bundle：session、skill、workspace、agent_profile
 
 主要风险：
 
@@ -78,29 +69,31 @@ permissions.json
 
 - 现有传输通道能发送一个 bundle
 - 接收端能预览、校验、拒绝、保存
-- 导入必须由上层应用显式触发
+- 导入必须由用户或授权上层应用显式触发
 - 默认不同步 token、密钥和隐私文件
 
-## 阶段 3：CCS/OpenNeko 本地桥
+## 阶段 3：本机 Local Bridge
 
-CCS 插件和 OpenNeko 不应该直接实现 NekoLink 网络协议，也不应该调用 NekoDrop 桌面端的内部函数。它们应该通过本机 local bridge 调用 NekoLink。
+本机应用不应该直接实现 NekoLink 网络协议，也不应该调用 NekoDrop 桌面端内部函数。它们应该通过本机 local bridge 请求 NekoLink 能力。
 
 推荐调用关系：
 
 ```text
-CCS / OpenNeko plugin
+local application
   -> local bridge API
   -> NekoLink session
   -> paired device
 ```
 
-local bridge 先只开放受控能力：
+仓库里已经有 `LocalBridgeRequest` / `LocalBridgeEvent` 模型、权限 scope 和内部只读 handler skeleton。下一阶段要补的是 runtime 和授权：
 
-- 查询可信设备
-- 发送 bundle
-- 接收 bundle 通知
-- 发起导入确认
-- 查看传输状态
+- localhost 或本机 IPC runtime
+- 授权请求和确认 UI
+- 授权码或短期 token
+- 持久化授权记录
+- bundle 发送入口
+- staged bundle 导入请求
+- transfer status 订阅
 
 暂不开放：
 
@@ -108,30 +101,23 @@ local bridge 先只开放受控能力：
 - 未确认自动导入
 - 默认读取全盘 workspace
 - 直接暴露 NekoDrop 内部路径
-- 插件绕过 NekoLink 自己连对方设备
-
-主要风险：
-
-- 本机 API 如果没有鉴权，本机任意进程都能借 NekoLink 发敏感数据
-- Agent 能力比文件互传风险更高，必须先限制 scope
-- UI 同意一次不能代表永久允许所有插件行为
-- bridge 如果绑定 NekoDrop 内部模型，后面 OpenNeko 会被桌面文件互传实现拖住
+- 本机应用绕过 NekoLink 自己连对方设备
 
 完成标准：
 
 - 本机调用有鉴权和权限 scope
-- 插件只能发送明确类型的 bundle
-- 收到 bundle 后先通知，再由上层确认导入
-- OpenNeko 不依赖 NekoDrop UI 或 Tauri 命令细节
+- 本机应用只能发送明确类型的 bundle
+- 收到 bundle 后先通知，再由用户或授权上层应用确认导入
+- local bridge 不绑定某一个第三方应用
 
 ## 阶段 4：iroh / relay / P2P
 
-iroh、relay、P2P 解决的是“不同网络怎么连”。它们不解决文件是否加密、bundle 是否安全、插件能不能乱调用的问题。所以它们应该排在加密文件流、bundle、local bridge 之后。
+iroh、relay、P2P 解决的是“不同网络怎么连”。它们不解决文件是否加密、bundle 是否安全、本机应用能不能乱调用的问题。所以它们应该排在加密文件流、bundle、local bridge 之后。
 
 正确接入方式是把 iroh 当成 NekoLink transport，而不是重写 NekoDrop 文件传输：
 
 ```text
-NekoDrop / OpenNeko
+NekoDrop / OpenNeko / other app
   -> NekoLink session
   -> NekoLink bundle or file stream
   -> TCP transport or iroh transport
@@ -178,10 +164,10 @@ NekoDrop / OpenNeko
 
 短期建议按这个顺序开分支：
 
-1. `security/encrypted-file-stream`
-2. `protocol/nekolink-bundle-manifest`
-3. `bridge/local-api-skeleton`
-4. `bridge/local-api-permissions`
+1. `security/streaming-encrypted-file-receive`
+2. `bundle/staging-import-lifecycle`
+3. `bridge/local-runtime-auth`
+4. `bridge/bundle-send-import-requests`
 5. `transport/iroh-spike`
 
 每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](STATUS.md)、[ROADMAP.md](ROADMAP.md) 和相关协议文档。
