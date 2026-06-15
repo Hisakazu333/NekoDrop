@@ -44,11 +44,12 @@ The secret seed stays local.
 
 The public key fingerprint is shown during pairing and used in trusted device records.
 
-Current V0.4 status:
+Current status:
 
 - desktop builds persist `device_identity.json` in the OS application data directory
 - connection codes include the receiver's public identity fields
-- this is the foundation for trusted pairing, not the final encrypted session implementation
+- this is the foundation for trusted pairing and current desktop identity checks
+- long-term asymmetric device identity keys are still pending
 
 The later trusted-pairing stage should replace or extend the seed-derived fingerprint with a real asymmetric identity key pair.
 
@@ -85,16 +86,22 @@ Store:
 
 ## Session Encryption
 
-MVP should use an authenticated key exchange between trusted devices before file transfer.
+Current desktop transfers have an encrypted session path:
 
-Recommended approach:
+- `session.hello` / `session.ready` perform an ephemeral X25519 handshake
+- HKDF-SHA256 derives per-direction traffic keys from the verified transcript
+- `file.offer`, `file.accept`, and `file.decline` are sealed inside encrypted `session.control`
+- encrypted control readers use a replay window
+- encrypted file frames protect file payloads on the encrypted session path
+- file-frame AAD binds transfer id, manifest path, offset, plain size, cipher, direction, counter, and nonce
 
-- use stored device identity keys to authenticate
-- derive an ephemeral session key per transfer
-- encrypt control messages after pairing
-- encrypt file chunks during transfer
+Remaining work:
 
-If implementation speed is more important for the first prototype, the earliest internal prototype may use plaintext on localhost/LAN, but it must be marked insecure and not treated as MVP-complete.
+- bind sessions to long-term authenticated device identity keys
+- replace the encrypted receive helper's full-file plaintext buffer with streaming decrypt
+- decide how and when to retire the plain compatibility transfer path
+
+Do not describe a transfer as fully authenticated just because it uses the current encrypted session path. It has confidentiality and integrity for encrypted frames, plus replay protection for encrypted control readers, but long-term device-key authentication is not complete.
 
 ## File Manifest Safety
 

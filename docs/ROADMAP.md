@@ -71,7 +71,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
-规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前只定义包格式和安全边界，还没有接入桌面发送、接收检测或导入流程。
+规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging 和手动创建入口；自动导出、导入确认和失败回滚还没有完成。
 
 候选包类型：
 
@@ -108,14 +108,14 @@ permissions.json
 - 接收端能预览、校验、拒绝、保存。
 - 导入行为必须由上层应用显式触发，不能收到就自动改本机配置。
 
-## 随后：CCS / OpenNeko Local Bridge
+## 随后：本机 Local Bridge
 
-目标：让 CCS 插件或 OpenNeko 通过本机服务调用 NekoLink，而不是插件直接实现网络协议。
+目标：让本机应用通过受控服务调用 NekoLink，而不是每个应用都自己实现网络协议。
 
 方向：
 
 ```text
-CCS / OpenNeko plugin
+local application
   -> local bridge API
   -> NekoLink session
   -> paired device
@@ -124,14 +124,14 @@ CCS / OpenNeko plugin
 本阶段要解决：
 
 - 本机 API 鉴权
-- 插件调用权限
+- 本机应用调用权限
 - bundle 发送入口
 - bundle 接收通知
 - 导入确认
 
 不做：
 
-- 插件绕过 NekoLink 直接连对方设备
+- 本机应用绕过 NekoLink 直接连对方设备
 - 未确认自动导入 session / skills
 - 把 token、密钥或隐私文件默认纳入同步
 

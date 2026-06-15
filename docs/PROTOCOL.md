@@ -22,21 +22,19 @@ Current implemented path:
 - TCP for transfer sessions
 - connection code contains host, port, and the receiver's public device identity
 - receiver opens an explicit one-shot receive listener
-- sender sends a `nekolink` Envelope with `file_offer` before any file bytes
-- receiver responds with `file_accept` or `file_decline` before file bytes are sent
-- receiver validates every incoming file header against the accepted offer
-- file contents are streamed as binary bytes and verified with SHA-256
-
-Planned LAN product path:
-
 - mDNS for discovery
-- UDP broadcast fallback for discovery if mDNS is unreliable
-- trusted pairing before device-to-device offers
+- trusted pairing before nearby-device sends
+- encrypted session handshake on the desktop send/receive path
+- `file.offer`, `file.accept`, and `file.decline` inside encrypted `session.control`
+- replay-window validation on encrypted control readers
+- encrypted file frames for the encrypted session payload path
+- SHA-256 verification after files are written
 
 Future:
 
-- QUIC for multiplexing, lower latency, and better interruption handling
-- relay transport for non-LAN transfers
+- streaming decrypt on the encrypted receive path
+- long-term identity keys for authenticated sessions
+- iroh / relay / P2P transports under the same session and file-frame semantics
 
 ## Device Advertisement
 
@@ -59,7 +57,7 @@ Discovery entries are not trusted by themselves. They only make devices visible.
 
 ## Device Identity
 
-Current V0.4 identity fields:
+Current identity fields:
 
 ```json
 {
@@ -74,8 +72,7 @@ Current V0.4 identity fields:
     "file_receive",
     "file_sha256",
     "device_pairing",
-    "encrypted_session",
-    "desktop_agent_host"
+    "encrypted_session"
   ]
 }
 ```
@@ -149,7 +146,7 @@ companion.state
 state.sync
 ```
 
-NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `session.hello`, `session.ready`, and `session.control`. Desktop file transfer now sends `file.offer`, `file.accept`, and `file.decline` inside encrypted `session.control` envelopes. File payload bytes still use the existing plaintext TCP stream.
+NekoDrop's current transfer path uses `device.hello`, `pairing.request`, `pairing.accept`, `pairing.reject`, `session.hello`, `session.ready`, and `session.control`. Desktop file transfer sends `file.offer`, `file.accept`, and `file.decline` inside encrypted `session.control` envelopes. On the encrypted session path, file payloads are sent as encrypted file frames. The older plain file-frame path remains for compatibility.
 
 ### DEVICE_HELLO
 
@@ -172,7 +169,7 @@ Reserved NekoLink identity handshake payload:
 
 ### session.hello
 
-Encrypted-session offer payload. Current desktop transfers use this handshake for encrypted control messages. File streams still use the existing plaintext TCP payload path.
+Encrypted-session offer payload. Current desktop transfers use this handshake for encrypted control messages and encrypted file frames.
 
 Current protocol labels are `x25519` for key agreement, with `xchacha20poly1305` preferred over `aes256gcm` when both peers support them. Unknown key-agreement and cipher labels are rejected by protocol validation.
 
@@ -217,7 +214,7 @@ Encrypted-session response payload. The responder selects a cipher offered by `s
 
 ### Session Key Material
 
-After `session.ready` is verified, the protocol crate can build a key derivation context from the transcript. Desktop transfers use these keys for encrypted control frames. File bytes do not use them yet.
+After `session.ready` is verified, the protocol crate can build a key derivation context from the transcript. Desktop transfers use these keys for encrypted control frames and encrypted file frames on the encrypted session path.
 
 Current derivation inputs:
 
@@ -232,13 +229,13 @@ send info: nekolink/<session_id>/<key_agreement>/<cipher>/<local_device_id>-><pe
 receive info: nekolink/<session_id>/<key_agreement>/<cipher>/<peer_device_id>-><local_device_id>
 ```
 
-The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` currently returns a send key and receive key; encrypted file-stream integration is not implemented yet.
+The same verified handshake produces mirrored directions on both peers: one side's `send_info` is the other side's `receive_info`. `SessionKeyDerivationContext::derive_key_material` returns a send key and receive key for encrypted control and file traffic.
 
 `SessionEphemeralKeyPair` can generate an X25519 ephemeral secret, expose the encoded public key for `session.hello` / `session.ready`, and derive the same 32-byte shared secret from the peer public key on both sides. The secret is not printed by the keypair Debug implementation.
 
 ### Session Traffic Frames
 
-The protocol crate defines traffic-frame counters and nonce inputs for encrypted control frames and future encrypted file frames. Desktop transfers use this for control frames. Replay-window enforcement still needs a follow-up implementation.
+The protocol crate defines traffic-frame counters and nonce inputs for encrypted control frames and encrypted file frames. Desktop transfers use this for encrypted session control and file payloads. Replay-window enforcement is wired into the encrypted offer/decision readers.
 
 ```text
 frame kinds: control, file
@@ -260,7 +257,7 @@ aes256gcm: 32-byte traffic key, 12-byte nonce
 associated data: caller-provided session/frame context bytes
 ```
 
-Tampered ciphertext or mismatched associated data fails to open. The desktop TCP path uses this API for transfer control messages. Replay-window handling and encrypted file streaming remain future work.
+Tampered ciphertext or mismatched associated data fails to open. The desktop TCP path uses this API for transfer control messages and encrypted file frames.
 
 ### session.control
 
@@ -280,9 +277,38 @@ Encrypted control envelope. The outer message kind is `session.control`; the enc
 }
 ```
 
-Associated data binds protocol name, version, session_id, message_id, outer kind, and inner kind. Moving the ciphertext to another envelope or changing the inner kind makes opening fail.
+Associated data binds protocol name, version, session_id, message_id, outer kind, and inner kind. Moving the ciphertext to another envelope or changing the inner kind makes opening fail. Replay-window validation rejects duplicate or out-of-window control counters.
 
 `nekodrop-network` exposes helper functions to write/read this encrypted `session.control` envelope over the existing length-prefixed TCP JSON frame format. It also has typed helpers for encrypted `file.offer`, `file.accept`, and `file.decline` control messages, including inner-kind checks on read. The desktop send/receive workflow uses this encrypted-control path before file bytes start.
+
+### Encrypted File Frames
+
+The encrypted session path sends file payloads as encrypted file frames. The
+outer TCP file header remains so the receiver can preserve resume and storage
+semantics. The payload following that header is encrypted in session traffic
+frames.
+
+Encrypted file frame AAD binds:
+
+```text
+transfer_id
+manifest_path
+offset
+plain_size
+traffic cipher
+traffic kind
+traffic direction
+traffic counter
+traffic nonce
+```
+
+Changing the transfer id, path, offset, size, direction, counter, nonce, or
+cipher makes decryption fail. SHA-256 still verifies the final file after it is
+written.
+
+Current limitation: the encrypted receive helper decrypts a complete single-file
+payload before handing it to storage. The next implementation step is streaming
+decrypt on receive so very large files do not require a full plaintext buffer.
 
 ## Pairing Messages
 
@@ -333,13 +359,13 @@ When accepted, both sides persist `trusted_devices.json`. The current pairing es
 
 NekoLink bundle is specified in [BUNDLE_SPEC.md](BUNDLE_SPEC.md). The current protocol does not yet define a dedicated `bundle.offer` message kind. The first implementation should carry bundle directories through the existing file transfer path, then detect and validate `bundle.json`, `checksums.json`, `permissions.json`, and `files/` after receive.
 
-Bundle import is not automatic. Receiving a valid bundle only creates a staged package for CCS/OpenNeko or another upper layer to inspect and import after explicit confirmation.
+Bundle import is not automatic. Receiving a valid bundle only creates a staged package for an upper layer to inspect and import after explicit confirmation.
 
 ## Transfer Messages
 
-### Current connection-code TCP v1
+### Connection-code TCP v1
 
-The current desktop build uses a compact TCP frame format with a NekoLink envelope before the full trusted-device protocol is introduced.
+The current desktop build uses a compact TCP frame format. The encrypted session path wraps offer/decision messages in `session.control` and sends file payload as encrypted file frames. The plain offer and raw-byte file path is kept as a compatibility path.
 
 Connection code:
 
@@ -394,7 +420,7 @@ Decision envelope:
 }
 ```
 
-After acceptance, the sender writes:
+On the plain compatibility path, after acceptance, the sender writes:
 
 ```text
 u32 file_count
@@ -405,6 +431,9 @@ repeated:
 ```
 
 Each `FileFrameHeader` includes `manifest_path`, `size`, and `sha256`. The receiver rejects mismatched path, size, SHA-256, or file count.
+
+On the encrypted session path, the sender writes the same file header shape, then
+encrypted file-frame payload bytes instead of raw file bytes.
 
 ### Target trusted-device messages
 
