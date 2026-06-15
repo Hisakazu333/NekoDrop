@@ -125,6 +125,7 @@ pub struct TransferDto {
     pub progress: f32,
     pub receive_dir: Option<String>,
     pub error_message: Option<String>,
+    pub security_mode: Option<String>,
     pub created_at_ms: u128,
     pub updated_at_ms: u128,
 }
@@ -1624,6 +1625,9 @@ pub fn start_receive_once(
                             record.peer_name = report.sender_device_name.clone();
                             record.target_host = Some(peer_host.clone());
                             record.receive_dir = Some(receive_dir_for_thread.display().to_string());
+                            record.security_mode = Some(
+                                transfer_security_mode_label(report.security_mode).to_string(),
+                            );
                             record.received_paths = report
                                 .files
                                 .iter()
@@ -3048,6 +3052,7 @@ fn transfer_to_dto(record: &TransferHistoryRecord) -> TransferDto {
         progress,
         receive_dir: record.receive_dir.clone(),
         error_message: record.error_message.clone(),
+        security_mode: record.security_mode.clone(),
         created_at_ms: record.created_at_ms,
         updated_at_ms: record.updated_at_ms,
     }
@@ -4243,6 +4248,28 @@ mod tests {
         assert_eq!(bundle.total_bytes, 28);
         assert_eq!(bundle.staging_path, "/tmp/bundle_1234567890");
         assert!(bundle.import_allowed);
+    }
+
+    #[test]
+    fn transfer_history_dto_exposes_optional_security_mode() {
+        let mut record = new_transfer_history_record(
+            "receive-a".to_string(),
+            "receive",
+            "completed",
+            "drop",
+            1,
+            10,
+            10,
+            20,
+        );
+        record.security_mode = Some("authenticated_encrypted_session".to_string());
+
+        let dto = transfer_to_dto(&record);
+
+        assert_eq!(
+            dto.security_mode.as_deref(),
+            Some("authenticated_encrypted_session")
+        );
     }
 
     #[test]

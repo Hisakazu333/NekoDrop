@@ -24,6 +24,8 @@ pub struct TransferHistoryRecord {
     pub source_paths: Vec<String>,
     #[serde(default)]
     pub received_paths: Vec<String>,
+    #[serde(default)]
+    pub security_mode: Option<String>,
     pub file_count: usize,
     pub total_bytes: u64,
     pub transferred_bytes: u64,
@@ -159,6 +161,7 @@ pub fn new_transfer_history_record(
         target_host: None,
         source_paths: Vec::new(),
         received_paths: Vec::new(),
+        security_mode: None,
         file_count,
         total_bytes,
         transferred_bytes,
@@ -253,5 +256,27 @@ mod tests {
         assert_eq!(records[0].id, "transfer-a");
         assert_eq!(records[0].status, "completed");
         assert_eq!(records[1].id, "transfer-b");
+    }
+
+    #[test]
+    fn transfer_history_record_can_store_optional_security_mode() {
+        let mut record = new_transfer_history_record(
+            "receive-a".to_string(),
+            "receive",
+            "completed",
+            "drop",
+            1,
+            10,
+            10,
+            20,
+        );
+        assert_eq!(record.security_mode, None);
+
+        record.security_mode = Some("authenticated_encrypted_session".to_string());
+
+        assert_eq!(
+            record.security_mode.as_deref(),
+            Some("authenticated_encrypted_session")
+        );
     }
 }

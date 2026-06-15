@@ -21,6 +21,11 @@ import {
 } from "./networkPermissionHints";
 import { pairingFailureAdvice } from "./pairingFailureAdvice";
 import {
+  buildTransferSecurityViewModel,
+  receiveSecuritySummaryLine,
+  type TransferSecurityViewModel
+} from "./securityState";
+import {
   shouldRunDiagnosticsRefresh,
   REALTIME_REFRESH_INTERVAL_MS,
   shouldRefreshDirectoryOnModeActivation,
@@ -2213,6 +2218,10 @@ function ReceivePanel({
   const receivedBundleSummary = receiveReport ? receiveBundleSummaryLine(receiveReport) : null;
   const receivedBundleStatus = receiveReport ? receiveBundleStatusLabel(receiveReport) : null;
   const receivedBundleHint = receivedBundle ? receiveBundleImportHint(receivedBundle) : null;
+  const receiveSecurity = receiveReport
+    ? buildTransferSecurityViewModel(receiveReport.security_mode)
+    : null;
+  const receiveSecuritySummary = receiveReport ? receiveSecuritySummaryLine(receiveReport) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
 
   return (
@@ -2371,6 +2380,12 @@ function ReceivePanel({
               {receiveReport.file_count} 个 · {receiveReport.files.every((file) => file.verified) ? "已校验" : "检查中"}
             </span>
           </div>
+          {receiveSecurity ? (
+            <div className="security-line">
+              <SecurityBadge model={receiveSecurity} />
+              {receiveSecuritySummary ? <span>{receiveSecuritySummary}</span> : null}
+            </div>
+          ) : null}
           {receivedBundleSummary ? (
             <div className="bundle-line">
               <span>{receivedBundleSummary}</span>
@@ -2620,6 +2635,7 @@ function HistoryPanel({
             const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
             const detail = buildTransferHistoryDetailViewModel(transfer);
             const fallbackActionLabel = transferFallbackActionLabel(transfer);
+            const security = buildTransferSecurityViewModel(transfer.security_mode);
             return (
               <div
                 className={[
@@ -2661,6 +2677,12 @@ function HistoryPanel({
                         ) : null}
                         {detail.locationLabel ? (
                           <span><strong>位置</strong>{detail.locationLabel}</span>
+                        ) : null}
+                        {security ? (
+                          <span>
+                            <strong>安全</strong>
+                            <SecurityBadge model={security} />
+                          </span>
                         ) : null}
                         {detail.recoveryLabel ? (
                           <span><strong>恢复</strong>{detail.recoveryLabel}</span>
@@ -2843,6 +2865,7 @@ function RecentActivity({
           const actionLabel = transferPrimaryActionLabel(transfer);
           const fallbackActionLabel = transferFallbackActionLabel(transfer);
           const detailLine = buildRecentTransferDetailLine(transfer);
+          const security = buildTransferSecurityViewModel(transfer.security_mode);
           return (
             <div
               className={[
@@ -2864,6 +2887,7 @@ function RecentActivity({
               {selected ? (
                 <div className="recent-detail">
                   {detailLine ? <strong>{detailLine}</strong> : null}
+                  {security ? <SecurityBadge model={security} /> : null}
                   {paths.slice(0, 3).map((path) => (
                     <span key={path} title={path}>{path}</span>
                   ))}
@@ -3033,6 +3057,14 @@ function TransferStatusView({
         {model.currentFileLabel ? <span title={model.currentFileLabel}>{model.currentFileLabel}</span> : null}
       </div>
     </div>
+  );
+}
+
+function SecurityBadge({ model }: { model: TransferSecurityViewModel }) {
+  return (
+    <span className={`security-badge is-${model.tone}`} title={model.detail}>
+      {model.label}
+    </span>
   );
 }
 

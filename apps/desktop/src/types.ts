@@ -109,6 +109,7 @@ export interface TransferDto {
   progress: number;
   receive_dir: string | null;
   error_message: string | null;
+  security_mode: TransferSecurityMode | null;
   created_at_ms: number;
   updated_at_ms: number;
 }
@@ -208,7 +209,7 @@ export interface ManualBundleCreateDto {
 export interface ReceiveReportDto {
   transfer_id: string;
   root_name: string;
-  security_mode: "legacy_plain" | "encrypted_session" | "authenticated_encrypted_session";
+  security_mode: TransferSecurityMode;
   sender_device_id: string | null;
   sender_device_name: string | null;
   sender_public_key_fingerprint: string | null;
@@ -216,6 +217,11 @@ export interface ReceiveReportDto {
   bundle: ReceivedBundleDto | null;
   files: ReceivedFileDto[];
 }
+
+export type TransferSecurityMode =
+  | "legacy_plain"
+  | "encrypted_session"
+  | "authenticated_encrypted_session";
 
 export interface PendingReceiveFileDto {
   manifest_path: string;

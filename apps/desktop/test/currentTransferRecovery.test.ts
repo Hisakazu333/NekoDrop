@@ -41,6 +41,7 @@ function transfer(overrides: Partial<TransferDto> = {}): TransferDto {
     progress: 0.6,
     receive_dir: null,
     error_message: "连接中断",
+    security_mode: null,
     created_at_ms: 1780000000000,
     updated_at_ms: 1780000001000,
     ...overrides
