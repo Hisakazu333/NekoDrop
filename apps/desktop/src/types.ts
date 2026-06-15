@@ -69,6 +69,7 @@ export interface LocalBridgeResponseDto {
   devices: TrustedDeviceDto[];
   staged_bundles: ReceivedBundleDto[];
   transfer_status: TransferStatusDto | null;
+  events: unknown[];
 }
 
 export interface LocalBridgeAuthorizationDto {

@@ -36,7 +36,7 @@ use nekodrop_storage::{
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
     BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeAuthorizationRequest,
-    LocalBridgeClientIdentity, LocalBridgePermissionScope, LocalBridgeRequest,
+    LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
     SignedSessionIdentityBinding,
 };
 use serde::{Deserialize, Serialize};
@@ -68,6 +68,7 @@ use crate::trusted_devices::{
 const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
 const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
+const LOCAL_BRIDGE_EVENT_QUEUE_LIMIT: usize = 256;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReceiveTrustContext {
@@ -355,6 +356,7 @@ pub struct LocalBridgeResponseDto {
     pub devices: Vec<TrustedDeviceDto>,
     pub staged_bundles: Vec<ReceivedBundleDto>,
     pub transfer_status: Option<TransferStatusDto>,
+    pub events: Vec<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -2686,12 +2688,18 @@ fn handle_local_bridge_request_with_runtime_at(
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+    let events = runtime
+        .events
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
     handle_validated_local_bridge_request_with_auth_at(
         request,
         trusted_devices,
         transfer_status,
         staging_root,
         &authorizations,
+        &events,
         now_ms,
     )
 }
@@ -2713,6 +2721,7 @@ fn handle_local_bridge_request_with_auth_at(
         transfer_status,
         staging_root,
         authorizations,
+        &[],
         now_ms,
     )
 }
@@ -2723,6 +2732,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
+    events: &[LocalBridgeEvent],
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
     match request {
@@ -2766,6 +2776,38 @@ fn handle_validated_local_bridge_request_with_auth_at(
                     "staged bundle not found",
                 )),
             }
+        }
+        LocalBridgeRequest::PollEvents(request) => {
+            let can_read_bundles = local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleRead,
+                now_ms,
+            );
+            let can_read_transfers = local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::TransferStatusRead,
+                now_ms,
+            );
+            if !can_read_bundles && !can_read_transfers {
+                return Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ));
+            }
+            let bridge_events = local_bridge_events_after(
+                events,
+                request.after_event_id.as_deref(),
+                request.limit.unwrap_or(50),
+                can_read_bundles,
+                can_read_transfers,
+            )?;
+            Ok(local_bridge_events_response(
+                request.request_id,
+                request.client,
+                bridge_events,
+            ))
         }
         LocalBridgeRequest::SendBundle(request) => {
             if local_bridge_client_has_scope(
@@ -2815,6 +2857,63 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 now_ms,
             ))
         }
+    }
+}
+
+fn push_local_bridge_runtime_event(
+    runtime: &LocalBridgeRuntimeState,
+    event: LocalBridgeEvent,
+) -> Result<(), String> {
+    event.validate().map_err(|error| error.message)?;
+    let mut events = runtime.events.lock().map_err(|error| error.to_string())?;
+    events.push(event);
+    if events.len() > LOCAL_BRIDGE_EVENT_QUEUE_LIMIT {
+        let excess = events.len() - LOCAL_BRIDGE_EVENT_QUEUE_LIMIT;
+        events.drain(0..excess);
+    }
+    Ok(())
+}
+
+fn local_bridge_events_after(
+    events: &[LocalBridgeEvent],
+    after_event_id: Option<&str>,
+    limit: usize,
+    can_read_bundles: bool,
+    can_read_transfers: bool,
+) -> Result<Vec<serde_json::Value>, String> {
+    let mut after_cursor = after_event_id.is_none();
+    let mut output = Vec::new();
+    for event in events {
+        if !after_cursor {
+            after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
+            continue;
+        }
+        if !local_bridge_event_is_allowed(event, can_read_bundles, can_read_transfers) {
+            continue;
+        }
+        output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
+        if output.len() >= limit {
+            break;
+        }
+    }
+    Ok(output)
+}
+
+fn local_bridge_event_id(event: &LocalBridgeEvent) -> &str {
+    match event {
+        LocalBridgeEvent::BundleReceived(event) => &event.event_id,
+        LocalBridgeEvent::TransferUpdated(event) => &event.event_id,
+    }
+}
+
+fn local_bridge_event_is_allowed(
+    event: &LocalBridgeEvent,
+    can_read_bundles: bool,
+    can_read_transfers: bool,
+) -> bool {
+    match event {
+        LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
+        LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
     }
 }
 
@@ -3083,6 +3182,7 @@ fn local_bridge_read_only_response(
         devices,
         staged_bundles,
         transfer_status,
+        events: Vec::new(),
     }
 }
 
@@ -3109,6 +3209,7 @@ fn local_bridge_read_only_unsupported_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        events: Vec::new(),
     }
 }
 
@@ -3134,6 +3235,7 @@ fn local_bridge_pending_confirmation_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        events: Vec::new(),
     }
 }
 
@@ -3160,6 +3262,34 @@ fn local_bridge_authorized_runtime_pending_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        events: Vec::new(),
+    }
+}
+
+fn local_bridge_events_response(
+    request_id: String,
+    client: Option<LocalBridgeClientIdentity>,
+    events: Vec<serde_json::Value>,
+) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(client);
+    LocalBridgeResponseDto {
+        request_id,
+        status: "ok".to_string(),
+        message: "local bridge event snapshot".to_string(),
+        security_state: "authorized".to_string(),
+        requires_user_confirmation: false,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
+        authorization_scopes: Vec::new(),
+        authorization_reason: None,
+        authorization_ttl_seconds: None,
+        authorization_code: None,
+        authorization_expires_at_ms: None,
+        devices: Vec::new(),
+        staged_bundles: Vec::new(),
+        transfer_status: None,
+        events,
     }
 }
 
@@ -3203,6 +3333,7 @@ fn local_bridge_pending_authorization_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        events: Vec::new(),
     }
 }
 
@@ -3238,6 +3369,7 @@ fn local_bridge_pending_authorization_response_from_pending(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        events: Vec::new(),
     }
 }
 
@@ -5020,7 +5152,7 @@ mod tests {
                 bundle_id: "bundle_1234567890".to_string(),
                 bundle_type: nekolink_protocol::BundleType::Skill,
                 display_name: "voice_transcribe".to_string(),
-                source_app: "OpenNeko".to_string(),
+                source_app: "Generic Agent App".to_string(),
                 file_count: 2,
                 total_bytes: 28,
                 staging_path: PathBuf::from("/tmp/bundle_1234567890"),
@@ -5035,7 +5167,7 @@ mod tests {
         assert_eq!(bundle.bundle_id, "bundle_1234567890");
         assert_eq!(bundle.bundle_type, "skill");
         assert_eq!(bundle.display_name, "voice_transcribe");
-        assert_eq!(bundle.source_app, "OpenNeko");
+        assert_eq!(bundle.source_app, "Generic Agent App");
         assert_eq!(bundle.file_count, 2);
         assert_eq!(bundle.total_bytes, 28);
         assert_eq!(bundle.staging_path, "/tmp/bundle_1234567890");
@@ -5277,9 +5409,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-request-status",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "transfer_id": null
             }
@@ -5289,10 +5421,10 @@ mod tests {
         let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
 
         assert_eq!(response.client_state, "identified");
-        assert_eq!(response.client_id.as_deref(), Some("openneko-desktop"));
+        assert_eq!(response.client_id.as_deref(), Some("local-agent-app"));
         assert_eq!(
             response.client_display_name.as_deref(),
-            Some("OpenNeko Desktop")
+            Some("Local Agent App")
         );
 
         fs::remove_dir_all(dir).unwrap();
@@ -5418,7 +5550,7 @@ mod tests {
         let dir = unique_bundle_temp_dir("local-bridge-authorized-import");
         let staging_root = dir.join("bundle_staging");
         let authorizations = vec![local_bridge_authorization(
-            "openneko-desktop",
+            "local-agent-app",
             &[LocalBridgePermissionScope::BundleImportRequest],
             1_000,
             2_000,
@@ -5428,9 +5560,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-request-import",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "staged_bundle_id": "bundle_1234567890",
                 "expected_bundle_type": "skill"
@@ -5461,7 +5593,7 @@ mod tests {
         let dir = unique_bundle_temp_dir("local-bridge-expired-auth");
         let staging_root = dir.join("bundle_staging");
         let authorizations = vec![local_bridge_authorization(
-            "openneko-desktop",
+            "local-agent-app",
             &[LocalBridgePermissionScope::BundleImportRequest],
             1_000,
             1_100,
@@ -5471,9 +5603,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-request-import",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "staged_bundle_id": "bundle_1234567890",
                 "expected_bundle_type": "skill"
@@ -5506,9 +5638,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-auth-1",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "requested_scopes": [
                     "device.read",
@@ -5527,7 +5659,7 @@ mod tests {
         assert_eq!(response.security_state, "requires_user_confirmation");
         assert!(response.requires_user_confirmation);
         assert_eq!(response.client_state, "identified");
-        assert_eq!(response.client_id.as_deref(), Some("openneko-desktop"));
+        assert_eq!(response.client_id.as_deref(), Some("local-agent-app"));
         assert_eq!(
             response.authorization_scopes,
             vec!["device.read".to_string(), "bundle.send".to_string()]
@@ -5558,9 +5690,9 @@ mod tests {
         let request = LocalBridgeAuthorizationRequest {
             request_id: "bridge-auth-1".to_string(),
             client: LocalBridgeClientIdentity {
-                client_id: "openneko-desktop".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             },
             requested_scopes: vec![
                 LocalBridgePermissionScope::DeviceRead,
@@ -5573,7 +5705,7 @@ mod tests {
         let pending = pending_local_bridge_authorization_from_request(&request, 1_000).unwrap();
 
         assert_eq!(pending.request_id, "bridge-auth-1");
-        assert_eq!(pending.client.client_id, "openneko-desktop");
+        assert_eq!(pending.client.client_id, "local-agent-app");
         assert_eq!(pending.requested_scopes, request.requested_scopes);
         assert_eq!(pending.expires_at_ms, 901_000);
         assert_eq!(pending.authorization_code.len(), 7);
@@ -5595,9 +5727,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-auth-runtime",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "requested_scopes": [
                     "bundle.send"
@@ -5626,7 +5758,7 @@ mod tests {
             .clone()
             .unwrap();
         assert_eq!(pending.request_id, "bridge-auth-runtime");
-        assert_eq!(pending.client.client_id, "openneko-desktop");
+        assert_eq!(pending.client.client_id, "local-agent-app");
         assert_eq!(
             response.authorization_code.as_deref(),
             Some(pending.authorization_code.as_str())
@@ -5645,9 +5777,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-auth-runtime",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "requested_scopes": [
                     "bundle.import.request"
@@ -5662,9 +5794,9 @@ mod tests {
             "payload": {
                 "request_id": "bridge-request-import",
                 "client": {
-                    "client_id": "openneko-desktop",
-                    "display_name": "OpenNeko Desktop",
-                    "app_kind": "openneko"
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
                 },
                 "staged_bundle_id": "bundle_1234567890",
                 "expected_bundle_type": "skill"
@@ -5697,12 +5829,209 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(authorization.client_id, "openneko-desktop");
+        assert_eq!(authorization.client_id, "local-agent-app");
         assert_eq!(response.status, "pending_runtime");
         assert_eq!(response.security_state, "authorized");
         assert!(!response.requires_user_confirmation);
         assert!(runtime.pending_authorization.lock().unwrap().is_none());
         assert_eq!(runtime.authorizations.lock().unwrap().len(), 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_client_can_poll_runtime_events() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-poll");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleRead],
+                1_000,
+                5_000,
+            ));
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::BundleReceived(
+                nekolink_protocol::LocalBridgeBundleReceivedEvent {
+                    event_id: "bridge-event-1".to_string(),
+                    transfer_id: "transfer-1".to_string(),
+                    bundle_id: "bundle_1234567890".to_string(),
+                    bundle_type: BundleType::Skill,
+                    display_name: "voice_transcribe".to_string(),
+                    source_app: "Generic Agent App".to_string(),
+                    file_count: 2,
+                    total_bytes: 28,
+                    import_allowed: true,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-1",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.security_state, "authorized");
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(
+            response.events[0]["payload"]["event_id"].as_str(),
+            Some("bridge-event-1")
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_returns_only_events_after_cursor() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-after");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            ));
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                    event_id: "bridge-event-1".to_string(),
+                    transfer_id: "transfer-1".to_string(),
+                    phase: nekolink_protocol::LocalBridgeTransferPhase::Sending,
+                    bytes_transferred: 10,
+                    total_bytes: 100,
+                },
+            ),
+        )
+        .unwrap();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                    event_id: "bridge-event-2".to_string(),
+                    transfer_id: "transfer-1".to_string(),
+                    phase: nekolink_protocol::LocalBridgeTransferPhase::Completed,
+                    bytes_transferred: 100,
+                    total_bytes: 100,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-2",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": "bridge-event-1",
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(
+            response.events[0]["payload"]["event_id"].as_str(),
+            Some("bridge-event-2")
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_requires_authorized_client_scope() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-auth");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::BundleReceived(
+                nekolink_protocol::LocalBridgeBundleReceivedEvent {
+                    event_id: "bridge-event-1".to_string(),
+                    transfer_id: "transfer-1".to_string(),
+                    bundle_id: "bundle_1234567890".to_string(),
+                    bundle_type: BundleType::Skill,
+                    display_name: "voice_transcribe".to_string(),
+                    source_app: "Generic Agent App".to_string(),
+                    file_count: 2,
+                    total_bytes: 28,
+                    import_allowed: true,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-auth",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_auth");
+        assert_eq!(response.security_state, "requires_user_confirmation");
+        assert!(response.events.is_empty());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -5845,9 +6174,9 @@ mod tests {
         let pending = PendingLocalBridgeAuthorization {
             request_id: "bridge-auth-1".to_string(),
             client: LocalBridgeClientIdentity {
-                client_id: "openneko-desktop".to_string(),
-                display_name: "OpenNeko Desktop".to_string(),
-                app_kind: Some("openneko".to_string()),
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
             },
             requested_scopes: vec![LocalBridgePermissionScope::BundleImportRequest],
             reason: "Import staged bundle".to_string(),
@@ -5859,7 +6188,7 @@ mod tests {
         let authorization =
             confirm_pending_local_bridge_authorization(&pending, "ABC-123", 2_000).unwrap();
 
-        assert_eq!(authorization.client_id, "openneko-desktop");
+        assert_eq!(authorization.client_id, "local-agent-app");
         assert_eq!(
             authorization.scopes,
             vec![LocalBridgePermissionScope::BundleImportRequest]
@@ -6178,8 +6507,8 @@ mod tests {
     ) -> LocalBridgeAuthorizationRecord {
         LocalBridgeAuthorizationRecord {
             client_id: client_id.to_string(),
-            display_name: "OpenNeko Desktop".to_string(),
-            app_kind: Some("openneko".to_string()),
+            display_name: "Local Agent App".to_string(),
+            app_kind: Some("agent".to_string()),
             scopes: scopes.to_vec(),
             granted_at_ms,
             expires_at_ms: Some(expires_at_ms),
@@ -6261,7 +6590,7 @@ mod tests {
             bundle_id: "bundle_1234567890".to_string(),
             bundle_type: BundleType::Skill,
             display_name: "voice_transcribe".to_string(),
-            source_app: "OpenNeko".to_string(),
+            source_app: "Generic Agent App".to_string(),
             created_at: "2026-06-14T10:30:00Z".to_string(),
             sender: BundleSender {
                 device_id: "neko-device-1234567890".to_string(),
@@ -6315,7 +6644,7 @@ mod tests {
         BundlePermissions {
             requested_scopes: vec![BundlePermissionScope::SkillInstall],
             writes: vec![BundleWritePermission {
-                target: "openneko.skills".to_string(),
+                target: "agent.skills".to_string(),
                 mode: BundleWriteMode::CreateOnly,
             }],
             secrets: BundleSecretsPolicy {
