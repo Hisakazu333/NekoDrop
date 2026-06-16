@@ -77,7 +77,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 }
 ```
 
-`client_id` 是本机应用自报身份，不是凭证。发送、导入这类动作必须先通过授权码确认，并且授权可以在设置页撤销。当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看和移除。内部 worker 可以取出 `bundle.send` 动作并做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。preflight 结果会进入最近结果记录，也会通过 `bundle.send.preflight` 事件返回给有 `bundle.send` 权限的本机应用；普通状态列表和事件都不返回本机 `bundle_root`。preflight 通过只表示可以进入桌面发送 worker，不代表文件已经发出。`bundle.import` 动作可以导入到 NekoDrop 本机导入区，并记录完成或失败；它不会直接写第三方应用目录。
+`client_id` 是本机应用自报身份，不是凭证。发送、导入这类动作必须先通过授权码确认，并且授权可以在设置页撤销。当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看和移除。内部 worker 可以取出 `bundle.send` 动作并做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。preflight 结果会进入最近结果记录，也会通过 `bundle.send.preflight` 事件返回给有 `bundle.send` 权限的本机应用；普通状态列表和事件都不返回本机 `bundle_root`。preflight 通过只表示可以进入桌面发送 worker，不代表文件已经发出。`bundle.import` 动作可以导入到 NekoDrop 本机导入区，并记录完成或失败；它不会直接写第三方应用目录。adapter 可以用 `actions.results` 轮询自己的动作结果，结果按 `client_id` 和授权 scope 过滤。
 
 ## 类型建议
 
