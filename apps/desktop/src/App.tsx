@@ -68,6 +68,8 @@ import type {
   LocalBridgePendingActionDto,
   LocalBridgePendingActionListDto,
   LocalBridgePendingActionRemoveDto,
+  LocalBridgePendingActionResultDto,
+  LocalBridgePendingActionResultListDto,
   LocalBridgePermissionScope,
   LocalBridgeResponseDto,
   LocalBridgeRuntimeStatusDto,
@@ -204,6 +206,7 @@ export function App() {
   const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
   const [localBridgeAuthorizations, setLocalBridgeAuthorizations] = useState<LocalBridgeAuthorizationDto[]>([]);
   const [localBridgePendingActions, setLocalBridgePendingActions] = useState<LocalBridgePendingActionDto[]>([]);
+  const [localBridgeActionResults, setLocalBridgeActionResults] = useState<LocalBridgePendingActionResultDto[]>([]);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
   const [mode, setMode] = useState<ComposerMode>("send");
@@ -281,6 +284,7 @@ export function App() {
     refreshLocalBridgeStatus().catch(() => undefined);
     refreshLocalBridgeAuthorizations().catch(() => undefined);
     refreshLocalBridgePendingActions().catch(() => undefined);
+    refreshLocalBridgeActionResults().catch(() => undefined);
     const slowRefreshTimer = window.setTimeout(() => {
       refreshReceiveState({ includeDiagnostics: true, includeDirectoryState: true }).catch(() => undefined);
     }, STARTUP_SLOW_REFRESH_DELAY_MS);
@@ -308,6 +312,11 @@ export function App() {
         includeDiagnostics: shouldRunDiagnosticsRefresh(Date.now(), lastDiagnosticsRefreshAt.current),
         includeDirectoryState: shouldRefreshDirectory
       }).catch(() => undefined);
+      if (mode === "settings") {
+        refreshLocalBridgeStatus().catch(() => undefined);
+        refreshLocalBridgePendingActions().catch(() => undefined);
+        refreshLocalBridgeActionResults().catch(() => undefined);
+      }
     }, REALTIME_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(timer);
   }, [hasActiveTransfer, mode]);
@@ -1021,6 +1030,11 @@ export function App() {
     setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
   }
 
+  async function refreshLocalBridgeActionResults() {
+    const response = await invokeCommand<LocalBridgePendingActionResultListDto>("list_local_bridge_pending_action_results");
+    setLocalBridgeActionResults((current) => keepIfEqual(current, response.results));
+  }
+
   async function removeLocalBridgePendingAction(action: LocalBridgePendingActionDto) {
     setBusy("open");
     setError(null);
@@ -1031,6 +1045,7 @@ export function App() {
       setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
       setLocalBridgeCheck(response.removed ? `已移除 ${localBridgePendingActionKindLabel(action.action_kind)}` : "没有找到待执行动作");
       await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
     } catch (nextError) {
       setLocalBridgeCheck("移除失败");
       setError(errorMessage(nextError));
@@ -1050,6 +1065,7 @@ export function App() {
       setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
       setLocalBridgeCheck(response.revoked ? `已撤销 ${authorization.display_name} · ${scope}` : "没有找到这条授权");
       await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
     } catch (nextError) {
       setLocalBridgeCheck("撤销失败");
       setError(errorMessage(nextError));
@@ -1066,6 +1082,7 @@ export function App() {
       setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
       setLocalBridgeCheck(response.pruned_count > 0 ? `已清理 ${response.pruned_count} 条过期授权` : "没有过期授权");
       await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
     } catch (nextError) {
       setLocalBridgeCheck("清理失败");
       setError(errorMessage(nextError));
@@ -1839,6 +1856,7 @@ export function App() {
                   discoveryStatus={discoveryStatus}
                   localBridgeAuthorizationCode={localBridgeAuthorizationCode}
                   localBridgeAuthorizations={localBridgeAuthorizations}
+                  localBridgeActionResults={localBridgeActionResults}
                   localBridgeCheck={localBridgeCheck}
                   localBridgePendingActions={localBridgePendingActions}
                   localBridgeStatus={localBridgeStatus}
@@ -2477,6 +2495,7 @@ function IntegrationSettings({
   busy,
   localBridgeAuthorizationCode,
   localBridgeAuthorizations,
+  localBridgeActionResults,
   localBridgeCheck,
   localBridgePendingActions,
   localBridgeStatus,
@@ -2490,6 +2509,7 @@ function IntegrationSettings({
   busy: BusyMode | null;
   localBridgeAuthorizationCode: string;
   localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
+  localBridgeActionResults: LocalBridgePendingActionResultDto[];
   localBridgeCheck: string | null;
   localBridgePendingActions: LocalBridgePendingActionDto[];
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
@@ -2536,6 +2556,13 @@ function IntegrationSettings({
       <SettingsRow label="权限范围">
         <SettingsValue>读取设备、发送资料包、查看传输、申请导入</SettingsValue>
       </SettingsRow>
+      <SettingsRow label="待授权">
+        <SettingsValue>
+          {localBridgeStatus?.pending_authorization_client
+            ? `${localBridgeStatus.pending_authorization_client} 正在等待授权码`
+            : "暂无待授权"}
+        </SettingsValue>
+      </SettingsRow>
       <SettingsRow label="待执行">
         <div className="local-bridge-auth-list">
           {localBridgePendingActions.length > 0 ? (
@@ -2558,6 +2585,21 @@ function IntegrationSettings({
             ))
           ) : (
             <div className="console-empty">暂无待执行</div>
+          )}
+        </div>
+      </SettingsRow>
+      <SettingsRow label="执行结果">
+        <div className="local-bridge-auth-list">
+          {localBridgeActionResults.length > 0 ? (
+            localBridgeActionResults.slice(0, 5).map((result) => (
+              <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
+                <span title={result.message}>
+                  {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                </span>
+              </div>
+            ))
+          ) : (
+            <div className="console-empty">暂无结果</div>
           )}
         </div>
       </SettingsRow>
@@ -2937,6 +2979,7 @@ function SettingsPanel({
   discoveryStatus,
   localBridgeAuthorizationCode,
   localBridgeAuthorizations,
+  localBridgeActionResults,
   localBridgeCheck,
   localBridgePendingActions,
   localBridgeStatus,
@@ -2966,6 +3009,7 @@ function SettingsPanel({
   discoveryStatus: DiscoveryStatusDto | null;
   localBridgeAuthorizationCode: string;
   localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
+  localBridgeActionResults: LocalBridgePendingActionResultDto[];
   localBridgeCheck: string | null;
   localBridgePendingActions: LocalBridgePendingActionDto[];
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
@@ -3109,6 +3153,7 @@ function SettingsPanel({
           busy={busy}
           localBridgeAuthorizationCode={localBridgeAuthorizationCode}
           localBridgeAuthorizations={localBridgeAuthorizations}
+          localBridgeActionResults={localBridgeActionResults}
           localBridgeCheck={localBridgeCheck}
           localBridgePendingActions={localBridgePendingActions}
           localBridgeStatus={localBridgeStatus}
@@ -3901,6 +3946,36 @@ function localBridgePendingActionSummary(action: LocalBridgePendingActionDto) {
 function localBridgePendingActionTitle(action: LocalBridgePendingActionDto) {
   const target = action.target_device_id ?? action.staged_bundle_id ?? action.request_id;
   return `${action.client_display_name} · ${localBridgePendingActionKindLabel(action.action_kind)} · ${target}`;
+}
+
+function localBridgeActionResultSummary(result: LocalBridgePendingActionResultDto) {
+  const kind = localBridgePendingActionKindLabel(result.action_kind);
+  const status = localBridgeActionResultStatusLabel(result.status);
+  const target = result.bundle_id ?? result.target_device_id ?? result.request_id;
+  const reason = result.reason ? ` · ${localBridgeActionResultReasonLabel(result.reason)}` : "";
+  return `${kind} · ${status}${reason} · ${target}`;
+}
+
+function localBridgeActionResultStatusLabel(status: string) {
+  if (status === "completed") return "完成";
+  if (status === "failed") return "失败";
+  if (status === "ready") return "可执行";
+  if (status === "failed_preflight") return "预检失败";
+  return status;
+}
+
+function localBridgeActionResultReasonLabel(reason: string) {
+  if (reason === "bundle_root_missing") return "来源不存在";
+  if (reason === "bundle_manifest_missing") return "缺少清单";
+  if (reason === "bundle_invalid") return "校验失败";
+  if (reason === "bundle_type_mismatch") return "类型不匹配";
+  if (reason === "trusted_target_required") return "需要可信设备";
+  if (reason === "trusted_target_missing") return "目标未配对";
+  if (reason === "target_device_required") return "缺少目标设备";
+  if (reason === "bundle_send_failed") return "发送失败";
+  if (reason === "bundle_import_failed") return "导入失败";
+  if (reason === "bundle_import_conflict") return "已存在同名导入";
+  return reason;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {

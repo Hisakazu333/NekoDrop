@@ -1992,9 +1992,14 @@ pub struct LocalBridgeTransferStatusRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgePollEventsRequest {
     pub request_id: String,
+    #[serde(default)]
     pub client: Option<LocalBridgeClientIdentity>,
+    #[serde(default)]
     pub after_event_id: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2156,6 +2161,14 @@ impl LocalBridgePollEventsRequest {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidPayload,
                     "event poll limit must be between 1 and 100",
+                ));
+            }
+        }
+        if let Some(timeout_ms) = self.timeout_ms {
+            if timeout_ms > 30_000 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "event poll timeout_ms must be between 0 and 30000",
                 ));
             }
         }
@@ -4968,6 +4981,7 @@ mod tests {
             }),
             after_event_id: Some("bridge-event-1".to_string()),
             limit: Some(10),
+            timeout_ms: Some(30_000),
         });
 
         request.validate().unwrap();
@@ -4977,6 +4991,7 @@ mod tests {
         assert_eq!(json["payload"]["request_id"], "bridge-events-1");
         assert_eq!(json["payload"]["after_event_id"], "bridge-event-1");
         assert_eq!(json["payload"]["limit"], 10);
+        assert_eq!(json["payload"]["timeout_ms"], 30_000);
         assert_eq!(
             serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
             request
