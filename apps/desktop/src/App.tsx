@@ -7,7 +7,8 @@ import {
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
   platformLabel as devicePlatformLabel,
-  selectedTrustedTargetCopy
+  selectedTrustedTargetCopy,
+  trustStateLabel
 } from "./deviceDisplay";
 import {
   currentTransferRecoveryActions,
@@ -111,6 +112,7 @@ type ComposerMode =
   | "transfers"
   | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
+type AppearanceMode = "light" | "dark";
 type TransferMetrics = {
   speedBytesPerSecond: number | null;
   etaSeconds: number | null;
@@ -120,20 +122,49 @@ const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }>
   { value: "always_ask", label: "询问" },
   { value: "block_all", label: "阻止" }
 ];
+const APPEARANCE_STORAGE_KEY = "nekodrop.appearance";
 
 const EMPTY_TRANSFER_METRICS = Object.freeze<TransferMetrics>({
   speedBytesPerSecond: null,
   etaSeconds: null
 });
 
-const NAV_ITEMS: Array<{ mode: ComposerMode; label: string; icon: IconName }> = [
-  { mode: "overview", label: "概览", icon: "overview" },
-  { mode: "send", label: "发送", icon: "send" },
-  { mode: "receive", label: "收件", icon: "inbox" },
-  { mode: "devices", label: "设备", icon: "devices" },
-  { mode: "transfers", label: "传输", icon: "clock" },
-  { mode: "settings", label: "设置", icon: "settings" }
+type DeviceCapability = "transfer" | "agent" | "state" | "link";
+
+const CAPABILITY_TABS: Array<{ id: DeviceCapability; label: string; lock?: string }> = [
+  { id: "transfer", label: "传输" },
+  { id: "agent", label: "Agent", lock: "V1.5" },
+  { id: "state", label: "状态", lock: "V1.4" },
+  { id: "link", label: "联机", lock: "规划" }
 ];
+
+const CAPABILITY_LOCKED_COPY: Record<
+  Exclude<DeviceCapability, "transfer">,
+  { title: string; body: string; tag: string }
+> = {
+  agent: {
+    title: "Agent 能力尚未接入",
+    body: "未来可让这台已信任设备执行跨设备 Agent 任务：发起指令、回传结果、调用文件流，高风险操作需本机确认。能力由对端协商，对方支持时这里才会出现。",
+    tag: "规划中 · V1.5"
+  },
+  state: {
+    title: "状态同步尚未接入",
+    body: "未来可与这台设备同步轻量状态（应用设置、任务状态等），离线可追平、冲突有明确策略，不静默覆盖。",
+    tag: "规划中 · V1.4 · NekoState"
+  },
+  link: {
+    title: "联机 / 虚拟局域网（规划）",
+    body: "这是 1:多 的能力，不是一次性传输——未来会引入「房间」概念：把多台可信设备组进一个虚拟局域网，显示成员、隧道状态与延迟。它会单独成一类对象，依赖 relay / P2P 通道。",
+    tag: "规划 · 依赖 relay / P2P"
+  }
+};
+
+function readInitialAppearance(): AppearanceMode {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+  return window.localStorage.getItem(APPEARANCE_STORAGE_KEY) === "dark" ? "dark" : "light";
+}
 
 export function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -168,12 +199,15 @@ export function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
+  const [capability, setCapability] = useState<DeviceCapability>("transfer");
+  const [sendMode, setSendMode] = useState<"file" | "bundle">("file");
   const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
   const [localBridgeAuthorizations, setLocalBridgeAuthorizations] = useState<LocalBridgeAuthorizationDto[]>([]);
   const [localBridgePendingActions, setLocalBridgePendingActions] = useState<LocalBridgePendingActionDto[]>([]);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
-  const [mode, setMode] = useState<ComposerMode>("overview");
+  const [mode, setMode] = useState<ComposerMode>("send");
+  const [appearance, setAppearance] = useState<AppearanceMode>(() => readInitialAppearance());
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
   const desktopRuntime = useMemo(() => isTauriRuntime(), []);
@@ -236,6 +270,11 @@ export function App() {
       : receiveStatus?.startsWith("接收失败")
         ? "接收失败"
         : "收件关闭";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = appearance;
+    window.localStorage.setItem(APPEARANCE_STORAGE_KEY, appearance);
+  }, [appearance]);
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
@@ -1226,58 +1265,158 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="NekoDrop">
-        <div className="sidebar-brand">
-          <div className="sidebar-mark" title="NekoDrop">
-            N
-          </div>
-          <div className="sidebar-identity">
-            <strong>NekoDrop</strong>
-            <span>{snapshot?.device_name ?? "这台电脑"}</span>
-          </div>
+      <header className="app-titlebar" data-tauri-drag-region>
+        <div className="titlebar-traffic-space" aria-hidden="true" />
+        <div className="titlebar-brand" data-tauri-drag-region>
+          <span className="titlebar-mark">
+            <Icon name="package" />
+          </span>
+          <strong>NekoDrop</strong>
         </div>
-
-        <nav className="sidebar-nav" aria-label="主导航">
-          {NAV_ITEMS.map((item) => (
-            <button
-              className={mode === item.mode ? "sidebar-item is-active" : "sidebar-item"}
-              key={item.mode}
-              onClick={() => setMode(item.mode)}
-              type="button"
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="sidebar-status">
-            <span className={discoveryCopy.isError ? "status-pill is-error" : "status-pill"}>
-              {discoveryCopy.label}
-            </span>
-            {snapshot ? (
-              <span className="device-pill" title={snapshot.device_identity.public_key_fingerprint}>
-                {platformLabel(snapshot.device_identity.platform)}
-              </span>
-            ) : null}
-            <button
-              className={receiveSession ? "receive-pill is-on" : "receive-pill"}
-              onClick={() => setMode("receive")}
-              type="button"
-            >
-              {receiveState}
-            </button>
-          </div>
+        <div className="titlebar-actions">
           <button
-            className="sidebar-folder"
-            disabled={busy === "open"}
-            onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
-            title="打开接收目录"
+            className={receiveSession ? "titlebar-receive is-on" : "titlebar-receive"}
+            disabled={busy === "receive"}
+            onClick={() => {
+              if (receiveSession) {
+                setMode("receive");
+                return;
+              }
+              startReceive();
+            }}
             type="button"
           >
-            <Icon name="folder" />
-            <span>接收目录</span>
+            <span className="titlebar-receive-led" />
+            {receiveSession ? "收件开启" : "开启收件"}
+          </button>
+          <button
+            className={mode === "transfers" ? "titlebar-icon is-active" : "titlebar-icon"}
+            onClick={() => setMode("transfers")}
+            title="传输历史"
+            type="button"
+          >
+            <Icon name="clock" />
+          </button>
+          <button
+            className="titlebar-icon"
+            onClick={() => setAppearance((current) => (current === "dark" ? "light" : "dark"))}
+            title={appearance === "dark" ? "切换浅色" : "切换深色"}
+            type="button"
+          >
+            <Icon name="appearance" />
+          </button>
+          <button
+            className={mode === "settings" ? "titlebar-icon is-active" : "titlebar-icon"}
+            onClick={() => setMode("settings")}
+            title="设置"
+            type="button"
+          >
+            <Icon name="settings" />
+          </button>
+        </div>
+      </header>
+
+      <div className="shell-body">
+      <aside className="device-rail" aria-label="设备">
+        <div className="rail-scroll">
+          <div className="rail-label is-first">
+            <span>这台电脑</span>
+          </div>
+          <div className="rail-self">
+            <span className="rail-self-dot" />
+            <div className="rail-self-main">
+              <strong>{snapshot?.device_name ?? "这台电脑"}</strong>
+              <small>{snapshot ? `${platformLabel(snapshot.device_identity.platform)} · 已验证身份` : "本机"}</small>
+            </div>
+          </div>
+
+          <div className="rail-label">
+            <span>可信设备</span>
+            <span className="rail-count">{trustedDevices.length}</span>
+          </div>
+          {trustedDevices.length > 0 ? (
+            trustedDevices.map((device) => {
+              const online = nearbyDevices.some((nearby) => nearby.id === device.device_id);
+              const selected = selectedDeviceId === device.device_id;
+              return (
+                <button
+                  className={selected ? "rail-dev is-selected" : "rail-dev"}
+                  key={device.device_id}
+                  onClick={() => {
+                    const target = trustedDeviceToDeviceDto(device);
+                    setSelectedDeviceId(target.id);
+                    setSelectedDeviceSnapshot(target);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setMode("send");
+                    setError(null);
+                  }}
+                  type="button"
+                >
+                  <span className={online ? "rail-dev-dot is-online" : "rail-dev-dot"} />
+                  <span className="rail-dev-main">
+                    <strong>{device.device_name}</strong>
+                    <small>{`${platformLabel(device.platform)} · ${online ? "在线" : "离线"}`}</small>
+                  </span>
+                  <Icon name="shield" className="rail-dev-trust" />
+                </button>
+              );
+            })
+          ) : (
+            <div className="rail-empty">暂无可信设备</div>
+          )}
+
+          <div className="rail-label">
+            <span>附近设备</span>
+            <span className="rail-count">{nearbyDevices.length}</span>
+          </div>
+          {nearbyDevices.length > 0 ? (
+            nearbyDevices.map((device) => {
+              const trusted = isTrustedDeviceState(device.trust_state);
+              const selected = selectedDeviceId === device.id;
+              return (
+                <button
+                  className={selected ? "rail-dev is-selected" : "rail-dev"}
+                  key={device.id}
+                  onClick={() => {
+                    if (!trusted) {
+                      requestPairing(device);
+                      return;
+                    }
+                    setSelectedDeviceId(device.id);
+                    setSelectedDeviceSnapshot(device);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setMode("send");
+                    setError(null);
+                  }}
+                  type="button"
+                >
+                  <span className="rail-dev-dot is-online" />
+                  <span className="rail-dev-main">
+                    <strong>{device.name}</strong>
+                    <small>
+                      {`${devicePlatformLabel(device.platform)} · ${trusted ? "已信任" : "待配对"}`}
+                      {device.pairing_code ? ` · ${device.pairing_code}` : ""}
+                    </small>
+                  </span>
+                  {trusted ? null : <span className="rail-dev-pair">配对</span>}
+                </button>
+              );
+            })
+          ) : (
+            <div className="rail-empty">{discoveryCopy.label}</div>
+          )}
+        </div>
+
+        <div className="rail-foot">
+          <button
+            className={connectionCodeOpen ? "rail-code is-active" : "rail-code"}
+            onClick={openFallbackCode}
+            type="button"
+          >
+            <Icon name="link" />
+            <span>用连接码连接</span>
           </button>
         </div>
       </aside>
@@ -1355,110 +1494,171 @@ export function App() {
 
           {mode === "send" ? (
             <div className="send-page">
-              <header className="send-hero">
-                <h1 className="send-hero-title">{pageTitle}</h1>
-                <p className="send-hero-subtitle">
-                  {transferPaths.length > 0
-                    ? composerSubtitle
-                    : desktopRuntime
-                      ? dragDropReady
-                        ? "拖入文件或文件夹，或点击投放区 / 下方按钮选择"
-                        : "正在初始化拖放，请先用下方按钮选择文件"
-                      : "当前是浏览器预览，拖放和系统文件选择不可用，请用 npm --workspace apps/desktop run tauri:dev 启动桌面端"}
-                </p>
+              <header className="dw-header">
+                <div className="dw-avatar">
+                  <Icon name="devices" />
+                  <span className={selectedTrustedOnline || selectedDevice ? "dw-led is-online" : "dw-led"} />
+                </div>
+                <div className="dw-id">
+                  <div className="dw-name">
+                    <strong>
+                      {selectedDevice?.name ??
+                        selectedTrustedRecord?.device_name ??
+                        (trimmedConnectionCode ? "备用码连接" : "发送文件")}
+                    </strong>
+                    {selectedTrustedRecord ? (
+                      <span className="dw-badge is-ok">{selectedTrustedOnline ? "在线 · 已信任" : "离线 · 已信任"}</span>
+                    ) : selectedDevice ? (
+                      <span className="dw-badge is-ok">在线</span>
+                    ) : trimmedConnectionCode ? (
+                      <span className="dw-badge">连接码</span>
+                    ) : (
+                      <span className="dw-badge">从左侧选择设备，或拖入文件</span>
+                    )}
+                  </div>
+                  <div className="dw-meta">
+                    {(selectedDevice?.platform ?? selectedTrustedRecord?.platform) ? (
+                      <span>{platformLabel((selectedDevice?.platform ?? selectedTrustedRecord?.platform)!)}</span>
+                    ) : null}
+                    {(selectedDevice?.host ?? selectedTrustedRecord?.host) ? (
+                      <span className="is-mono">
+                        {(selectedDevice?.host ?? selectedTrustedRecord?.host)}
+                        {(selectedDevice?.port ?? selectedTrustedRecord?.port) ? `:${selectedDevice?.port ?? selectedTrustedRecord?.port}` : ""}
+                      </span>
+                    ) : null}
+                    {(selectedDevice?.public_key_fingerprint ?? selectedTrustedRecord?.public_key_fingerprint) ? (
+                      <span className="is-mono" title={(selectedDevice?.public_key_fingerprint ?? selectedTrustedRecord?.public_key_fingerprint)!}>
+                        指纹 {(selectedDevice?.public_key_fingerprint ?? selectedTrustedRecord?.public_key_fingerprint)!.slice(0, 17)}…
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                {selectedTrustedRecord ? (
+                  <button className="dw-forget" disabled={busy === "forget"} onClick={() => forgetTrustedDevice(selectedTrustedRecord)} type="button">
+                    忘记设备
+                  </button>
+                ) : null}
               </header>
 
-              <section className={dragActive ? "composer is-dragging" : "composer"}>
-                <button
-                  className="composer-dropzone"
-                  disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
-                  onClick={() => {
-                    void pickFiles();
-                  }}
-                  type="button"
-                >
-                  <Icon className="icon-drop" name="upload" />
-                  <div className="composer-copy">
-                    <strong>{composerTitle}</strong>
-                    <span>
-                      {plan
-                        ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
-                        : transferPaths.length > 0
-                          ? composerSubtitle
-                          : busy === "scan"
-                            ? "正在扫描文件…"
-                            : desktopRuntime
-                              ? "点击选择，或拖入文件 / 文件夹"
-                              : "浏览器预览不支持拖放"}
-                    </span>
-                  </div>
-                </button>
-                {connectionCodeOpen ? (
-                  <textarea
-                    className="composer-code"
-                    value={connectionCode}
-                    onChange={(event) => {
-                      setConnectionCode(event.target.value);
-                      setSelectedDeviceId(null);
-                      setSelectedDeviceSnapshot(null);
-                    }}
-                    aria-label="对方连接码或地址"
-                    placeholder="连接码或 IP:端口"
-                  />
-                ) : null}
-              </section>
+              <nav className="dw-tabs" role="tablist" aria-label="设备能力">
+                {CAPABILITY_TABS.map((item) => (
+                  <button
+                    aria-selected={capability === item.id}
+                    className={capability === item.id ? "dw-tab is-active" : "dw-tab"}
+                    key={item.id}
+                    onClick={() => setCapability(item.id)}
+                    role="tab"
+                    type="button"
+                  >
+                    {item.label}
+                    {item.lock ? <span className="dw-tab-lock">{item.lock}</span> : null}
+                  </button>
+                ))}
+              </nav>
 
-              <div className="composer-pills">
+              {capability !== "transfer" ? (
+                <CapabilityLocked capability={capability} />
+              ) : (
+              <>
+              <div className="send-modes" role="tablist" aria-label="发送类型">
                 <button
-                  className="action-pill"
-                  disabled={busy === "pick-files"}
-                  onClick={pickFiles}
+                  className={sendMode === "file" ? "send-mode is-active" : "send-mode"}
+                  onClick={() => setSendMode("file")}
                   type="button"
                 >
-                  选文件
+                  <Icon name="file" />
+                  文件 / 文件夹
                 </button>
                 <button
-                  className="action-pill"
-                  disabled={busy === "pick-folders"}
-                  onClick={pickFolders}
+                  className={sendMode === "bundle" ? "send-mode is-active is-bundle" : "send-mode"}
+                  onClick={() => setSendMode("bundle")}
                   type="button"
                 >
-                  选文件夹
-                </button>
-                <button
-                  className={connectionCodeOpen ? "action-pill is-active" : "action-pill"}
-                  onClick={() => {
-                    setConnectionCodeOpen((open) => !open);
-                    setSelectedDeviceId(null);
-                    setSelectedDeviceSnapshot(null);
-                  }}
-                  type="button"
-                >
-                  连接码
-                </button>
-                <button
-                  className="action-pill"
-                  disabled={transferPaths.length === 0}
-                  onClick={clearQueue}
-                  type="button"
-                >
-                  清空
+                  <Icon name="package" />
+                  资料包
                 </button>
               </div>
 
-              <ManualBundleComposer
-                busy={busy}
-                createdManualBundle={createdManualBundle}
-                manualBundleDisplayName={manualBundleDisplayName}
-                manualBundleSourceApp={manualBundleSourceApp}
-                manualBundleSourcePath={manualBundleSourcePath}
-                manualBundleType={manualBundleType}
-                setManualBundleDisplayName={setManualBundleDisplayName}
-                setManualBundleSourceApp={setManualBundleSourceApp}
-                setManualBundleType={setManualBundleType}
-                onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
-                onCreateManualBundle={createManualBundleForSend}
-              />
+              {sendMode === "file" ? (
+                <>
+                  <section className={dragActive ? "composer is-dragging" : "composer"}>
+                    <button
+                      className="composer-dropzone"
+                      disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
+                      onClick={() => {
+                        void pickFiles();
+                      }}
+                      type="button"
+                    >
+                      <Icon className="icon-drop" name="upload" />
+                      <div className="composer-copy">
+                        <strong>{composerTitle}</strong>
+                        <span>
+                          {plan
+                            ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
+                            : transferPaths.length > 0
+                              ? composerSubtitle
+                              : busy === "scan"
+                                ? "正在扫描文件…"
+                                : desktopRuntime
+                                  ? "点击选择，或拖入文件 / 文件夹"
+                                  : "浏览器预览不支持拖放"}
+                        </span>
+                      </div>
+                    </button>
+                    {connectionCodeOpen ? (
+                      <textarea
+                        className="composer-code"
+                        value={connectionCode}
+                        onChange={(event) => {
+                          setConnectionCode(event.target.value);
+                          setSelectedDeviceId(null);
+                          setSelectedDeviceSnapshot(null);
+                        }}
+                        aria-label="对方连接码或地址"
+                        placeholder="连接码或 IP:端口"
+                      />
+                    ) : null}
+                  </section>
+
+                  <div className="composer-pills">
+                    <button className="action-pill" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
+                      选文件
+                    </button>
+                    <button className="action-pill" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
+                      选文件夹
+                    </button>
+                    <button
+                      className={connectionCodeOpen ? "action-pill is-active" : "action-pill"}
+                      onClick={() => {
+                        setConnectionCodeOpen((open) => !open);
+                        setSelectedDeviceId(null);
+                        setSelectedDeviceSnapshot(null);
+                      }}
+                      type="button"
+                    >
+                      连接码
+                    </button>
+                    <button className="action-pill" disabled={transferPaths.length === 0} onClick={clearQueue} type="button">
+                      清空
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <ManualBundleComposer
+                  busy={busy}
+                  createdManualBundle={createdManualBundle}
+                  manualBundleDisplayName={manualBundleDisplayName}
+                  manualBundleSourceApp={manualBundleSourceApp}
+                  manualBundleSourcePath={manualBundleSourcePath}
+                  manualBundleType={manualBundleType}
+                  setManualBundleDisplayName={setManualBundleDisplayName}
+                  setManualBundleSourceApp={setManualBundleSourceApp}
+                  setManualBundleType={setManualBundleType}
+                  onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
+                  onCreateManualBundle={createManualBundleForSend}
+                />
+              )}
 
               <div className="send-bar">
                 <div className="send-bar-target">
@@ -1511,21 +1711,24 @@ export function App() {
                 />
               ) : null}
 
-              <NearbyDevices
+              <div className="dw-section-head">最近传输</div>
+              <RecentActivity
                 busy={busy}
-                discoveryStatus={discoveryStatus}
-                devices={nearbyDevices}
-                localPlatform={localPlatform}
-                selectedDeviceId={selectedDeviceId}
-                onSelectDevice={(device) => {
-                  setSelectedDeviceId(device.id);
-                  setSelectedDeviceSnapshot(device);
-                  setConnectionCodeOpen(false);
-                  setConnectionCode("");
-                  setError(null);
-                }}
-                onTrustDevice={requestPairing}
+                compact
+                selectedTransferId={selectedTransferId}
+                transfers={transfers}
+                onClearTransfers={clearTransferHistory}
+                onDeleteTransfer={deleteTransfer}
+                onOpenTransfer={openTransferLocation}
+                onResendTransfer={resendTransfer}
+                onSelectTransfer={(transfer) =>
+                  setSelectedTransferId((current) => (current === transfer.id ? null : transfer.id))
+                }
+                onUseFallbackCode={openFallbackCode}
               />
+
+              </>
+              )}
             </div>
           ) : (
             <div className="page-stack">
@@ -1561,19 +1764,13 @@ export function App() {
 
               {mode === "receive" ? (
                 <ReceivePanel
-                  bindPort={bindPort}
                   busy={busy}
                   diagnostics={receiveDiagnostics}
-                  receiveDir={receiveDir}
-                  receivePolicy={receivePolicy}
                   pendingOffer={pendingReceiveOffer}
                   pendingPairingRequest={pendingPairingRequest}
                   receiveReport={receiveReport}
                   receiveSession={receiveSession}
                   stagedBundles={stagedBundles}
-                  setBindPort={setBindPort}
-                  setReceiveDir={setReceiveDir}
-                  onChooseReceiveDir={chooseReceiveDir}
                   onCopyConnectionCode={copyConnectionCode}
                   onOpenPath={openPath}
                   onRespondReceiveOffer={respondReceiveOffer}
@@ -1582,7 +1779,6 @@ export function App() {
                   onStopReceive={stopReceive}
                   onDeleteStagedBundle={deleteCurrentStagedBundle}
                   onImportStagedBundle={importCurrentStagedBundle}
-                  onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
 
@@ -1672,11 +1868,13 @@ export function App() {
         </section>
         </div>
       </section>
+      </div>
     </main>
   );
 }
 
 type IconName =
+  | "appearance"
   | "arrow-up"
   | "clock"
   | "devices"
@@ -1690,12 +1888,29 @@ type IconName =
   | "plug"
   | "settings"
   | "send"
+  | "shield"
   | "trash"
   | "upload";
+
+function CapabilityLocked({ capability }: { capability: Exclude<DeviceCapability, "transfer"> }) {
+  const copy = CAPABILITY_LOCKED_COPY[capability];
+  const icon: IconName = capability === "agent" ? "plug" : capability === "state" ? "package" : "link";
+  return (
+    <div className="capability-locked">
+      <div className="capability-locked-icon">
+        <Icon name={icon} />
+      </div>
+      <strong>{copy.title}</strong>
+      <p>{copy.body}</p>
+      <span className="capability-locked-tag">{copy.tag}</span>
+    </div>
+  );
+}
 
 function Icon({ className, name }: { className?: string; name: IconName }) {
   return (
     <svg aria-hidden="true" className={className ? `icon ${className}` : "icon"} fill="none" viewBox="0 0 24 24">
+      {name === "appearance" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
       {name === "clock" ? <path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /> : null}
       {name === "devices" ? <path d="M7 8a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 13a7 7 0 0 1 14 0M17 11a3 3 0 0 1 0 6m3-8a6 6 0 0 1 0 10" /> : null}
@@ -1707,8 +1922,14 @@ function Icon({ className, name }: { className?: string; name: IconName }) {
       {name === "overview" ? <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 13h7v6H4v-6Zm9-2h7v8h-7v-8Z" /> : null}
       {name === "package" ? <path d="m4 7 8-4 8 4-8 4-8-4Zm0 0v10l8 4m0-10v10m0-10 8-4m0 0v10l-8 4" /> : null}
       {name === "plug" ? <path d="M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Zm5 10v4" /> : null}
-      {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
+      {name === "settings" ? (
+        <>
+          <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2.05 2.05 0 1 1-2.9 2.9l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2.05 2.05 0 0 1-4.1 0v-.1A1.7 1.7 0 0 0 8.1 19.2a1.7 1.7 0 0 0-1.88.34l-.06.06a2.05 2.05 0 1 1-2.9-2.9l.06-.06A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2a2.05 2.05 0 0 1 0-4.1h.1A1.7 1.7 0 0 0 3.8 8.1a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2.05 2.05 0 1 1 2.9-2.9l.06.06A1.7 1.7 0 0 0 8.1 3.8a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2a2.05 2.05 0 0 1 4.1 0v.1A1.7 1.7 0 0 0 15 3.8a1.7 1.7 0 0 0 1.88-.34l.06-.06a2.05 2.05 0 1 1 2.9 2.9l-.06.06A1.7 1.7 0 0 0 19.4 8c.08.36.28.7.6 1 .3.27.7.43 1.1.43h.1a2.05 2.05 0 0 1 0 4.1h-.1a1.7 1.7 0 0 0-1.7 1.47Z" />
+        </>
+      ) : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
+      {name === "shield" ? <path d="M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Zm-3 9 2 2 4-4" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
       {name === "upload" ? <path d="M12 16V6m0 0 5 5m-5-5-5 5M4 18h16" /> : null}
     </svg>
@@ -1897,24 +2118,40 @@ function DevicePanel({
   onSelectTrustedDevice: (device: TrustedDeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
+  const selectedNearby = nearbyDevices.find((device) => device.id === selectedDeviceId) ?? null;
+  const selectedTrusted =
+    trustedDevices.find((device) => device.device_id === selectedDeviceId) ?? null;
+  const hasSelection = Boolean(selectedNearby || selectedTrusted);
+  const selectedOnline = selectedTrusted
+    ? nearbyDevices.some((nearby) => nearby.id === selectedTrusted.device_id)
+    : true;
+  const selectedName = selectedTrusted?.device_name ?? selectedNearby?.name ?? "";
+  const selectedPlatform = selectedTrusted?.platform ?? selectedNearby?.platform ?? null;
+  const selectedFingerprint =
+    selectedTrusted?.public_key_fingerprint ?? selectedNearby?.public_key_fingerprint ?? null;
+  const selectedHost = selectedTrusted?.host ?? selectedNearby?.host ?? null;
+  const selectedPort = selectedTrusted?.port ?? selectedNearby?.port ?? null;
+  const selectedTrustLabel = selectedTrusted
+    ? "已信任"
+    : selectedNearby
+      ? trustStateLabel(selectedNearby.trust_state)
+      : "—";
 
   return (
     <section className="device-panel">
-      <div className="device-overview">
-        <div>
-          <strong>{trustedDevices.length}</strong>
-          <span>可信设备</span>
-        </div>
-        <div className={discoveryCopy.isError ? "is-warning" : undefined}>
-          <strong>{nearbyDevices.length > 0 ? nearbyDevices.length : discoveryCopy.label}</strong>
-          <span>{nearbyDevices.length > 0 ? "附近在线" : discoveryCopy.targetLabel}</span>
-        </div>
-      </div>
+      <NearbyDevices
+        busy={busy}
+        discoveryStatus={discoveryStatus}
+        devices={nearbyDevices}
+        localPlatform={localPlatform}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={onSelectNearbyDevice}
+        onTrustDevice={onTrustDevice}
+      />
 
       <section className="trusted-strip">
         <div className="section-head">
-          <strong>已信任</strong>
+          <strong>已信任设备</strong>
           <span>{trustedDevices.length > 0 ? "可直接发送" : "未配对"}</span>
         </div>
 
@@ -1952,15 +2189,53 @@ function DevicePanel({
         )}
       </section>
 
-      <NearbyDevices
-        busy={busy}
-        discoveryStatus={discoveryStatus}
-        devices={nearbyDevices}
-        localPlatform={localPlatform}
-        selectedDeviceId={selectedDeviceId}
-        onSelectDevice={onSelectNearbyDevice}
-        onTrustDevice={onTrustDevice}
-      />
+      {hasSelection ? (
+        <section className="device-detail">
+          <div className="section-head">
+            <strong title={selectedName}>{selectedName}</strong>
+            <span>{selectedOnline ? "在线" : "离线"} · {selectedTrustLabel}</span>
+          </div>
+          <div className="device-detail-rows">
+            <div className="device-detail-row">
+              <span>平台</span>
+              <strong>{selectedPlatform ? devicePlatformLabel(selectedPlatform) : "—"}</strong>
+            </div>
+            <div className="device-detail-row">
+              <span>地址</span>
+              <strong className="is-mono">{selectedHost && selectedPort ? `${selectedHost}:${selectedPort}` : "—"}</strong>
+            </div>
+            <div className="device-detail-row">
+              <span>指纹</span>
+              <strong className="is-mono" title={selectedFingerprint ?? undefined}>{selectedFingerprint ?? "—"}</strong>
+            </div>
+            <div className="device-detail-row">
+              <span>能力</span>
+              <strong>文件传输 · 资料包</strong>
+            </div>
+          </div>
+          <div className="device-detail-actions">
+            {selectedTrusted ? (
+              <>
+                <button className="primary-button" onClick={() => onSelectTrustedDevice(selectedTrusted)} type="button">
+                  发送到此设备
+                </button>
+                <button className="text-button" disabled={busy === "forget"} onClick={() => onForgetTrustedDevice(selectedTrusted)} type="button">
+                  忘记设备
+                </button>
+              </>
+            ) : selectedNearby ? (
+              <>
+                <button className="primary-button" onClick={() => onSelectNearbyDevice(selectedNearby)} type="button">
+                  发送到此设备
+                </button>
+                <button className="tool-button" onClick={() => onTrustDevice(selectedNearby)} type="button">
+                  配对
+                </button>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -2402,19 +2677,13 @@ function SettingsFacts({
 }
 
 function ReceivePanel({
-  bindPort,
   busy,
   diagnostics,
-  receiveDir,
-  receivePolicy,
   pendingOffer,
   pendingPairingRequest,
   receiveReport,
   receiveSession,
   stagedBundles,
-  setBindPort,
-  setReceiveDir,
-  onChooseReceiveDir,
   onCopyConnectionCode,
   onOpenPath,
   onDeleteStagedBundle,
@@ -2422,22 +2691,15 @@ function ReceivePanel({
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
-  onStopReceive,
-  onUpdateReceivePolicy
+  onStopReceive
 }: {
-  bindPort: string;
   busy: BusyMode | null;
   diagnostics: ReceivePortDiagnosticsDto | null;
-  receiveDir: string;
-  receivePolicy: ReceivePolicyMode;
   pendingOffer: PendingReceiveOfferDto | null;
   pendingPairingRequest: PendingPairingRequestDto | null;
   receiveReport: ReceiveReportDto | null;
   receiveSession: ReceiveSessionDto | null;
   stagedBundles: ReceivedBundleDto[];
-  setBindPort: (value: string) => void;
-  setReceiveDir: (value: string) => void;
-  onChooseReceiveDir: () => void;
   onCopyConnectionCode: () => void;
   onOpenPath: (path: string) => void;
   onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
@@ -2446,7 +2708,6 @@ function ReceivePanel({
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
-  onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
 }) {
   const pendingOfferSender =
     pendingOffer?.sender_device_name?.trim() ||
@@ -2473,58 +2734,6 @@ function ReceivePanel({
 
   return (
     <section className="receive-page">
-      {!receiveSession ? (
-        <section className="receive-section receive-empty">
-          <p className="receive-section-note">
-            开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
-          </p>
-          <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-            开启收件
-          </button>
-        </section>
-      ) : null}
-
-      {receiveSession ? (
-        <section className="receive-section">
-          <h2 className="receive-section-title">连接码</h2>
-          <p className="receive-section-note">
-            {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
-          </p>
-          <div className="code-highlight">
-            <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
-            <div className="code-highlight-actions">
-              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
-                复制连接码
-              </button>
-              <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
-                打开目录
-              </button>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {diagnostics ? (
-        <section className="receive-section">
-          <h2 className="receive-section-title">网络状态</h2>
-          <SettingsFacts
-            items={[
-              { label: "诊断", value: diagnostics.message },
-              { label: "广播地址", value: diagnostics.advertised_host },
-              { label: "端口", value: diagnostics.port != null ? String(diagnostics.port) : null },
-              { label: "局域网 IP", value: diagnostics.lan_ips.join(" · ") || null, mono: true }
-            ]}
-          />
-          {diagnostics.checks.length > 0 ? (
-            <ul className="settings-checks">
-              {diagnostics.checks.map((check) => (
-                <li key={check}>{check}</li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
-
       {pendingOffer ? (
         <section className="receive-section">
           <h2 className="receive-section-title">待确认传输</h2>
@@ -2572,53 +2781,9 @@ function ReceivePanel({
         </section>
       ) : null}
 
-      <section className="receive-section">
-        <h2 className="receive-section-title">接收配置</h2>
-        <div className="settings-form-grid">
-          <label>
-            接收目录
-            <div className="input-action receive-dir-action">
-              <input
-                disabled={Boolean(receiveSession)}
-                value={receiveDir}
-                onChange={(event) => setReceiveDir(event.target.value)}
-              />
-              <button className="tool-button" disabled={busy === "pick-receive" || Boolean(receiveSession)} onClick={onChooseReceiveDir} type="button">
-                选择
-              </button>
-            </div>
-          </label>
-          <label className="port-field">
-            默认端口
-            <input
-              disabled={Boolean(receiveSession)}
-              value={bindPort}
-              onChange={(event) => setBindPort(event.target.value)}
-            />
-          </label>
-        </div>
-
-        <div className="policy-row">
-          <span>接收策略</span>
-          <div className="policy-segment">
-            {RECEIVE_POLICY_OPTIONS.map((option) => (
-              <button
-                className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
-                disabled={busy === "receive-policy"}
-                key={option.value}
-                onClick={() => onUpdateReceivePolicy(option.value)}
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {visibleStagedBundles.length > 0 ? (
         <section className="receive-section">
-          <h2 className="receive-section-title">暂存区</h2>
+          <h2 className="receive-section-title">待处理资料</h2>
           <div className="bundle-list">
             {visibleStagedBundles.map((bundle) => (
               <div className="bundle-line" key={bundle.bundle_id}>
@@ -2654,6 +2819,45 @@ function ReceivePanel({
           </div>
         </section>
       ) : null}
+
+      {receiveSession ? (
+        <section className="receive-section">
+          <h2 className="receive-section-title">等待接收</h2>
+          <p className="receive-section-note">
+            {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
+          </p>
+          <div className="code-highlight">
+            <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
+            <div className="code-highlight-actions">
+              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
+                复制连接码
+              </button>
+              <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
+                打开目录
+              </button>
+              <button className="text-button" disabled={busy === "receive"} onClick={onStopReceive} type="button">
+                停止收件
+              </button>
+            </div>
+          </div>
+          {diagnostics && diagnostics.checks.length > 0 ? (
+            <ul className="settings-checks">
+              {diagnostics.checks.map((check) => (
+                <li key={check}>{check}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : (
+        <section className="receive-section receive-empty">
+          <p className="receive-section-note">
+            开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
+          </p>
+          <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+            开启收件
+          </button>
+        </section>
+      )}
 
       {receiveReport ? (
         <section className="receive-section">
@@ -2708,6 +2912,23 @@ function ReceivePanel({
     </section>
   );
 }
+
+type SettingsTab = "general" | "receive" | "security" | "access" | "advanced" | "about";
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: "general", label: "通用" },
+  { id: "receive", label: "收件" },
+  { id: "security", label: "安全" },
+  { id: "access", label: "接入" },
+  { id: "advanced", label: "高级" },
+  { id: "about", label: "关于" }
+];
+
+const EXPERIMENTAL_TRANSPORTS: Array<{ id: string; label: string }> = [
+  { id: "iroh", label: "iroh" },
+  { id: "relay", label: "relay" },
+  { id: "p2p", label: "P2P" }
+];
 
 function SettingsPanel({
   bindPort,
@@ -2778,116 +2999,167 @@ function SettingsPanel({
     bindPort
   });
 
+  const [tab, setTab] = useState<SettingsTab>("general");
+
   return (
     <section className="settings-page">
-      <SettingsGroup title="通用" note="附近设备会看到这里的名称">
-        <SettingsRow label="设备名称">
-          <div className="settings-inline-field">
-            <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
-            <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
-              保存
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow label="平台">
-          <SettingsValue>{model.platformLabel}</SettingsValue>
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="接收"
-        note={model.receiveConfigLocked ? "收件开启时，目录和端口需先关闭收件再改" : "默认保存位置和连接端口"}
-      >
-        <SettingsRow label="保存位置">
-          <div className="settings-inline-field is-wide">
-            <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
-            <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
-              选择
-            </button>
-            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
-              保存
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow label="默认端口">
-          <div className="settings-inline-field">
-            <input className="is-port" disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
-            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
-              保存
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow label="收到文件时">
-          <div className="policy-segment is-settings">
-            {RECEIVE_POLICY_OPTIONS.map((option) => (
-              <button
-                className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
-                disabled={busy === "receive-policy"}
-                key={option.value}
-                onClick={() => onUpdateReceivePolicy(option.value)}
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </SettingsRow>
-        <SettingsRow label="文件夹">
-          <button className="text-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
-            打开接收文件夹
+      <div className="settings-tabs" role="tablist" aria-label="设置分区">
+        {SETTINGS_TABS.map((item) => (
+          <button
+            aria-selected={tab === item.id}
+            className={tab === item.id ? "settings-tab is-active" : "settings-tab"}
+            key={item.id}
+            onClick={() => setTab(item.id)}
+            role="tab"
+            type="button"
+          >
+            {item.label}
           </button>
-        </SettingsRow>
-      </SettingsGroup>
+        ))}
+      </div>
 
-      <SettingsGroup title="网络" note="发现与连接状态为只读">
-        <SettingsRow label="局域网发现">
-          <SettingsValue>{model.discoveryLabel}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="本机地址">
-          <SettingsValue mono title={model.lanIpLabel ?? undefined}>
-            {model.lanIpLabel ?? "—"}
-          </SettingsValue>
-        </SettingsRow>
-        {receiveSession ? (
-          <SettingsRow label="收件状态" hint="连接码请在收件页查看">
-            <SettingsValue>{model.receiveAddressLabel}</SettingsValue>
+      {tab === "general" ? (
+        <SettingsGroup title="通用" note="附近设备会看到这里的名称">
+          <SettingsRow label="设备名称">
+            <div className="settings-inline-field">
+              <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
+              <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
+                保存
+              </button>
+            </div>
           </SettingsRow>
-        ) : null}
-      </SettingsGroup>
+          <SettingsRow label="平台">
+            <SettingsValue>{model.platformLabel}</SettingsValue>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
 
-      <SettingsGroup title="关于本机" note="用于配对与排查">
-        <SettingsRow label="设备 ID">
-          <SettingsValue mono title={model.deviceIdLabel ?? undefined}>
-            {model.deviceIdLabel ?? "—"}
-          </SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="指纹">
-          <SettingsValue mono title={model.fingerprintLabel ?? undefined}>
-            {model.fingerprintLabel ?? "—"}
-          </SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="能力">
-          <SettingsValue>{model.capabilitiesLabel ?? "—"}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="托盘菜单">
-          <SettingsValue>{model.trayLabel}</SettingsValue>
-        </SettingsRow>
-      </SettingsGroup>
+      {tab === "receive" ? (
+        <SettingsGroup
+          title="收件"
+          note={model.receiveConfigLocked ? "收件开启时，目录和端口需先关闭收件再改" : "默认保存位置和连接端口"}
+        >
+          <SettingsRow label="保存位置">
+            <div className="settings-inline-field is-wide">
+              <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+              <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
+                选择
+              </button>
+              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
+                保存
+              </button>
+            </div>
+          </SettingsRow>
+          <SettingsRow label="默认端口">
+            <div className="settings-inline-field">
+              <input className="is-port" disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
+                保存
+              </button>
+            </div>
+          </SettingsRow>
+          <SettingsRow label="收到文件时">
+            <div className="policy-segment is-settings">
+              {RECEIVE_POLICY_OPTIONS.map((option) => (
+                <button
+                  className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
+                  disabled={busy === "receive-policy"}
+                  key={option.value}
+                  onClick={() => onUpdateReceivePolicy(option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          {receiveSession ? (
+            <SettingsRow label="当前地址" hint="连接码请在收件页查看">
+              <SettingsValue>{model.receiveAddressLabel}</SettingsValue>
+            </SettingsRow>
+          ) : null}
+          <SettingsRow label="文件夹">
+            <button className="text-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+              打开接收文件夹
+            </button>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
 
-      <IntegrationSettings
-        busy={busy}
-        localBridgeAuthorizationCode={localBridgeAuthorizationCode}
-        localBridgeAuthorizations={localBridgeAuthorizations}
-        localBridgeCheck={localBridgeCheck}
-        localBridgePendingActions={localBridgePendingActions}
-        localBridgeStatus={localBridgeStatus}
-        setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
-        onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
-        onPruneLocalBridgeAuthorizations={onPruneLocalBridgeAuthorizations}
-        onRemoveLocalBridgePendingAction={onRemoveLocalBridgePendingAction}
-        onRevokeLocalBridgeAuthorization={onRevokeLocalBridgeAuthorization}
-        onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
-      />
+      {tab === "security" ? (
+        <SettingsGroup title="安全" note="用于配对与排查">
+          <SettingsRow label="设备 ID">
+            <SettingsValue mono title={model.deviceIdLabel ?? undefined}>
+              {model.deviceIdLabel ?? "—"}
+            </SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="指纹">
+            <SettingsValue mono title={model.fingerprintLabel ?? undefined}>
+              {model.fingerprintLabel ?? "—"}
+            </SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="能力">
+            <SettingsValue>{model.capabilitiesLabel ?? "—"}</SettingsValue>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
+
+      {tab === "access" ? (
+        <IntegrationSettings
+          busy={busy}
+          localBridgeAuthorizationCode={localBridgeAuthorizationCode}
+          localBridgeAuthorizations={localBridgeAuthorizations}
+          localBridgeCheck={localBridgeCheck}
+          localBridgePendingActions={localBridgePendingActions}
+          localBridgeStatus={localBridgeStatus}
+          setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
+          onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
+          onPruneLocalBridgeAuthorizations={onPruneLocalBridgeAuthorizations}
+          onRemoveLocalBridgePendingAction={onRemoveLocalBridgePendingAction}
+          onRevokeLocalBridgeAuthorization={onRevokeLocalBridgeAuthorization}
+          onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
+        />
+      ) : null}
+
+      {tab === "advanced" ? (
+        <>
+          <SettingsGroup title="网络" note="发现与连接状态为只读">
+            <SettingsRow label="局域网发现">
+              <SettingsValue>{model.discoveryLabel}</SettingsValue>
+            </SettingsRow>
+            <SettingsRow label="本机地址">
+              <SettingsValue mono title={model.lanIpLabel ?? undefined}>
+                {model.lanIpLabel ?? "—"}
+              </SettingsValue>
+            </SettingsRow>
+            <SettingsRow label="托盘菜单">
+              <SettingsValue>{model.trayLabel}</SettingsValue>
+            </SettingsRow>
+          </SettingsGroup>
+
+          <SettingsGroup title="实验传输" note="跨网络通道尚未接入，当前仅同局域网 TCP">
+            {EXPERIMENTAL_TRANSPORTS.map((transport) => (
+              <SettingsRow key={transport.id} label={transport.label}>
+                <SettingsValue>未启用</SettingsValue>
+              </SettingsRow>
+            ))}
+          </SettingsGroup>
+        </>
+      ) : null}
+
+      {tab === "about" ? (
+        <SettingsGroup title="关于" note="本机文件传输完成后会做完整性校验">
+          <SettingsRow label="应用">
+            <SettingsValue>NekoDrop</SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="文件校验">
+            <SettingsValue>传输完成后 SHA-256</SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="项目">
+            <SettingsValue mono>github.com/Hisakazu333/NekoDrop</SettingsValue>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
     </section>
   );
 }
@@ -2919,6 +3191,124 @@ function HistoryPanel({
   onSelectTransfer: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
+  const needsAttention = transfers.filter((transfer) => isTransferNeedsAttention(transfer));
+  const inProgress = transfers.filter((transfer) => isTransferInProgress(transfer));
+  const done = transfers.filter(
+    (transfer) => !isTransferNeedsAttention(transfer) && !isTransferInProgress(transfer)
+  );
+
+  const renderItem = (transfer: TransferDto, quickActions: boolean) => {
+    const selected = transfer.id === selectedTransferId;
+    const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+    const detail = buildTransferHistoryDetailViewModel(transfer);
+    const fallbackActionLabel = transferFallbackActionLabel(transfer);
+    const security = buildTransferSecurityViewModel(transfer.security_mode);
+    return (
+      <div
+        className={[
+          "history-item",
+          selected ? "is-selected" : "",
+          transfer.status === "failed" ? "is-failed" : ""
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        key={transfer.id}
+      >
+        <button className="history-row" onClick={() => onSelectTransfer(transfer)} type="button">
+          <span className="history-kind">{transferDirectionLabel(transfer)}</span>
+          <span className="history-main">
+            <strong title={transfer.root_name}>{transfer.root_name}</strong>
+            <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
+              {transferMetaLabel(transfer)}
+            </small>
+          </span>
+          <span className="history-size">
+            {transfer.file_count} 个 · {formatBytes(transfer.total_bytes)}
+          </span>
+          <time>{formatTransferTime(transfer.updated_at_ms)}</time>
+        </button>
+        {shouldShowHistoryProgress(transfer) ? (
+          <div className="history-progress" aria-label="历史传输进度">
+            <span style={{ width: `${Math.round(transfer.progress * 100)}%` }} />
+          </div>
+        ) : null}
+        {quickActions && !selected ? (
+          <div className="history-actions is-quick">
+            {detail.primaryActionLabel ? (
+              <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
+                {detail.primaryActionLabel}
+              </button>
+            ) : null}
+            {fallbackActionLabel ? (
+              <button className="text-button" onClick={onUseFallbackCode} type="button">
+                {fallbackActionLabel}
+              </button>
+            ) : null}
+            <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
+              删除
+            </button>
+          </div>
+        ) : null}
+        {selected ? (
+          <div className="history-detail">
+            <div className="history-detail-main">
+              <div className="history-detail-grid">
+                {detail.progressLabel ? (
+                  <span><strong>进度</strong>{detail.progressLabel}</span>
+                ) : null}
+                {detail.peerLabel ? (
+                  <span><strong>对方</strong>{detail.peerLabel}</span>
+                ) : null}
+                {detail.locationLabel ? (
+                  <span><strong>位置</strong>{detail.locationLabel}</span>
+                ) : null}
+                {security ? (
+                  <span>
+                    <strong>安全</strong>
+                    <SecurityBadge model={security} />
+                  </span>
+                ) : null}
+                {detail.recoveryLabel ? (
+                  <span><strong>恢复</strong>{detail.recoveryLabel}</span>
+                ) : null}
+                {detail.errorLabel ? (
+                  <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
+                ) : null}
+                {detail.adviceLabel ? (
+                  <span><strong>建议</strong>{detail.adviceLabel}</span>
+                ) : null}
+              </div>
+              <div className="history-paths">
+                {paths.slice(0, 6).map((path) => (
+                  <span key={path} title={path}>{path}</span>
+                ))}
+                {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+              </div>
+            </div>
+            <div className="history-actions">
+              <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
+                打开
+              </button>
+              {detail.primaryActionLabel ? (
+                <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
+                  {detail.primaryActionLabel}
+                </button>
+              ) : null}
+              {fallbackActionLabel ? (
+                <button className="text-button" onClick={onUseFallbackCode} type="button">
+                  {fallbackActionLabel}
+                </button>
+              ) : null}
+              <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
+                删除
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
     <section className="history-panel">
       <div className="history-toolbar">
@@ -2941,105 +3331,37 @@ function HistoryPanel({
         />
       ) : null}
 
-      {transfers.length > 0 ? (
-        <div className="history-list">
-          {transfers.map((transfer) => {
-            const selected = transfer.id === selectedTransferId;
-            const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
-            const detail = buildTransferHistoryDetailViewModel(transfer);
-            const fallbackActionLabel = transferFallbackActionLabel(transfer);
-            const security = buildTransferSecurityViewModel(transfer.security_mode);
-            return (
-              <div
-                className={[
-                  "history-item",
-                  selected ? "is-selected" : "",
-                  transfer.status === "failed" ? "is-failed" : ""
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={transfer.id}
-              >
-                <button className="history-row" onClick={() => onSelectTransfer(transfer)} type="button">
-                  <span className="history-kind">{transferDirectionLabel(transfer)}</span>
-                  <span className="history-main">
-                    <strong title={transfer.root_name}>{transfer.root_name}</strong>
-                    <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
-                      {transferMetaLabel(transfer)}
-                    </small>
-                  </span>
-                  <span className="history-size">
-                    {transfer.file_count} 个 · {formatBytes(transfer.total_bytes)}
-                  </span>
-                  <time>{formatTransferTime(transfer.updated_at_ms)}</time>
-                </button>
-                {shouldShowHistoryProgress(transfer) ? (
-                  <div className="history-progress" aria-label="历史传输进度">
-                    <span style={{ width: `${Math.round(transfer.progress * 100)}%` }} />
-                  </div>
-                ) : null}
-                {selected ? (
-                  <div className="history-detail">
-                    <div className="history-detail-main">
-                      <div className="history-detail-grid">
-                        {detail.progressLabel ? (
-                          <span><strong>进度</strong>{detail.progressLabel}</span>
-                        ) : null}
-                        {detail.peerLabel ? (
-                          <span><strong>对方</strong>{detail.peerLabel}</span>
-                        ) : null}
-                        {detail.locationLabel ? (
-                          <span><strong>位置</strong>{detail.locationLabel}</span>
-                        ) : null}
-                        {security ? (
-                          <span>
-                            <strong>安全</strong>
-                            <SecurityBadge model={security} />
-                          </span>
-                        ) : null}
-                        {detail.recoveryLabel ? (
-                          <span><strong>恢复</strong>{detail.recoveryLabel}</span>
-                        ) : null}
-                        {detail.errorLabel ? (
-                          <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
-                        ) : null}
-                        {detail.adviceLabel ? (
-                          <span><strong>建议</strong>{detail.adviceLabel}</span>
-                        ) : null}
-                      </div>
-                      <div className="history-paths">
-                        {paths.slice(0, 6).map((path) => (
-                          <span key={path} title={path}>{path}</span>
-                        ))}
-                        {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
-                      </div>
-                    </div>
-                    <div className="history-actions">
-                      <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
-                        打开
-                      </button>
-                      {detail.primaryActionLabel ? (
-                        <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                          {detail.primaryActionLabel}
-                        </button>
-                      ) : null}
-                      {fallbackActionLabel ? (
-                        <button className="text-button" onClick={onUseFallbackCode} type="button">
-                          {fallbackActionLabel}
-                        </button>
-                      ) : null}
-                      <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
-                        删除
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
+      {transfers.length === 0 ? (
         <div className="history-empty">暂无记录</div>
+      ) : (
+        <>
+          {needsAttention.length > 0 ? (
+            <section className="history-group">
+              <h2 className="history-group-title">需要处理</h2>
+              <div className="history-list">
+                {needsAttention.map((transfer) => renderItem(transfer, true))}
+              </div>
+            </section>
+          ) : null}
+
+          {inProgress.length > 0 ? (
+            <section className="history-group">
+              <h2 className="history-group-title">进行中</h2>
+              <div className="history-list">
+                {inProgress.map((transfer) => renderItem(transfer, false))}
+              </div>
+            </section>
+          ) : null}
+
+          {done.length > 0 ? (
+            <section className="history-group">
+              <h2 className="history-group-title">历史</h2>
+              <div className="history-list">
+                {done.map((transfer) => renderItem(transfer, false))}
+              </div>
+            </section>
+          ) : null}
+        </>
       )}
     </section>
   );
@@ -3647,6 +3969,23 @@ function shouldShowHistoryProgress(transfer: TransferDto) {
   );
 }
 
+const TRANSFER_ATTENTION_STATUSES = new Set(["failed", "cancelled"]);
+const TRANSFER_ACTIVE_STATUSES = new Set([
+  "connecting",
+  "accepted",
+  "awaiting_approval",
+  "transferring",
+  "verifying"
+]);
+
+function isTransferNeedsAttention(transfer: TransferDto) {
+  return TRANSFER_ATTENTION_STATUSES.has(transfer.status);
+}
+
+function isTransferInProgress(transfer: TransferDto) {
+  return TRANSFER_ACTIVE_STATUSES.has(transfer.status);
+}
+
 function formatTransferTime(timestampMs: number) {
   const date = new Date(timestampMs);
   if (Number.isNaN(date.getTime())) return "";
@@ -3657,6 +3996,10 @@ function formatTransferTime(timestampMs: number) {
     minute: "2-digit",
     hour12: false
   }).format(date);
+}
+
+function isTrustedDeviceState(trustState: string) {
+  return trustState.toLowerCase() === "trusted";
 }
 
 function platformLabel(platform: string) {

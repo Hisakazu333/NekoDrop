@@ -25,12 +25,12 @@ test("overview nearby status includes discovery guidance instead of only a count
 });
 
 test("bundle and integration are not top-level navigation destinations", () => {
-  const navBlock = appSource.match(/const NAV_ITEMS[\s\S]+?\];/);
-  assert.ok(navBlock, "NAV_ITEMS should exist");
-  assert.doesNotMatch(navBlock[0], /mode:\s*"bundles"/);
-  assert.doesNotMatch(navBlock[0], /mode:\s*"integrations"/);
-  assert.doesNotMatch(navBlock[0], /label:\s*"资料包"/);
-  assert.doesNotMatch(navBlock[0], /label:\s*"集成"/);
+  const modeBlock = appSource.match(/type ComposerMode =[\s\S]+?;/);
+  assert.ok(modeBlock, "ComposerMode should exist");
+  assert.doesNotMatch(modeBlock[0], /"bundles"/);
+  assert.doesNotMatch(modeBlock[0], /"integrations"/);
+  assert.doesNotMatch(appSource, /setMode\("bundles"\)/);
+  assert.doesNotMatch(appSource, /setMode\("integrations"\)/);
 });
 
 test("send flow owns manual bundle creation instead of a separate bundle page", () => {
