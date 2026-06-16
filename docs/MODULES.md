@@ -106,7 +106,7 @@ Implemented in the current desktop path:
 - replay window on encrypted transfer control readers
 - encrypted file frames on the encrypted session transfer path
 - bundle manifest validation, staging, and manual bundle creation
-- local bridge protocol model and internal read-only handler skeleton
+- local bridge protocol model, action result query, and internal read-only handler skeleton
 - macOS and Windows packaging scripts
 
 Experimental or planned:
@@ -118,7 +118,7 @@ Experimental or planned:
 - mobile main flow
 - NekoState synchronization
 - OpenNeko Agent command channel
-- public local bridge runtime, persisted authorization, and import execution
+- local bridge send execution and third-party adapter import execution
 
 See [Current Status](STATUS.md) for the authoritative feature list.
 

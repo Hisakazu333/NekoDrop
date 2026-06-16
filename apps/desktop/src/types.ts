@@ -69,6 +69,7 @@ export interface LocalBridgeResponseDto {
   devices: TrustedDeviceDto[];
   staged_bundles: ReceivedBundleDto[];
   transfer_status: TransferStatusDto | null;
+  action_results: LocalBridgePendingActionResultDto[];
   events: unknown[];
 }
 
@@ -117,6 +118,27 @@ export interface LocalBridgePendingActionRemoveDto {
 export interface LocalBridgePendingActionTakeDto {
   action: LocalBridgePendingActionDto | null;
   remaining_count: number;
+}
+
+export interface LocalBridgePendingActionResultDto {
+  request_id: string;
+  action_kind: "bundle.send" | "bundle.import" | string;
+  client_id: string;
+  client_display_name: string;
+  status: string;
+  reason: string | null;
+  message: string;
+  bundle_id: string | null;
+  bundle_type: string | null;
+  bundle_root: string | null;
+  target_device_id: string | null;
+  require_trusted_device: boolean | null;
+  requested_at_ms: number;
+  claimed_at_ms: number;
+}
+
+export interface LocalBridgePendingActionResultListDto {
+  results: LocalBridgePendingActionResultDto[];
 }
 
 export interface LocalBridgeRuntimeStatusDto {
