@@ -69,6 +69,7 @@ pub fn run() {
             commands::list_local_bridge_pending_action_results,
             commands::take_next_local_bridge_pending_action,
             commands::preflight_next_local_bridge_bundle_send,
+            commands::execute_next_local_bridge_bundle_send,
             commands::execute_next_local_bridge_bundle_import,
             commands::prune_local_bridge_authorizations,
             commands::handle_local_bridge_request,
