@@ -1939,6 +1939,8 @@ pub enum LocalBridgeRequest {
     TransferStatus(LocalBridgeTransferStatusRequest),
     #[serde(rename = "events.poll")]
     PollEvents(LocalBridgePollEventsRequest),
+    #[serde(rename = "actions.results")]
+    ActionResults(LocalBridgeActionResultsRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1992,6 +1994,14 @@ pub struct LocalBridgePollEventsRequest {
     pub request_id: String,
     pub client: Option<LocalBridgeClientIdentity>,
     pub after_event_id: Option<String>,
+    pub limit: Option<usize>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeActionResultsRequest {
+    pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
+    pub after_claimed_at_ms: Option<u128>,
     pub limit: Option<usize>,
 }
 
@@ -2091,6 +2101,7 @@ impl LocalBridgeRequest {
             Self::AuthorizationRequest(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
             Self::PollEvents(request) => request.validate(),
+            Self::ActionResults(request) => request.validate(),
         }
     }
 }
@@ -2145,6 +2156,22 @@ impl LocalBridgePollEventsRequest {
                 return Err(ProtocolError::new(
                     ErrorCode::InvalidPayload,
                     "event poll limit must be between 1 and 100",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LocalBridgeActionResultsRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
+        if let Some(limit) = self.limit {
+            if limit == 0 || limit > 100 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "action results limit must be between 1 and 100",
                 ));
             }
         }
@@ -4949,6 +4976,32 @@ mod tests {
         assert_eq!(json["kind"], "events.poll");
         assert_eq!(json["payload"]["request_id"], "bridge-events-1");
         assert_eq!(json["payload"]["after_event_id"], "bridge-event-1");
+        assert_eq!(json["payload"]["limit"], 10);
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn local_bridge_action_results_request_uses_stable_json_shape() {
+        let request = LocalBridgeRequest::ActionResults(LocalBridgeActionResultsRequest {
+            request_id: "bridge-results-1".to_string(),
+            client: Some(LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            }),
+            after_claimed_at_ms: Some(1_000),
+            limit: Some(10),
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "actions.results");
+        assert_eq!(json["payload"]["request_id"], "bridge-results-1");
+        assert_eq!(json["payload"]["after_claimed_at_ms"], 1_000);
         assert_eq!(json["payload"]["limit"], 10);
         assert_eq!(
             serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
