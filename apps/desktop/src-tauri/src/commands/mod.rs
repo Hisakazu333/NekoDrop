@@ -932,6 +932,20 @@ pub fn preflight_next_local_bridge_bundle_send(
 }
 
 #[tauri::command]
+pub fn execute_next_local_bridge_bundle_import(
+    state: State<'_, AppState>,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    let staging_root = bundle_staging_root()?;
+    let import_root = bundle_import_root()?;
+    execute_next_local_bridge_bundle_import_at(
+        &state.local_bridge_runtime,
+        &staging_root,
+        &import_root,
+        now_ms(),
+    )
+}
+
+#[tauri::command]
 pub fn prune_local_bridge_authorizations(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgeAuthorizationListDto, String> {
@@ -3002,6 +3016,133 @@ fn preflight_next_local_bridge_bundle_send_at(
     Ok(result)
 }
 
+fn execute_next_local_bridge_bundle_import_at(
+    runtime: &LocalBridgeRuntimeState,
+    staging_root: &std::path::Path,
+    import_root: &std::path::Path,
+    now_ms: u128,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    let action = {
+        let mut actions = runtime
+            .pending_actions
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let Some(LocalBridgePendingAction::ImportBundle(_)) = actions.first() else {
+            return Ok(None);
+        };
+        match actions.remove(0) {
+            LocalBridgePendingAction::ImportBundle(action) => action,
+            LocalBridgePendingAction::SendBundle(_) => unreachable!("first action checked above"),
+        }
+    };
+
+    let result =
+        execute_local_bridge_bundle_import_action(action, staging_root, import_root, now_ms)?;
+    push_local_bridge_pending_action_result_record(runtime, result.clone())?;
+    Ok(Some(local_bridge_pending_action_result_to_dto(
+        &result, false,
+    )))
+}
+
+fn execute_local_bridge_bundle_import_action(
+    action: LocalBridgePendingImportBundleAction,
+    staging_root: &std::path::Path,
+    import_root: &std::path::Path,
+    now_ms: u128,
+) -> Result<LocalBridgePendingActionResult, String> {
+    validate_safe_bundle_id(&action.staged_bundle_id)?;
+    let staged_path = staging_root.join(&action.staged_bundle_id);
+    let detected = match detect_bundle_directory(&staged_path) {
+        Ok(Some(detected)) => detected,
+        Ok(None) => {
+            return Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some("bundle_manifest_missing"),
+                "local bridge staged bundle does not contain bundle.json",
+                None,
+                None,
+                now_ms,
+            ));
+        }
+        Err(error) => {
+            return Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some("bundle_invalid"),
+                &format!("local bridge staged bundle validation failed: {error}"),
+                None,
+                None,
+                now_ms,
+            ));
+        }
+    };
+
+    let bundle_id = detected.manifest.bundle_id.clone();
+    let bundle_type = detected.manifest.bundle_type;
+    if let Some(expected_bundle_type) = action.expected_bundle_type {
+        if bundle_type != expected_bundle_type {
+            return Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some("bundle_type_mismatch"),
+                "local bridge expected bundle_type does not match the staged bundle manifest",
+                Some(bundle_id.as_str()),
+                Some(bundle_type),
+                now_ms,
+            ));
+        }
+    }
+
+    match import_staged_bundle_at(staging_root, import_root, &action.staged_bundle_id) {
+        Ok(imported) => Ok(local_bridge_bundle_import_result(
+            "completed",
+            &action,
+            None,
+            "local bridge staged bundle was imported",
+            Some(imported.bundle_id.as_str()),
+            bundle_type_from_label(&imported.bundle_type).or(Some(bundle_type)),
+            now_ms,
+        )),
+        Err(error) => Ok(local_bridge_bundle_import_result(
+            "failed",
+            &action,
+            Some("bundle_import_failed"),
+            &format!("local bridge staged bundle import failed: {error}"),
+            Some(bundle_id.as_str()),
+            Some(bundle_type),
+            now_ms,
+        )),
+    }
+}
+
+fn local_bridge_bundle_import_result(
+    status: &str,
+    action: &LocalBridgePendingImportBundleAction,
+    reason: Option<&str>,
+    message: &str,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    LocalBridgePendingActionResult {
+        request_id: action.request_id.clone(),
+        action_kind: "bundle.import".to_string(),
+        client_id: action.client.client_id.clone(),
+        client_display_name: action.client.display_name.clone(),
+        status: status.to_string(),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        bundle_id: bundle_id.map(str::to_string),
+        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+        bundle_root: None,
+        target_device_id: None,
+        require_trusted_device: None,
+        requested_at_ms: action.requested_at_ms,
+        claimed_at_ms: now_ms,
+    }
+}
+
 fn preflight_local_bridge_bundle_send_action(
     action: LocalBridgePendingSendBundleAction,
     trusted_devices: &[TrustedDeviceRecord],
@@ -3145,11 +3286,7 @@ fn push_local_bridge_pending_action_result(
     };
     let event_id = format!("bridge-action-{request_id}-{claimed_at_ms}");
 
-    let mut results = runtime
-        .pending_action_results
-        .lock()
-        .map_err(|error| error.to_string())?;
-    results.push(LocalBridgePendingActionResult {
+    let result = LocalBridgePendingActionResult {
         request_id: request_id.clone(),
         action_kind: "bundle.send".to_string(),
         client_id: client_id.clone(),
@@ -3164,12 +3301,8 @@ fn push_local_bridge_pending_action_result(
         require_trusted_device: result.require_trusted_device,
         requested_at_ms,
         claimed_at_ms,
-    });
-    if results.len() > LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT {
-        let excess = results.len() - LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT;
-        results.drain(0..excess);
-    }
-    drop(results);
+    };
+    push_local_bridge_pending_action_result_record(runtime, result.clone())?;
 
     let status = match result.status.as_str() {
         "ready" => LocalBridgeBundleSendPreflightStatus::Ready,
@@ -3192,6 +3325,22 @@ fn push_local_bridge_pending_action_result(
             target_device_id: result.target_device_id.clone(),
         }),
     )?;
+    Ok(())
+}
+
+fn push_local_bridge_pending_action_result_record(
+    runtime: &LocalBridgeRuntimeState,
+    result: LocalBridgePendingActionResult,
+) -> Result<(), String> {
+    let mut results = runtime
+        .pending_action_results
+        .lock()
+        .map_err(|error| error.to_string())?;
+    results.push(result);
+    if results.len() > LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT {
+        let excess = results.len() - LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT;
+        results.drain(0..excess);
+    }
     Ok(())
 }
 
@@ -6853,6 +7002,155 @@ mod tests {
         let claimed = take_next_local_bridge_pending_action_at(&runtime).unwrap();
 
         assert!(claimed.is_none());
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_imports_staged_bundle_and_records_result() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::ImportBundle(
+                LocalBridgePendingImportBundleAction {
+                    request_id: "bridge-import-1".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    staged_bundle_id: "bundle_1234567890".to_string(),
+                    expected_bundle_type: Some(BundleType::Skill),
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap()
+        .expect("pending bundle.import action should be executed");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(result.request_id, "bridge-import-1");
+        assert_eq!(result.action_kind, "bundle.import");
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_1234567890"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert_eq!(result.requested_at_ms, 1_500);
+        assert_eq!(result.claimed_at_ms, 2_000);
+        assert!(result.bundle_root.is_none());
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-import-1");
+        assert_eq!(results[0].status, "completed");
+        assert!(results[0].bundle_root.is_none());
+        assert!(import_root
+            .join("bundle_1234567890")
+            .join("content.bin")
+            .exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_rejects_expected_type_mismatch() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution-type-mismatch");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::ImportBundle(
+                LocalBridgePendingImportBundleAction {
+                    request_id: "bridge-import-type".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    staged_bundle_id: "bundle_1234567890".to_string(),
+                    expected_bundle_type: Some(BundleType::Workspace),
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap()
+        .expect("pending bundle.import action should be consumed");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.reason.as_deref(), Some("bundle_type_mismatch"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_1234567890"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-import-type");
+        assert_eq!(results[0].status, "failed");
+        assert_eq!(results[0].reason.as_deref(), Some("bundle_type_mismatch"));
+        assert!(!import_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_skips_non_import_queue_head() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution-skip");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-1".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: "/tmp/exported/bundle".to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: true,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap();
+        let actions = list_local_bridge_pending_actions_at(&runtime).unwrap();
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].request_id, "bridge-send-1");
+        assert!(results.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

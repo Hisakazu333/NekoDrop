@@ -118,7 +118,7 @@ Experimental or planned:
 - mobile main flow
 - NekoState synchronization
 - OpenNeko Agent command channel
-- public local bridge runtime, persisted authorization, and import execution
+- local bridge send execution and third-party adapter import execution
 
 See [Current Status](STATUS.md) for the authoritative feature list.
 

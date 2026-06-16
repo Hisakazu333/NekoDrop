@@ -207,7 +207,9 @@ Current desktop behavior:
 - lets local apps request scopes with a short authorization code
 - persists confirmed authorizations locally and restores only unexpired records on restart
 - lets the user list, revoke, and prune local bridge authorizations from Settings
-- keeps `bundle.send` and `bundle.import` behind authorization; authorized requests enter an in-memory pending-action queue that Settings can inspect and remove, and the bridge still does not execute those mutations directly
+- keeps `bundle.send` and `bundle.import` behind authorization; authorized requests enter an in-memory pending-action queue that Settings can inspect and remove
+- executes `bundle.import` only into the NekoDrop local import directory; it does not write third-party app directories
+- keeps `bundle.send` at preflight only; a successful preflight does not send files by itself
 
 Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.
 
