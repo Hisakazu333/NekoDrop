@@ -57,11 +57,13 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 ## GitHub 开发流程
 
-本项目使用 `main / develop / desktop-develop / personal dev branch / topic branch` 的开发流程。
+本项目使用 `main / develop / desktop-develop / docs-develop / personal dev branch / topic branch` 的开发流程。
 
 ```text
 Rust / 核心能力 -> dev/<name> 或 topic branch -> develop
 桌面端能力 -> dev/<name> 或短分支 -> desktop-develop
+文档 -> dev/<name> 或短分支 -> docs-develop
+docs-develop -> develop
 desktop-develop -> develop -> main -> tag / release
 ```
 
@@ -71,11 +73,13 @@ desktop-develop -> develop -> main -> tag / release
 
 `desktop-develop` 是桌面端集成分支，主要放 Tauri、React UI、桌面 IPC、设置页、安装包脚本和 macOS / Windows 体验。桌面端后续开发都从这个分支开短分支，做完后 PR 回 `desktop-develop`。
 
-`dev/<name>` 是个人长期开发分支。当前维护者使用 `dev/hisakazu`。日常代码先在个人分支提交，再通过 PR 合进 `develop` 或 `desktop-develop`。个人分支可以长期保留，不能在 PR 合并时删除。
+`docs-develop` 是文档集成分支，主要放 README、docs、路线图、贡献规范和发布记录。文档改动先合到这里，再按需要同步进 `develop`。
 
-不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`，涉及桌面端的还要同步回 `desktop-develop`。
+`dev/<name>` 是个人长期开发分支。当前维护者使用 `dev/hisakazu`。日常代码先在个人分支提交，再通过 PR 合进 `develop`、`desktop-develop` 或 `docs-develop`。个人分支可以长期保留，不能在 PR 合并时删除。
 
-每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。桌面端要发版时，先把 `desktop-develop` 同步进 `develop`，再走 `develop -> main`。
+不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`，涉及桌面端的还要同步回 `desktop-develop`，涉及文档的同步回 `docs-develop`。
+
+每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。桌面端要发版时，先把 `desktop-develop` 同步进 `develop`；文档要随版本发布时，先把 `docs-develop` 同步进 `develop`，再走 `develop -> main`。
 
 分支命名示例：
 
@@ -89,6 +93,7 @@ ui/hisakazu/desktop-style-refresh
 bridge/hisakazu/localhost-runtime
 bundle/hisakazu/import-rollback
 docs/hisakazu/release-checklist
+docs/hisakazu/status-roadmap-refresh
 ```
 
 第一次创建个人开发分支：
@@ -118,6 +123,14 @@ git pull --ff-only
 git checkout -b ui/hisakazu/transfer-progress-polish
 ```
 
+从 `docs-develop` 开文档分支：
+
+```bash
+git checkout docs-develop
+git pull --ff-only
+git checkout -b docs/hisakazu/status-roadmap-refresh
+```
+
 每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
 
 ```text
@@ -130,11 +143,13 @@ docs: add release checklist
 合并规则：
 
 - 日常 PR 合到 `develop`
+- 文档 PR 合到 `docs-develop`
+- 桌面端 PR 合到 `desktop-develop`
 - 发布 PR 从 `develop` 合到 `main`
 - 合并前必须通过 CI
 - 日常 PR 默认 squash merge
 - 合并后的 topic branch 要删除
-- 个人长期分支和集成分支不能删除，尤其是 `dev/<name>`、`develop` 和 `desktop-develop`
+- 个人长期分支和集成分支不能删除，尤其是 `dev/<name>`、`develop`、`desktop-develop` 和 `docs-develop`
 - 不允许 force push 到 `main` 或 `develop`
 - 如果 `develop -> main` 使用 rebase 合并，合并后把 `develop` 同步到 `main` 的发布点
 
