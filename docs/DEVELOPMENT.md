@@ -57,11 +57,11 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 ## GitHub 开发流程
 
-本项目使用 `main / develop / desktop-develop / topic branch` 的开发流程。
+本项目使用 `main / develop / desktop-develop / personal dev branch / topic branch` 的开发流程。
 
 ```text
-Rust / 核心能力 topic branch -> develop
-桌面端 topic branch -> desktop-develop
+Rust / 核心能力 -> dev/<name> 或 topic branch -> develop
+桌面端能力 -> dev/<name> 或短分支 -> desktop-develop
 desktop-develop -> develop -> main -> tag / release
 ```
 
@@ -71,6 +71,8 @@ desktop-develop -> develop -> main -> tag / release
 
 `desktop-develop` 是桌面端集成分支，主要放 Tauri、React UI、桌面 IPC、设置页、安装包脚本和 macOS / Windows 体验。桌面端后续开发都从这个分支开短分支，做完后 PR 回 `desktop-develop`。
 
+`dev/<name>` 是个人长期开发分支。当前维护者使用 `dev/hisakazu`。日常代码先在个人分支提交，再通过 PR 合进 `develop` 或 `desktop-develop`。个人分支可以长期保留，不能在 PR 合并时删除。
+
 不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`，涉及桌面端的还要同步回 `desktop-develop`。
 
 每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。桌面端要发版时，先把 `desktop-develop` 同步进 `develop`，再走 `develop -> main`。
@@ -78,6 +80,8 @@ desktop-develop -> develop -> main -> tag / release
 分支命名示例：
 
 ```text
+dev/hisakazu
+dev/<name>
 fix/hisakazu/windows-path-encoding
 hardening/hisakazu/security-reliability
 feat/hisakazu/large-file-scan-status
@@ -87,13 +91,24 @@ bundle/hisakazu/import-rollback
 docs/hisakazu/release-checklist
 ```
 
-从 `develop` 开分支：
+第一次创建个人开发分支：
 
 ```bash
 git checkout develop
 git pull --ff-only
-git checkout -b security/hisakazu/device-identity-signing
+git checkout -b dev/hisakazu
+git push -u origin dev/hisakazu
 ```
+
+日常继续写 Rust / 核心功能：
+
+```bash
+git checkout dev/hisakazu
+git pull --ff-only
+git merge --ff-only origin/develop
+```
+
+桌面端功能可以从 `desktop-develop` 开短分支，也可以在个人分支里做完后拆 PR。跨层改动要拆成两段：Rust / 协议先进 `develop`，桌面 UI 再进 `desktop-develop`。
 
 从 `desktop-develop` 开桌面端分支：
 
@@ -119,6 +134,7 @@ docs: add release checklist
 - 合并前必须通过 CI
 - 日常 PR 默认 squash merge
 - 合并后的 topic branch 要删除
+- 个人长期分支和集成分支不能删除，尤其是 `dev/<name>`、`develop` 和 `desktop-develop`
 - 不允许 force push 到 `main` 或 `develop`
 - 如果 `develop -> main` 使用 rebase 合并，合并后把 `develop` 同步到 `main` 的发布点
 
