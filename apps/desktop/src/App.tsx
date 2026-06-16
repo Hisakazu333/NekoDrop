@@ -112,6 +112,7 @@ type ComposerMode =
   | "transfers"
   | "settings";
 type ReceivePolicyMode = "always_ask" | "block_all";
+type AppearanceMode = "light" | "dark";
 type TransferMetrics = {
   speedBytesPerSecond: number | null;
   etaSeconds: number | null;
@@ -121,20 +122,49 @@ const RECEIVE_POLICY_OPTIONS: Array<{ value: ReceivePolicyMode; label: string }>
   { value: "always_ask", label: "询问" },
   { value: "block_all", label: "阻止" }
 ];
+const APPEARANCE_STORAGE_KEY = "nekodrop.appearance";
 
 const EMPTY_TRANSFER_METRICS = Object.freeze<TransferMetrics>({
   speedBytesPerSecond: null,
   etaSeconds: null
 });
 
-const NAV_ITEMS: Array<{ mode: ComposerMode; label: string; icon: IconName }> = [
-  { mode: "overview", label: "概览", icon: "overview" },
-  { mode: "send", label: "发送", icon: "send" },
-  { mode: "receive", label: "收件", icon: "inbox" },
-  { mode: "devices", label: "设备", icon: "devices" },
-  { mode: "transfers", label: "传输", icon: "clock" },
-  { mode: "settings", label: "设置", icon: "settings" }
+type DeviceCapability = "transfer" | "agent" | "state" | "link";
+
+const CAPABILITY_TABS: Array<{ id: DeviceCapability; label: string; lock?: string }> = [
+  { id: "transfer", label: "传输" },
+  { id: "agent", label: "Agent", lock: "V1.5" },
+  { id: "state", label: "状态", lock: "V1.4" },
+  { id: "link", label: "联机", lock: "规划" }
 ];
+
+const CAPABILITY_LOCKED_COPY: Record<
+  Exclude<DeviceCapability, "transfer">,
+  { title: string; body: string; tag: string }
+> = {
+  agent: {
+    title: "Agent 能力尚未接入",
+    body: "未来可让这台已信任设备执行跨设备 Agent 任务：发起指令、回传结果、调用文件流，高风险操作需本机确认。能力由对端协商，对方支持时这里才会出现。",
+    tag: "规划中 · V1.5"
+  },
+  state: {
+    title: "状态同步尚未接入",
+    body: "未来可与这台设备同步轻量状态（应用设置、任务状态等），离线可追平、冲突有明确策略，不静默覆盖。",
+    tag: "规划中 · V1.4 · NekoState"
+  },
+  link: {
+    title: "联机 / 虚拟局域网（规划）",
+    body: "这是 1:多 的能力，不是一次性传输——未来会引入「房间」概念：把多台可信设备组进一个虚拟局域网，显示成员、隧道状态与延迟。它会单独成一类对象，依赖 relay / P2P 通道。",
+    tag: "规划 · 依赖 relay / P2P"
+  }
+};
+
+function readInitialAppearance(): AppearanceMode {
+  if (typeof window === "undefined") {
+    return "light";
+  }
+  return window.localStorage.getItem(APPEARANCE_STORAGE_KEY) === "dark" ? "dark" : "light";
+}
 
 export function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -169,12 +199,15 @@ export function App() {
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
+  const [capability, setCapability] = useState<DeviceCapability>("transfer");
+  const [sendMode, setSendMode] = useState<"file" | "bundle">("file");
   const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
   const [localBridgeAuthorizations, setLocalBridgeAuthorizations] = useState<LocalBridgeAuthorizationDto[]>([]);
   const [localBridgePendingActions, setLocalBridgePendingActions] = useState<LocalBridgePendingActionDto[]>([]);
   const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
   const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
-  const [mode, setMode] = useState<ComposerMode>("overview");
+  const [mode, setMode] = useState<ComposerMode>("send");
+  const [appearance, setAppearance] = useState<AppearanceMode>(() => readInitialAppearance());
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
   const desktopRuntime = useMemo(() => isTauriRuntime(), []);
@@ -237,6 +270,11 @@ export function App() {
       : receiveStatus?.startsWith("接收失败")
         ? "接收失败"
         : "收件关闭";
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = appearance;
+    window.localStorage.setItem(APPEARANCE_STORAGE_KEY, appearance);
+  }, [appearance]);
 
   useEffect(() => {
     refreshSnapshot().catch((nextError) => setError(errorMessage(nextError)));
@@ -1227,58 +1265,158 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <aside className="sidebar" aria-label="NekoDrop">
-        <div className="sidebar-brand">
-          <div className="sidebar-mark" title="NekoDrop">
-            N
-          </div>
-          <div className="sidebar-identity">
-            <strong>NekoDrop</strong>
-            <span>{snapshot?.device_name ?? "这台电脑"}</span>
-          </div>
+      <header className="app-titlebar" data-tauri-drag-region>
+        <div className="titlebar-traffic-space" aria-hidden="true" />
+        <div className="titlebar-brand" data-tauri-drag-region>
+          <span className="titlebar-mark">
+            <Icon name="package" />
+          </span>
+          <strong>NekoDrop</strong>
         </div>
-
-        <nav className="sidebar-nav" aria-label="主导航">
-          {NAV_ITEMS.map((item) => (
-            <button
-              className={mode === item.mode ? "sidebar-item is-active" : "sidebar-item"}
-              key={item.mode}
-              onClick={() => setMode(item.mode)}
-              type="button"
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </nav>
-
-        <div className="sidebar-footer">
-          <div className="sidebar-status">
-            <span className={discoveryCopy.isError ? "status-pill is-error" : "status-pill"}>
-              {discoveryCopy.label}
-            </span>
-            {snapshot ? (
-              <span className="device-pill" title={snapshot.device_identity.public_key_fingerprint}>
-                {platformLabel(snapshot.device_identity.platform)}
-              </span>
-            ) : null}
-            <button
-              className={receiveSession ? "receive-pill is-on" : "receive-pill"}
-              onClick={() => setMode("receive")}
-              type="button"
-            >
-              {receiveState}
-            </button>
-          </div>
+        <div className="titlebar-actions">
           <button
-            className="sidebar-folder"
-            disabled={busy === "open"}
-            onClick={() => openPath(receiveSession?.receive_dir ?? receiveDir)}
-            title="打开接收目录"
+            className={receiveSession ? "titlebar-receive is-on" : "titlebar-receive"}
+            disabled={busy === "receive"}
+            onClick={() => {
+              if (receiveSession) {
+                setMode("receive");
+                return;
+              }
+              startReceive();
+            }}
             type="button"
           >
-            <Icon name="folder" />
-            <span>接收目录</span>
+            <span className="titlebar-receive-led" />
+            {receiveSession ? "收件开启" : "开启收件"}
+          </button>
+          <button
+            className={mode === "transfers" ? "titlebar-icon is-active" : "titlebar-icon"}
+            onClick={() => setMode("transfers")}
+            title="传输历史"
+            type="button"
+          >
+            <Icon name="clock" />
+          </button>
+          <button
+            className="titlebar-icon"
+            onClick={() => setAppearance((current) => (current === "dark" ? "light" : "dark"))}
+            title={appearance === "dark" ? "切换浅色" : "切换深色"}
+            type="button"
+          >
+            <Icon name="appearance" />
+          </button>
+          <button
+            className={mode === "settings" ? "titlebar-icon is-active" : "titlebar-icon"}
+            onClick={() => setMode("settings")}
+            title="设置"
+            type="button"
+          >
+            <Icon name="settings" />
+          </button>
+        </div>
+      </header>
+
+      <div className="shell-body">
+      <aside className="device-rail" aria-label="设备">
+        <div className="rail-scroll">
+          <div className="rail-label is-first">
+            <span>这台电脑</span>
+          </div>
+          <div className="rail-self">
+            <span className="rail-self-dot" />
+            <div className="rail-self-main">
+              <strong>{snapshot?.device_name ?? "这台电脑"}</strong>
+              <small>{snapshot ? `${platformLabel(snapshot.device_identity.platform)} · 已验证身份` : "本机"}</small>
+            </div>
+          </div>
+
+          <div className="rail-label">
+            <span>可信设备</span>
+            <span className="rail-count">{trustedDevices.length}</span>
+          </div>
+          {trustedDevices.length > 0 ? (
+            trustedDevices.map((device) => {
+              const online = nearbyDevices.some((nearby) => nearby.id === device.device_id);
+              const selected = selectedDeviceId === device.device_id;
+              return (
+                <button
+                  className={selected ? "rail-dev is-selected" : "rail-dev"}
+                  key={device.device_id}
+                  onClick={() => {
+                    const target = trustedDeviceToDeviceDto(device);
+                    setSelectedDeviceId(target.id);
+                    setSelectedDeviceSnapshot(target);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setMode("send");
+                    setError(null);
+                  }}
+                  type="button"
+                >
+                  <span className={online ? "rail-dev-dot is-online" : "rail-dev-dot"} />
+                  <span className="rail-dev-main">
+                    <strong>{device.device_name}</strong>
+                    <small>{`${platformLabel(device.platform)} · ${online ? "在线" : "离线"}`}</small>
+                  </span>
+                  <Icon name="shield" className="rail-dev-trust" />
+                </button>
+              );
+            })
+          ) : (
+            <div className="rail-empty">暂无可信设备</div>
+          )}
+
+          <div className="rail-label">
+            <span>附近设备</span>
+            <span className="rail-count">{nearbyDevices.length}</span>
+          </div>
+          {nearbyDevices.length > 0 ? (
+            nearbyDevices.map((device) => {
+              const trusted = isTrustedDeviceState(device.trust_state);
+              const selected = selectedDeviceId === device.id;
+              return (
+                <button
+                  className={selected ? "rail-dev is-selected" : "rail-dev"}
+                  key={device.id}
+                  onClick={() => {
+                    if (!trusted) {
+                      requestPairing(device);
+                      return;
+                    }
+                    setSelectedDeviceId(device.id);
+                    setSelectedDeviceSnapshot(device);
+                    setConnectionCodeOpen(false);
+                    setConnectionCode("");
+                    setMode("send");
+                    setError(null);
+                  }}
+                  type="button"
+                >
+                  <span className="rail-dev-dot is-online" />
+                  <span className="rail-dev-main">
+                    <strong>{device.name}</strong>
+                    <small>
+                      {`${devicePlatformLabel(device.platform)} · ${trusted ? "已信任" : "待配对"}`}
+                      {device.pairing_code ? ` · ${device.pairing_code}` : ""}
+                    </small>
+                  </span>
+                  {trusted ? null : <span className="rail-dev-pair">配对</span>}
+                </button>
+              );
+            })
+          ) : (
+            <div className="rail-empty">{discoveryCopy.label}</div>
+          )}
+        </div>
+
+        <div className="rail-foot">
+          <button
+            className={connectionCodeOpen ? "rail-code is-active" : "rail-code"}
+            onClick={openFallbackCode}
+            type="button"
+          >
+            <Icon name="link" />
+            <span>用连接码连接</span>
           </button>
         </div>
       </aside>
@@ -1356,110 +1494,171 @@ export function App() {
 
           {mode === "send" ? (
             <div className="send-page">
-              <header className="send-hero">
-                <h1 className="send-hero-title">{pageTitle}</h1>
-                <p className="send-hero-subtitle">
-                  {transferPaths.length > 0
-                    ? composerSubtitle
-                    : desktopRuntime
-                      ? dragDropReady
-                        ? "拖入文件或文件夹，或点击投放区 / 下方按钮选择"
-                        : "正在初始化拖放，请先用下方按钮选择文件"
-                      : "当前是浏览器预览，拖放和系统文件选择不可用，请用 npm --workspace apps/desktop run tauri:dev 启动桌面端"}
-                </p>
+              <header className="dw-header">
+                <div className="dw-avatar">
+                  <Icon name="devices" />
+                  <span className={selectedTrustedOnline || selectedDevice ? "dw-led is-online" : "dw-led"} />
+                </div>
+                <div className="dw-id">
+                  <div className="dw-name">
+                    <strong>
+                      {selectedDevice?.name ??
+                        selectedTrustedRecord?.device_name ??
+                        (trimmedConnectionCode ? "备用码连接" : "发送文件")}
+                    </strong>
+                    {selectedTrustedRecord ? (
+                      <span className="dw-badge is-ok">{selectedTrustedOnline ? "在线 · 已信任" : "离线 · 已信任"}</span>
+                    ) : selectedDevice ? (
+                      <span className="dw-badge is-ok">在线</span>
+                    ) : trimmedConnectionCode ? (
+                      <span className="dw-badge">连接码</span>
+                    ) : (
+                      <span className="dw-badge">从左侧选择设备，或拖入文件</span>
+                    )}
+                  </div>
+                  <div className="dw-meta">
+                    {(selectedDevice?.platform ?? selectedTrustedRecord?.platform) ? (
+                      <span>{platformLabel((selectedDevice?.platform ?? selectedTrustedRecord?.platform)!)}</span>
+                    ) : null}
+                    {(selectedDevice?.host ?? selectedTrustedRecord?.host) ? (
+                      <span className="is-mono">
+                        {(selectedDevice?.host ?? selectedTrustedRecord?.host)}
+                        {(selectedDevice?.port ?? selectedTrustedRecord?.port) ? `:${selectedDevice?.port ?? selectedTrustedRecord?.port}` : ""}
+                      </span>
+                    ) : null}
+                    {(selectedDevice?.public_key_fingerprint ?? selectedTrustedRecord?.public_key_fingerprint) ? (
+                      <span className="is-mono" title={(selectedDevice?.public_key_fingerprint ?? selectedTrustedRecord?.public_key_fingerprint)!}>
+                        指纹 {(selectedDevice?.public_key_fingerprint ?? selectedTrustedRecord?.public_key_fingerprint)!.slice(0, 17)}…
+                      </span>
+                    ) : null}
+                  </div>
+                </div>
+                {selectedTrustedRecord ? (
+                  <button className="dw-forget" disabled={busy === "forget"} onClick={() => forgetTrustedDevice(selectedTrustedRecord)} type="button">
+                    忘记设备
+                  </button>
+                ) : null}
               </header>
 
-              <section className={dragActive ? "composer is-dragging" : "composer"}>
-                <button
-                  className="composer-dropzone"
-                  disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
-                  onClick={() => {
-                    void pickFiles();
-                  }}
-                  type="button"
-                >
-                  <Icon className="icon-drop" name="upload" />
-                  <div className="composer-copy">
-                    <strong>{composerTitle}</strong>
-                    <span>
-                      {plan
-                        ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
-                        : transferPaths.length > 0
-                          ? composerSubtitle
-                          : busy === "scan"
-                            ? "正在扫描文件…"
-                            : desktopRuntime
-                              ? "点击选择，或拖入文件 / 文件夹"
-                              : "浏览器预览不支持拖放"}
-                    </span>
-                  </div>
-                </button>
-                {connectionCodeOpen ? (
-                  <textarea
-                    className="composer-code"
-                    value={connectionCode}
-                    onChange={(event) => {
-                      setConnectionCode(event.target.value);
-                      setSelectedDeviceId(null);
-                      setSelectedDeviceSnapshot(null);
-                    }}
-                    aria-label="对方连接码或地址"
-                    placeholder="连接码或 IP:端口"
-                  />
-                ) : null}
-              </section>
+              <nav className="dw-tabs" role="tablist" aria-label="设备能力">
+                {CAPABILITY_TABS.map((item) => (
+                  <button
+                    aria-selected={capability === item.id}
+                    className={capability === item.id ? "dw-tab is-active" : "dw-tab"}
+                    key={item.id}
+                    onClick={() => setCapability(item.id)}
+                    role="tab"
+                    type="button"
+                  >
+                    {item.label}
+                    {item.lock ? <span className="dw-tab-lock">{item.lock}</span> : null}
+                  </button>
+                ))}
+              </nav>
 
-              <div className="composer-pills">
+              {capability !== "transfer" ? (
+                <CapabilityLocked capability={capability} />
+              ) : (
+              <>
+              <div className="send-modes" role="tablist" aria-label="发送类型">
                 <button
-                  className="action-pill"
-                  disabled={busy === "pick-files"}
-                  onClick={pickFiles}
+                  className={sendMode === "file" ? "send-mode is-active" : "send-mode"}
+                  onClick={() => setSendMode("file")}
                   type="button"
                 >
-                  选文件
+                  <Icon name="file" />
+                  文件 / 文件夹
                 </button>
                 <button
-                  className="action-pill"
-                  disabled={busy === "pick-folders"}
-                  onClick={pickFolders}
+                  className={sendMode === "bundle" ? "send-mode is-active is-bundle" : "send-mode"}
+                  onClick={() => setSendMode("bundle")}
                   type="button"
                 >
-                  选文件夹
-                </button>
-                <button
-                  className={connectionCodeOpen ? "action-pill is-active" : "action-pill"}
-                  onClick={() => {
-                    setConnectionCodeOpen((open) => !open);
-                    setSelectedDeviceId(null);
-                    setSelectedDeviceSnapshot(null);
-                  }}
-                  type="button"
-                >
-                  连接码
-                </button>
-                <button
-                  className="action-pill"
-                  disabled={transferPaths.length === 0}
-                  onClick={clearQueue}
-                  type="button"
-                >
-                  清空
+                  <Icon name="package" />
+                  资料包
                 </button>
               </div>
 
-              <ManualBundleComposer
-                busy={busy}
-                createdManualBundle={createdManualBundle}
-                manualBundleDisplayName={manualBundleDisplayName}
-                manualBundleSourceApp={manualBundleSourceApp}
-                manualBundleSourcePath={manualBundleSourcePath}
-                manualBundleType={manualBundleType}
-                setManualBundleDisplayName={setManualBundleDisplayName}
-                setManualBundleSourceApp={setManualBundleSourceApp}
-                setManualBundleType={setManualBundleType}
-                onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
-                onCreateManualBundle={createManualBundleForSend}
-              />
+              {sendMode === "file" ? (
+                <>
+                  <section className={dragActive ? "composer is-dragging" : "composer"}>
+                    <button
+                      className="composer-dropzone"
+                      disabled={!desktopRuntime || busy === "pick-files" || busy === "pick-folders" || busy === "scan"}
+                      onClick={() => {
+                        void pickFiles();
+                      }}
+                      type="button"
+                    >
+                      <Icon className="icon-drop" name="upload" />
+                      <div className="composer-copy">
+                        <strong>{composerTitle}</strong>
+                        <span>
+                          {plan
+                            ? `${plan.file_count} 个文件 · ${formatBytes(plan.total_bytes)}`
+                            : transferPaths.length > 0
+                              ? composerSubtitle
+                              : busy === "scan"
+                                ? "正在扫描文件…"
+                                : desktopRuntime
+                                  ? "点击选择，或拖入文件 / 文件夹"
+                                  : "浏览器预览不支持拖放"}
+                        </span>
+                      </div>
+                    </button>
+                    {connectionCodeOpen ? (
+                      <textarea
+                        className="composer-code"
+                        value={connectionCode}
+                        onChange={(event) => {
+                          setConnectionCode(event.target.value);
+                          setSelectedDeviceId(null);
+                          setSelectedDeviceSnapshot(null);
+                        }}
+                        aria-label="对方连接码或地址"
+                        placeholder="连接码或 IP:端口"
+                      />
+                    ) : null}
+                  </section>
+
+                  <div className="composer-pills">
+                    <button className="action-pill" disabled={busy === "pick-files"} onClick={pickFiles} type="button">
+                      选文件
+                    </button>
+                    <button className="action-pill" disabled={busy === "pick-folders"} onClick={pickFolders} type="button">
+                      选文件夹
+                    </button>
+                    <button
+                      className={connectionCodeOpen ? "action-pill is-active" : "action-pill"}
+                      onClick={() => {
+                        setConnectionCodeOpen((open) => !open);
+                        setSelectedDeviceId(null);
+                        setSelectedDeviceSnapshot(null);
+                      }}
+                      type="button"
+                    >
+                      连接码
+                    </button>
+                    <button className="action-pill" disabled={transferPaths.length === 0} onClick={clearQueue} type="button">
+                      清空
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <ManualBundleComposer
+                  busy={busy}
+                  createdManualBundle={createdManualBundle}
+                  manualBundleDisplayName={manualBundleDisplayName}
+                  manualBundleSourceApp={manualBundleSourceApp}
+                  manualBundleSourcePath={manualBundleSourcePath}
+                  manualBundleType={manualBundleType}
+                  setManualBundleDisplayName={setManualBundleDisplayName}
+                  setManualBundleSourceApp={setManualBundleSourceApp}
+                  setManualBundleType={setManualBundleType}
+                  onChooseManualBundleSourceDir={chooseManualBundleSourceDir}
+                  onCreateManualBundle={createManualBundleForSend}
+                />
+              )}
 
               <div className="send-bar">
                 <div className="send-bar-target">
@@ -1512,21 +1711,24 @@ export function App() {
                 />
               ) : null}
 
-              <NearbyDevices
+              <div className="dw-section-head">最近传输</div>
+              <RecentActivity
                 busy={busy}
-                discoveryStatus={discoveryStatus}
-                devices={nearbyDevices}
-                localPlatform={localPlatform}
-                selectedDeviceId={selectedDeviceId}
-                onSelectDevice={(device) => {
-                  setSelectedDeviceId(device.id);
-                  setSelectedDeviceSnapshot(device);
-                  setConnectionCodeOpen(false);
-                  setConnectionCode("");
-                  setError(null);
-                }}
-                onTrustDevice={requestPairing}
+                compact
+                selectedTransferId={selectedTransferId}
+                transfers={transfers}
+                onClearTransfers={clearTransferHistory}
+                onDeleteTransfer={deleteTransfer}
+                onOpenTransfer={openTransferLocation}
+                onResendTransfer={resendTransfer}
+                onSelectTransfer={(transfer) =>
+                  setSelectedTransferId((current) => (current === transfer.id ? null : transfer.id))
+                }
+                onUseFallbackCode={openFallbackCode}
               />
+
+              </>
+              )}
             </div>
           ) : (
             <div className="page-stack">
@@ -1666,11 +1868,13 @@ export function App() {
         </section>
         </div>
       </section>
+      </div>
     </main>
   );
 }
 
 type IconName =
+  | "appearance"
   | "arrow-up"
   | "clock"
   | "devices"
@@ -1684,12 +1888,29 @@ type IconName =
   | "plug"
   | "settings"
   | "send"
+  | "shield"
   | "trash"
   | "upload";
+
+function CapabilityLocked({ capability }: { capability: Exclude<DeviceCapability, "transfer"> }) {
+  const copy = CAPABILITY_LOCKED_COPY[capability];
+  const icon: IconName = capability === "agent" ? "plug" : capability === "state" ? "package" : "link";
+  return (
+    <div className="capability-locked">
+      <div className="capability-locked-icon">
+        <Icon name={icon} />
+      </div>
+      <strong>{copy.title}</strong>
+      <p>{copy.body}</p>
+      <span className="capability-locked-tag">{copy.tag}</span>
+    </div>
+  );
+}
 
 function Icon({ className, name }: { className?: string; name: IconName }) {
   return (
     <svg aria-hidden="true" className={className ? `icon ${className}` : "icon"} fill="none" viewBox="0 0 24 24">
+      {name === "appearance" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
       {name === "arrow-up" ? <path d="M12 19V5m0 0 6 6M12 5l-6 6" /> : null}
       {name === "clock" ? <path d="M12 6v6l4 2m5-2a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" /> : null}
       {name === "devices" ? <path d="M7 8a4 4 0 1 1 8 0 4 4 0 0 1-8 0Zm-3 13a7 7 0 0 1 14 0M17 11a3 3 0 0 1 0 6m3-8a6 6 0 0 1 0 10" /> : null}
@@ -1701,8 +1922,14 @@ function Icon({ className, name }: { className?: string; name: IconName }) {
       {name === "overview" ? <path d="M4 5h7v6H4V5Zm9 0h7v4h-7V5ZM4 13h7v6H4v-6Zm9-2h7v8h-7v-8Z" /> : null}
       {name === "package" ? <path d="m4 7 8-4 8 4-8 4-8-4Zm0 0v10l8 4m0-10v10m0-10 8-4m0 0v10l-8 4" /> : null}
       {name === "plug" ? <path d="M9 7V3m6 4V3M7 7h10v5a5 5 0 0 1-10 0V7Zm5 10v4" /> : null}
-      {name === "settings" ? <path d="M12 8a4 4 0 1 1 0 8 4 4 0 0 1 0-8Zm0-5v3m0 12v3M4.9 4.9 7 7m10 10 2.1 2.1M3 12h3m12 0h3M4.9 19.1 7 17m10-10 2.1-2.1" /> : null}
+      {name === "settings" ? (
+        <>
+          <path d="M12 15.2a3.2 3.2 0 1 0 0-6.4 3.2 3.2 0 0 0 0 6.4Z" />
+          <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2.05 2.05 0 1 1-2.9 2.9l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2.05 2.05 0 0 1-4.1 0v-.1A1.7 1.7 0 0 0 8.1 19.2a1.7 1.7 0 0 0-1.88.34l-.06.06a2.05 2.05 0 1 1-2.9-2.9l.06-.06A1.7 1.7 0 0 0 3.6 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2a2.05 2.05 0 0 1 0-4.1h.1A1.7 1.7 0 0 0 3.8 8.1a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2.05 2.05 0 1 1 2.9-2.9l.06.06A1.7 1.7 0 0 0 8.1 3.8a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2a2.05 2.05 0 0 1 4.1 0v.1A1.7 1.7 0 0 0 15 3.8a1.7 1.7 0 0 0 1.88-.34l.06-.06a2.05 2.05 0 1 1 2.9 2.9l-.06.06A1.7 1.7 0 0 0 19.4 8c.08.36.28.7.6 1 .3.27.7.43 1.1.43h.1a2.05 2.05 0 0 1 0 4.1h-.1a1.7 1.7 0 0 0-1.7 1.47Z" />
+        </>
+      ) : null}
       {name === "send" ? <path d="m4 12 16-8-8 16-2-7-6-1Z" /> : null}
+      {name === "shield" ? <path d="M12 3l8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Zm-3 9 2 2 4-4" /> : null}
       {name === "trash" ? <path d="M4 7h16M9 7V4h6v3m-8 0 1 14h8l1-14" /> : null}
       {name === "upload" ? <path d="M12 16V6m0 0 5 5m-5-5-5 5M4 18h16" /> : null}
     </svg>
@@ -3769,6 +3996,10 @@ function formatTransferTime(timestampMs: number) {
     minute: "2-digit",
     hour12: false
   }).format(date);
+}
+
+function isTrustedDeviceState(trustState: string) {
+  return trustState.toLowerCase() === "trusted";
 }
 
 function platformLabel(platform: string) {
