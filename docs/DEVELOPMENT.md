@@ -60,7 +60,7 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 本项目使用 `main / develop / desktop-develop / personal dev branch / topic branch` 的开发流程。
 
 ```text
-Rust / 核心能力 -> dev/<name> -> develop
+Rust / 核心能力 -> dev/<name> 或 topic branch -> develop
 桌面端能力 -> dev/<name> 或短分支 -> desktop-develop
 desktop-develop -> develop -> main -> tag / release
 ```
@@ -109,6 +109,14 @@ git merge --ff-only origin/develop
 ```
 
 桌面端功能可以从 `desktop-develop` 开短分支，也可以在个人分支里做完后拆 PR。跨层改动要拆成两段：Rust / 协议先进 `develop`，桌面 UI 再进 `desktop-develop`。
+
+从 `desktop-develop` 开桌面端分支：
+
+```bash
+git checkout desktop-develop
+git pull --ff-only
+git checkout -b ui/hisakazu/transfer-progress-polish
+```
 
 每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
 
