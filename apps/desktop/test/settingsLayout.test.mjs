@@ -63,16 +63,23 @@ test("local integration settings expose a generic read-only bridge self check", 
   assert.match(appSource, /localBridgeRuntimeLine/);
   assert.match(appSource, /const \[localBridgeCheck, setLocalBridgeCheck\]/);
   assert.match(appSource, /const \[localBridgeAuthorizations, setLocalBridgeAuthorizations\]/);
+  assert.match(appSource, /const \[localBridgeActionResults, setLocalBridgeActionResults\]/);
   assert.match(appSource, /function runLocalBridgeSelfCheck/);
   assert.match(appSource, /invokeCommand<LocalBridgeResponseDto>\("handle_local_bridge_request"/);
   assert.match(appSource, /invokeCommand<LocalBridgeAuthorizationDto>\("confirm_local_bridge_authorization"/);
+  assert.match(appSource, /invokeCommand<LocalBridgePendingActionResultListDto>\("list_local_bridge_pending_action_results"/);
   assert.match(appSource, /localBridgeAuthorizationCode/);
   assert.match(appSource, /onRevokeLocalBridgeAuthorization/);
   assert.match(appSource, /onPruneLocalBridgeAuthorizations/);
   assert.match(appSource, /"kind": "devices.list"/);
   assert.match(appSource, /<IntegrationSettings[\s\S]+localBridgeStatus=\{localBridgeStatus\}/);
   assert.match(appSource, /<IntegrationSettings[\s\S]+localBridgeCheck=\{localBridgeCheck\}/);
+  assert.match(appSource, /<IntegrationSettings[\s\S]+localBridgeActionResults=\{localBridgeActionResults\}/);
   assert.match(appSource, /onRunLocalBridgeSelfCheck=\{runLocalBridgeSelfCheck\}/);
+  assert.match(appSource, /<SettingsRow label="待授权">/);
+  assert.match(appSource, /<SettingsRow label="执行结果">/);
+  assert.match(appSource, /localBridgeActionResultReasonLabel/);
+  assert.match(appSource, /bundle_import_conflict/);
 });
 
 test("device overview uses discovery guidance when no nearby devices are online", () => {

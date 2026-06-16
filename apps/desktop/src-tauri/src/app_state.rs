@@ -182,8 +182,10 @@ pub struct LocalBridgeRuntimeState {
     pub pending_authorization: Mutex<Option<PendingLocalBridgeAuthorization>>,
     pub authorizations: Mutex<Vec<LocalBridgeAuthorizationRecord>>,
     pub pending_actions: Mutex<Vec<LocalBridgePendingAction>>,
+    pub pending_actions_signal: Condvar,
     pub pending_action_results: Mutex<Vec<LocalBridgePendingActionResult>>,
     pub events: Mutex<Vec<LocalBridgeEvent>>,
+    pub events_signal: Condvar,
     pub status: Mutex<LocalBridgeRuntimeStatusState>,
 }
 

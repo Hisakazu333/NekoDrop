@@ -54,6 +54,7 @@ type CommandName =
   | "preflight_next_local_bridge_bundle_send"
   | "execute_next_local_bridge_bundle_send"
   | "execute_next_local_bridge_bundle_import"
+  | "run_local_bridge_runtime_worker_once"
   | "prune_local_bridge_authorizations"
   | "handle_local_bridge_request"
   | "confirm_local_bridge_authorization";
