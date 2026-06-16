@@ -28,7 +28,7 @@ use nekodrop_service::{
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, create_manual_bundle_directory,
-    delete_staged_bundle as delete_staged_bundle_storage,
+    delete_staged_bundle as delete_staged_bundle_storage, detect_bundle_directory,
     import_staged_bundle as import_staged_bundle_storage,
     list_staged_bundles as list_staged_bundles_storage, prune_staged_bundles_older_than,
     ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan, StagedBundle,
@@ -36,6 +36,7 @@ use nekodrop_storage::{
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
     BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeAuthorizationRequest,
+    LocalBridgeBundleSendPreflightEvent, LocalBridgeBundleSendPreflightStatus,
     LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
     SignedSessionIdentityBinding,
 };
@@ -45,10 +46,10 @@ use tauri::{AppHandle, Emitter, State};
 use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
     ActiveReceiveSession, AppState, LocalBridgeAuthorizationRecord, LocalBridgePendingAction,
-    LocalBridgePendingImportBundleAction, LocalBridgePendingSendBundleAction,
-    LocalBridgeRuntimeState, PendingLocalBridgeAuthorization, PendingPairingRequest,
-    PendingReceiveFile, PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision,
-    TransferStatusState,
+    LocalBridgePendingActionResult, LocalBridgePendingImportBundleAction,
+    LocalBridgePendingSendBundleAction, LocalBridgeRuntimeState, PendingLocalBridgeAuthorization,
+    PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer, PendingReceiveResumeSummary,
+    ReceiveDecision, TransferStatusState,
 };
 use crate::device_identity::app_config_dir;
 use crate::local_bridge_authorizations::{
@@ -72,6 +73,7 @@ const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
 const LOCAL_BRIDGE_EVENT_QUEUE_LIMIT: usize = 256;
 const LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT: usize = 128;
+const LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT: usize = 128;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ReceiveTrustContext {
@@ -427,6 +429,46 @@ pub struct LocalBridgePendingActionRemoveDto {
 pub struct LocalBridgePendingActionTakeDto {
     pub action: Option<LocalBridgePendingActionDto>,
     pub remaining_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgePendingActionResultDto {
+    pub request_id: String,
+    pub action_kind: String,
+    pub client_id: String,
+    pub client_display_name: String,
+    pub status: String,
+    pub reason: Option<String>,
+    pub message: String,
+    pub bundle_id: Option<String>,
+    pub bundle_type: Option<String>,
+    pub bundle_root: Option<String>,
+    pub target_device_id: Option<String>,
+    pub require_trusted_device: Option<bool>,
+    pub requested_at_ms: u128,
+    pub claimed_at_ms: u128,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgePendingActionResultListDto {
+    pub results: Vec<LocalBridgePendingActionResultDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgeBundleSendPreflightDto {
+    pub status: String,
+    pub request_id: Option<String>,
+    pub reason: Option<String>,
+    pub message: String,
+    pub client_id: Option<String>,
+    pub client_display_name: Option<String>,
+    pub bundle_id: Option<String>,
+    pub bundle_type: Option<String>,
+    pub bundle_root: Option<String>,
+    pub target_device_id: Option<String>,
+    pub require_trusted_device: Option<bool>,
+    pub requested_at_ms: Option<u128>,
+    pub claimed_at_ms: Option<u128>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -848,6 +890,15 @@ pub fn remove_local_bridge_pending_action(
 }
 
 #[tauri::command]
+pub fn list_local_bridge_pending_action_results(
+    state: State<'_, AppState>,
+) -> Result<LocalBridgePendingActionResultListDto, String> {
+    Ok(LocalBridgePendingActionResultListDto {
+        results: list_local_bridge_pending_action_results_at(&state.local_bridge_runtime)?,
+    })
+}
+
+#[tauri::command]
 pub fn take_next_local_bridge_pending_action(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgePendingActionTakeDto, String> {
@@ -862,6 +913,22 @@ pub fn take_next_local_bridge_pending_action(
         action,
         remaining_count,
     })
+}
+
+#[tauri::command]
+pub fn preflight_next_local_bridge_bundle_send(
+    state: State<'_, AppState>,
+) -> Result<LocalBridgeBundleSendPreflightDto, String> {
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    preflight_next_local_bridge_bundle_send_at(
+        &state.local_bridge_runtime,
+        &trusted_devices,
+        now_ms(),
+    )
 }
 
 #[tauri::command]
@@ -2897,6 +2964,274 @@ fn take_next_local_bridge_pending_action_at(
     Ok(Some(local_bridge_pending_action_to_dto(&action, true)))
 }
 
+fn preflight_next_local_bridge_bundle_send_at(
+    runtime: &LocalBridgeRuntimeState,
+    trusted_devices: &[TrustedDeviceRecord],
+    now_ms: u128,
+) -> Result<LocalBridgeBundleSendPreflightDto, String> {
+    let action = {
+        let mut actions = runtime
+            .pending_actions
+            .lock()
+            .map_err(|error| error.to_string())?;
+        let Some(LocalBridgePendingAction::SendBundle(_)) = actions.first() else {
+            return Ok(LocalBridgeBundleSendPreflightDto {
+                status: "skipped".to_string(),
+                request_id: None,
+                reason: Some("no_bundle_send_action".to_string()),
+                message: "no pending local bridge bundle send action".to_string(),
+                client_id: None,
+                client_display_name: None,
+                bundle_id: None,
+                bundle_type: None,
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                requested_at_ms: None,
+                claimed_at_ms: Some(now_ms),
+            });
+        };
+        match actions.remove(0) {
+            LocalBridgePendingAction::SendBundle(action) => action,
+            LocalBridgePendingAction::ImportBundle(_) => unreachable!("first action checked above"),
+        }
+    };
+
+    let result = preflight_local_bridge_bundle_send_action(action, trusted_devices, now_ms)?;
+    push_local_bridge_pending_action_result(runtime, &result)?;
+    Ok(result)
+}
+
+fn preflight_local_bridge_bundle_send_action(
+    action: LocalBridgePendingSendBundleAction,
+    trusted_devices: &[TrustedDeviceRecord],
+    now_ms: u128,
+) -> Result<LocalBridgeBundleSendPreflightDto, String> {
+    let bundle_root = Path::new(&action.bundle_root);
+    if !bundle_root.exists() || !bundle_root.is_dir() {
+        return Ok(local_bridge_bundle_send_preflight_result(
+            "failed_preflight",
+            &action,
+            None,
+            None,
+            Some("bundle_root_missing"),
+            "local bridge bundle_root is missing or is not a directory",
+            now_ms,
+        ));
+    }
+
+    let detected = match detect_bundle_directory(bundle_root) {
+        Ok(Some(detected)) => detected,
+        Ok(None) => {
+            return Ok(local_bridge_bundle_send_preflight_result(
+                "failed_preflight",
+                &action,
+                None,
+                None,
+                Some("bundle_manifest_missing"),
+                "local bridge bundle_root does not contain bundle.json",
+                now_ms,
+            ));
+        }
+        Err(error) => {
+            return Ok(local_bridge_bundle_send_preflight_result(
+                "failed_preflight",
+                &action,
+                None,
+                None,
+                Some("bundle_invalid"),
+                &format!("local bridge bundle validation failed: {error}"),
+                now_ms,
+            ));
+        }
+    };
+
+    let detected_type = detected.manifest.bundle_type;
+    if detected_type != action.bundle_type {
+        return Ok(local_bridge_bundle_send_preflight_result(
+            "failed_preflight",
+            &action,
+            Some(detected.manifest.bundle_id.as_str()),
+            Some(detected_type),
+            Some("bundle_type_mismatch"),
+            "local bridge bundle_type does not match the detected bundle manifest",
+            now_ms,
+        ));
+    }
+
+    if action.require_trusted_device {
+        let Some(target_device_id) = action.target_device_id.as_deref() else {
+            return Ok(local_bridge_bundle_send_preflight_result(
+                "failed_preflight",
+                &action,
+                Some(detected.manifest.bundle_id.as_str()),
+                Some(detected_type),
+                Some("trusted_target_required"),
+                "local bridge bundle send requires a trusted target device",
+                now_ms,
+            ));
+        };
+        if !trusted_devices
+            .iter()
+            .any(|device| device.device_id == target_device_id)
+        {
+            return Ok(local_bridge_bundle_send_preflight_result(
+                "failed_preflight",
+                &action,
+                Some(detected.manifest.bundle_id.as_str()),
+                Some(detected_type),
+                Some("trusted_target_missing"),
+                "local bridge bundle send target is not a trusted device",
+                now_ms,
+            ));
+        }
+    }
+
+    Ok(local_bridge_bundle_send_preflight_result(
+        "ready",
+        &action,
+        Some(detected.manifest.bundle_id.as_str()),
+        Some(detected_type),
+        None,
+        "local bridge bundle send is ready for the desktop send worker",
+        now_ms,
+    ))
+}
+
+fn local_bridge_bundle_send_preflight_result(
+    status: &str,
+    action: &LocalBridgePendingSendBundleAction,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    reason: Option<&str>,
+    message: &str,
+    now_ms: u128,
+) -> LocalBridgeBundleSendPreflightDto {
+    LocalBridgeBundleSendPreflightDto {
+        status: status.to_string(),
+        request_id: Some(action.request_id.clone()),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        client_id: Some(action.client.client_id.clone()),
+        client_display_name: Some(action.client.display_name.clone()),
+        bundle_id: bundle_id.map(str::to_string),
+        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+        bundle_root: Some(action.bundle_root.clone()),
+        target_device_id: action.target_device_id.clone(),
+        require_trusted_device: Some(action.require_trusted_device),
+        requested_at_ms: Some(action.requested_at_ms),
+        claimed_at_ms: Some(now_ms),
+    }
+}
+
+fn push_local_bridge_pending_action_result(
+    runtime: &LocalBridgeRuntimeState,
+    result: &LocalBridgeBundleSendPreflightDto,
+) -> Result<(), String> {
+    let Some(request_id) = result.request_id.clone() else {
+        return Ok(());
+    };
+    let Some(client_id) = result.client_id.clone() else {
+        return Ok(());
+    };
+    let Some(client_display_name) = result.client_display_name.clone() else {
+        return Ok(());
+    };
+    let Some(requested_at_ms) = result.requested_at_ms else {
+        return Ok(());
+    };
+    let Some(claimed_at_ms) = result.claimed_at_ms else {
+        return Ok(());
+    };
+    let event_id = format!("bridge-action-{request_id}-{claimed_at_ms}");
+
+    let mut results = runtime
+        .pending_action_results
+        .lock()
+        .map_err(|error| error.to_string())?;
+    results.push(LocalBridgePendingActionResult {
+        request_id: request_id.clone(),
+        action_kind: "bundle.send".to_string(),
+        client_id: client_id.clone(),
+        client_display_name,
+        status: result.status.clone(),
+        reason: result.reason.clone(),
+        message: result.message.clone(),
+        bundle_id: result.bundle_id.clone(),
+        bundle_type: result.bundle_type.clone(),
+        bundle_root: result.bundle_root.clone(),
+        target_device_id: result.target_device_id.clone(),
+        require_trusted_device: result.require_trusted_device,
+        requested_at_ms,
+        claimed_at_ms,
+    });
+    if results.len() > LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT {
+        let excess = results.len() - LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT;
+        results.drain(0..excess);
+    }
+    drop(results);
+
+    let status = match result.status.as_str() {
+        "ready" => LocalBridgeBundleSendPreflightStatus::Ready,
+        "failed_preflight" => LocalBridgeBundleSendPreflightStatus::FailedPreflight,
+        _ => return Ok(()),
+    };
+    push_local_bridge_runtime_event(
+        runtime,
+        LocalBridgeEvent::BundleSendPreflight(LocalBridgeBundleSendPreflightEvent {
+            event_id,
+            request_id,
+            client_id,
+            status,
+            reason: result.reason.clone(),
+            bundle_id: result.bundle_id.clone(),
+            bundle_type: result
+                .bundle_type
+                .as_deref()
+                .and_then(bundle_type_from_label),
+            target_device_id: result.target_device_id.clone(),
+        }),
+    )?;
+    Ok(())
+}
+
+fn list_local_bridge_pending_action_results_at(
+    runtime: &LocalBridgeRuntimeState,
+) -> Result<Vec<LocalBridgePendingActionResultDto>, String> {
+    let results = runtime
+        .pending_action_results
+        .lock()
+        .map_err(|error| error.to_string())?;
+    Ok(results
+        .iter()
+        .map(|result| local_bridge_pending_action_result_to_dto(result, false))
+        .collect())
+}
+
+fn local_bridge_pending_action_result_to_dto(
+    result: &LocalBridgePendingActionResult,
+    include_sensitive_paths: bool,
+) -> LocalBridgePendingActionResultDto {
+    LocalBridgePendingActionResultDto {
+        request_id: result.request_id.clone(),
+        action_kind: result.action_kind.clone(),
+        client_id: result.client_id.clone(),
+        client_display_name: result.client_display_name.clone(),
+        status: result.status.clone(),
+        reason: result.reason.clone(),
+        message: result.message.clone(),
+        bundle_id: result.bundle_id.clone(),
+        bundle_type: result.bundle_type.clone(),
+        bundle_root: include_sensitive_paths
+            .then(|| result.bundle_root.clone())
+            .flatten(),
+        target_device_id: result.target_device_id.clone(),
+        require_trusted_device: result.require_trusted_device,
+        requested_at_ms: result.requested_at_ms,
+        claimed_at_ms: result.claimed_at_ms,
+    }
+}
+
 fn remove_local_bridge_pending_action_at(
     runtime: &LocalBridgeRuntimeState,
     request_id: &str,
@@ -3079,7 +3414,13 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 LocalBridgePermissionScope::TransferStatusRead,
                 now_ms,
             );
-            if !can_read_bundles && !can_read_transfers {
+            let can_send_bundles = local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleSend,
+                now_ms,
+            );
+            if !can_read_bundles && !can_read_transfers && !can_send_bundles {
                 return Ok(local_bridge_pending_confirmation_response(
                     request.request_id,
                     request.client,
@@ -3091,6 +3432,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 request.limit.unwrap_or(50),
                 can_read_bundles,
                 can_read_transfers,
+                can_send_bundles,
             )?;
             Ok(local_bridge_events_response(
                 request.request_id,
@@ -3244,6 +3586,7 @@ fn local_bridge_events_after(
     limit: usize,
     can_read_bundles: bool,
     can_read_transfers: bool,
+    can_send_bundles: bool,
 ) -> Result<Vec<serde_json::Value>, String> {
     let mut after_cursor = after_event_id.is_none();
     let mut output = Vec::new();
@@ -3252,7 +3595,12 @@ fn local_bridge_events_after(
             after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
             continue;
         }
-        if !local_bridge_event_is_allowed(event, can_read_bundles, can_read_transfers) {
+        if !local_bridge_event_is_allowed(
+            event,
+            can_read_bundles,
+            can_read_transfers,
+            can_send_bundles,
+        ) {
             continue;
         }
         output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
@@ -3266,6 +3614,7 @@ fn local_bridge_events_after(
 fn local_bridge_event_id(event: &LocalBridgeEvent) -> &str {
     match event {
         LocalBridgeEvent::BundleReceived(event) => &event.event_id,
+        LocalBridgeEvent::BundleSendPreflight(event) => &event.event_id,
         LocalBridgeEvent::TransferUpdated(event) => &event.event_id,
     }
 }
@@ -3274,9 +3623,11 @@ fn local_bridge_event_is_allowed(
     event: &LocalBridgeEvent,
     can_read_bundles: bool,
     can_read_transfers: bool,
+    can_send_bundles: bool,
 ) -> bool {
     match event {
         LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
+        LocalBridgeEvent::BundleSendPreflight(_) => can_send_bundles,
         LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
     }
 }
@@ -3842,6 +4193,10 @@ fn parse_bundle_type(value: &str) -> Result<BundleType, String> {
         "config_snapshot" => Ok(BundleType::ConfigSnapshot),
         _ => Err(format!("不支持的资料包类型：{value}")),
     }
+}
+
+fn bundle_type_from_label(value: &str) -> Option<BundleType> {
+    parse_bundle_type(value).ok()
 }
 
 fn received_root_name(report: &TransferReceiveReport) -> String {
@@ -6498,6 +6853,306 @@ mod tests {
         let claimed = take_next_local_bridge_pending_action_at(&runtime).unwrap();
 
         assert!(claimed.is_none());
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_accepts_valid_trusted_target() {
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-ready");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_ready");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-1".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: true,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+
+        let result = preflight_next_local_bridge_bundle_send_at(&runtime, &trusted, 2_000).unwrap();
+
+        assert_eq!(result.status, "ready");
+        assert_eq!(result.request_id.as_deref(), Some("bridge-send-1"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_preflight_ready"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert_eq!(result.target_device_id.as_deref(), Some("device-a"));
+        assert_eq!(result.claimed_at_ms, Some(2_000));
+        assert!(result.message.contains("ready"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_rejects_missing_bundle_root() {
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-missing".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: "/tmp/nekodrop-missing-bundle-root".to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+
+        assert_eq!(result.status, "failed_preflight");
+        assert_eq!(result.request_id.as_deref(), Some("bridge-send-missing"));
+        assert_eq!(result.reason.as_deref(), Some("bundle_root_missing"));
+        assert!(result.message.contains("bundle_root"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_rejects_bundle_type_mismatch() {
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-type-mismatch");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_type");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-type".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: None,
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Workspace,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+
+        assert_eq!(result.status, "failed_preflight");
+        assert_eq!(result.reason.as_deref(), Some("bundle_type_mismatch"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_preflight_type"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_rejects_missing_trusted_target() {
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-untrusted-target");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_trusted");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-untrusted".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: true,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+
+        assert_eq!(result.status, "failed_preflight");
+        assert_eq!(result.reason.as_deref(), Some("trusted_target_missing"));
+        assert_eq!(result.target_device_id.as_deref(), Some("device-a"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_records_result_without_sensitive_path() {
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-result-history");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_result");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-result".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: None,
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let preflight = preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(preflight.status, "ready");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-send-result");
+        assert_eq!(results[0].action_kind, "bundle.send");
+        assert_eq!(results[0].status, "ready");
+        assert_eq!(
+            results[0].bundle_id.as_deref(),
+            Some("bundle_preflight_result")
+        );
+        assert!(results[0].bundle_root.is_none());
+        assert_eq!(results[0].claimed_at_ms, 2_000);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_preflight_records_failure_reason() {
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-failed-result".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: "/tmp/nekodrop-missing-bundle-result".to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let preflight = preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(preflight.status, "failed_preflight");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-send-failed-result");
+        assert_eq!(results[0].status, "failed_preflight");
+        assert_eq!(results[0].reason.as_deref(), Some("bundle_root_missing"));
+        assert!(results[0].message.contains("bundle_root"));
+        assert!(results[0].bundle_root.is_none());
+    }
+
+    #[test]
+    fn authorized_local_bridge_client_can_poll_bundle_send_preflight_events() {
+        let runtime = LocalBridgeRuntimeState::default();
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-event");
+        let staging_root = dir.join("bundle_staging");
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ));
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-event".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: "/tmp/nekodrop-missing-bundle-event".to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        preflight_next_local_bridge_bundle_send_at(&runtime, &[], 2_000).unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-send",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(
+            response.events[0]["kind"].as_str(),
+            Some("bundle.send.preflight")
+        );
+        assert_eq!(
+            response.events[0]["payload"]["request_id"].as_str(),
+            Some("bridge-send-event")
+        );
+        assert_eq!(
+            response.events[0]["payload"]["status"].as_str(),
+            Some("failed_preflight")
+        );
+        assert!(response.events[0]["payload"].get("bundle_root").is_none());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
