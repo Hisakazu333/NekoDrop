@@ -536,6 +536,32 @@ button:disabled {
   max-width: 760px;
 }
 
+.settings-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin-bottom: 4px;
+}
+
+.settings-tab {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: var(--r-pill);
+  color: var(--text-3);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.settings-tab:not(:disabled):hover {
+  color: var(--text-1);
+  background: var(--surface-hover);
+}
+
+.settings-tab.is-active {
+  color: var(--accent-press);
+  background: var(--accent-soft);
+}
+
 .settings-group {
   display: grid;
   gap: 10px;

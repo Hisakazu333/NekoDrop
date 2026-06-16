@@ -2709,6 +2709,23 @@ function ReceivePanel({
   );
 }
 
+type SettingsTab = "general" | "receive" | "security" | "access" | "advanced" | "about";
+
+const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
+  { id: "general", label: "通用" },
+  { id: "receive", label: "收件" },
+  { id: "security", label: "安全" },
+  { id: "access", label: "接入" },
+  { id: "advanced", label: "高级" },
+  { id: "about", label: "关于" }
+];
+
+const EXPERIMENTAL_TRANSPORTS: Array<{ id: string; label: string }> = [
+  { id: "iroh", label: "iroh" },
+  { id: "relay", label: "relay" },
+  { id: "p2p", label: "P2P" }
+];
+
 function SettingsPanel({
   bindPort,
   busy,
@@ -2778,116 +2795,167 @@ function SettingsPanel({
     bindPort
   });
 
+  const [tab, setTab] = useState<SettingsTab>("general");
+
   return (
     <section className="settings-page">
-      <SettingsGroup title="通用" note="附近设备会看到这里的名称">
-        <SettingsRow label="设备名称">
-          <div className="settings-inline-field">
-            <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
-            <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
-              保存
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow label="平台">
-          <SettingsValue>{model.platformLabel}</SettingsValue>
-        </SettingsRow>
-      </SettingsGroup>
-
-      <SettingsGroup
-        title="接收"
-        note={model.receiveConfigLocked ? "收件开启时，目录和端口需先关闭收件再改" : "默认保存位置和连接端口"}
-      >
-        <SettingsRow label="保存位置">
-          <div className="settings-inline-field is-wide">
-            <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
-            <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
-              选择
-            </button>
-            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
-              保存
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow label="默认端口">
-          <div className="settings-inline-field">
-            <input className="is-port" disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
-            <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
-              保存
-            </button>
-          </div>
-        </SettingsRow>
-        <SettingsRow label="收到文件时">
-          <div className="policy-segment is-settings">
-            {RECEIVE_POLICY_OPTIONS.map((option) => (
-              <button
-                className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
-                disabled={busy === "receive-policy"}
-                key={option.value}
-                onClick={() => onUpdateReceivePolicy(option.value)}
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </SettingsRow>
-        <SettingsRow label="文件夹">
-          <button className="text-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
-            打开接收文件夹
+      <div className="settings-tabs" role="tablist" aria-label="设置分区">
+        {SETTINGS_TABS.map((item) => (
+          <button
+            aria-selected={tab === item.id}
+            className={tab === item.id ? "settings-tab is-active" : "settings-tab"}
+            key={item.id}
+            onClick={() => setTab(item.id)}
+            role="tab"
+            type="button"
+          >
+            {item.label}
           </button>
-        </SettingsRow>
-      </SettingsGroup>
+        ))}
+      </div>
 
-      <SettingsGroup title="网络" note="发现与连接状态为只读">
-        <SettingsRow label="局域网发现">
-          <SettingsValue>{model.discoveryLabel}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="本机地址">
-          <SettingsValue mono title={model.lanIpLabel ?? undefined}>
-            {model.lanIpLabel ?? "—"}
-          </SettingsValue>
-        </SettingsRow>
-        {receiveSession ? (
-          <SettingsRow label="收件状态" hint="连接码请在收件页查看">
-            <SettingsValue>{model.receiveAddressLabel}</SettingsValue>
+      {tab === "general" ? (
+        <SettingsGroup title="通用" note="附近设备会看到这里的名称">
+          <SettingsRow label="设备名称">
+            <div className="settings-inline-field">
+              <input value={deviceNameInput} onChange={(event) => setDeviceNameInput(event.target.value)} />
+              <button className="tool-button" disabled={busy === "device-name" || !model.canSaveDeviceName} onClick={onSaveDeviceName} type="button">
+                保存
+              </button>
+            </div>
           </SettingsRow>
-        ) : null}
-      </SettingsGroup>
+          <SettingsRow label="平台">
+            <SettingsValue>{model.platformLabel}</SettingsValue>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
 
-      <SettingsGroup title="关于本机" note="用于配对与排查">
-        <SettingsRow label="设备 ID">
-          <SettingsValue mono title={model.deviceIdLabel ?? undefined}>
-            {model.deviceIdLabel ?? "—"}
-          </SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="指纹">
-          <SettingsValue mono title={model.fingerprintLabel ?? undefined}>
-            {model.fingerprintLabel ?? "—"}
-          </SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="能力">
-          <SettingsValue>{model.capabilitiesLabel ?? "—"}</SettingsValue>
-        </SettingsRow>
-        <SettingsRow label="托盘菜单">
-          <SettingsValue>{model.trayLabel}</SettingsValue>
-        </SettingsRow>
-      </SettingsGroup>
+      {tab === "receive" ? (
+        <SettingsGroup
+          title="收件"
+          note={model.receiveConfigLocked ? "收件开启时，目录和端口需先关闭收件再改" : "默认保存位置和连接端口"}
+        >
+          <SettingsRow label="保存位置">
+            <div className="settings-inline-field is-wide">
+              <input disabled={model.receiveConfigLocked} value={model.receiveDir} onChange={(event) => setReceiveDir(event.target.value)} />
+              <button className="tool-button" disabled={busy === "pick-receive" || model.receiveConfigLocked} onClick={onChooseReceiveDir} type="button">
+                选择
+              </button>
+              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceiveDir} onClick={onSaveReceiveDir} type="button">
+                保存
+              </button>
+            </div>
+          </SettingsRow>
+          <SettingsRow label="默认端口">
+            <div className="settings-inline-field">
+              <input className="is-port" disabled={model.receiveConfigLocked} value={model.bindPort} onChange={(event) => setBindPort(event.target.value)} />
+              <button className="tool-button" disabled={busy === "pick-receive" || !model.canSaveReceivePort} onClick={onSaveReceivePort} type="button">
+                保存
+              </button>
+            </div>
+          </SettingsRow>
+          <SettingsRow label="收到文件时">
+            <div className="policy-segment is-settings">
+              {RECEIVE_POLICY_OPTIONS.map((option) => (
+                <button
+                  className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
+                  disabled={busy === "receive-policy"}
+                  key={option.value}
+                  onClick={() => onUpdateReceivePolicy(option.value)}
+                  type="button"
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </SettingsRow>
+          {receiveSession ? (
+            <SettingsRow label="当前地址" hint="连接码请在收件页查看">
+              <SettingsValue>{model.receiveAddressLabel}</SettingsValue>
+            </SettingsRow>
+          ) : null}
+          <SettingsRow label="文件夹">
+            <button className="text-button" disabled={busy === "open"} onClick={onOpenReceiveDir} type="button">
+              打开接收文件夹
+            </button>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
 
-      <IntegrationSettings
-        busy={busy}
-        localBridgeAuthorizationCode={localBridgeAuthorizationCode}
-        localBridgeAuthorizations={localBridgeAuthorizations}
-        localBridgeCheck={localBridgeCheck}
-        localBridgePendingActions={localBridgePendingActions}
-        localBridgeStatus={localBridgeStatus}
-        setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
-        onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
-        onPruneLocalBridgeAuthorizations={onPruneLocalBridgeAuthorizations}
-        onRemoveLocalBridgePendingAction={onRemoveLocalBridgePendingAction}
-        onRevokeLocalBridgeAuthorization={onRevokeLocalBridgeAuthorization}
-        onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
-      />
+      {tab === "security" ? (
+        <SettingsGroup title="安全" note="用于配对与排查">
+          <SettingsRow label="设备 ID">
+            <SettingsValue mono title={model.deviceIdLabel ?? undefined}>
+              {model.deviceIdLabel ?? "—"}
+            </SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="指纹">
+            <SettingsValue mono title={model.fingerprintLabel ?? undefined}>
+              {model.fingerprintLabel ?? "—"}
+            </SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="能力">
+            <SettingsValue>{model.capabilitiesLabel ?? "—"}</SettingsValue>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
+
+      {tab === "access" ? (
+        <IntegrationSettings
+          busy={busy}
+          localBridgeAuthorizationCode={localBridgeAuthorizationCode}
+          localBridgeAuthorizations={localBridgeAuthorizations}
+          localBridgeCheck={localBridgeCheck}
+          localBridgePendingActions={localBridgePendingActions}
+          localBridgeStatus={localBridgeStatus}
+          setLocalBridgeAuthorizationCode={setLocalBridgeAuthorizationCode}
+          onConfirmLocalBridgeAuthorization={onConfirmLocalBridgeAuthorization}
+          onPruneLocalBridgeAuthorizations={onPruneLocalBridgeAuthorizations}
+          onRemoveLocalBridgePendingAction={onRemoveLocalBridgePendingAction}
+          onRevokeLocalBridgeAuthorization={onRevokeLocalBridgeAuthorization}
+          onRunLocalBridgeSelfCheck={onRunLocalBridgeSelfCheck}
+        />
+      ) : null}
+
+      {tab === "advanced" ? (
+        <>
+          <SettingsGroup title="网络" note="发现与连接状态为只读">
+            <SettingsRow label="局域网发现">
+              <SettingsValue>{model.discoveryLabel}</SettingsValue>
+            </SettingsRow>
+            <SettingsRow label="本机地址">
+              <SettingsValue mono title={model.lanIpLabel ?? undefined}>
+                {model.lanIpLabel ?? "—"}
+              </SettingsValue>
+            </SettingsRow>
+            <SettingsRow label="托盘菜单">
+              <SettingsValue>{model.trayLabel}</SettingsValue>
+            </SettingsRow>
+          </SettingsGroup>
+
+          <SettingsGroup title="实验传输" note="跨网络通道尚未接入，当前仅同局域网 TCP">
+            {EXPERIMENTAL_TRANSPORTS.map((transport) => (
+              <SettingsRow key={transport.id} label={transport.label}>
+                <SettingsValue>未启用</SettingsValue>
+              </SettingsRow>
+            ))}
+          </SettingsGroup>
+        </>
+      ) : null}
+
+      {tab === "about" ? (
+        <SettingsGroup title="关于" note="本机文件传输完成后会做完整性校验">
+          <SettingsRow label="应用">
+            <SettingsValue>NekoDrop</SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="文件校验">
+            <SettingsValue>传输完成后 SHA-256</SettingsValue>
+          </SettingsRow>
+          <SettingsRow label="项目">
+            <SettingsValue mono>github.com/Hisakazu333/NekoDrop</SettingsValue>
+          </SettingsRow>
+        </SettingsGroup>
+      ) : null}
     </section>
   );
 }
