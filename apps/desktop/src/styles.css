@@ -1380,6 +1380,50 @@ button:disabled {
   color: var(--danger);
 }
 
+.device-detail {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border-radius: var(--r-md);
+  background: var(--surface-input);
+}
+
+.device-detail-rows {
+  display: grid;
+  gap: 8px;
+}
+
+.device-detail-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.device-detail-row span {
+  color: var(--text-3);
+  font-size: 13px;
+}
+
+.device-detail-row strong {
+  min-width: 0;
+  font-size: 14px;
+  font-weight: 500;
+  text-align: right;
+  word-break: break-word;
+}
+
+.device-detail-row strong.is-mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+
+.device-detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
 .target-block {
   display: grid;
   gap: 12px;
@@ -2145,6 +2189,31 @@ input:focus {
 .history-toolbar span {
   color: var(--text-3);
   font-size: 13px;
+}
+
+.history-group {
+  display: grid;
+  gap: 8px;
+}
+
+.history-group + .history-group {
+  margin-top: 18px;
+}
+
+.history-group-title {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.history-actions.is-quick {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 14px 12px;
 }
 
 /* =========================================================================

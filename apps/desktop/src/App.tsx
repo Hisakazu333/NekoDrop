@@ -7,7 +7,8 @@ import {
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
   platformLabel as devicePlatformLabel,
-  selectedTrustedTargetCopy
+  selectedTrustedTargetCopy,
+  trustStateLabel
 } from "./deviceDisplay";
 import {
   currentTransferRecoveryActions,
@@ -1561,19 +1562,13 @@ export function App() {
 
               {mode === "receive" ? (
                 <ReceivePanel
-                  bindPort={bindPort}
                   busy={busy}
                   diagnostics={receiveDiagnostics}
-                  receiveDir={receiveDir}
-                  receivePolicy={receivePolicy}
                   pendingOffer={pendingReceiveOffer}
                   pendingPairingRequest={pendingPairingRequest}
                   receiveReport={receiveReport}
                   receiveSession={receiveSession}
                   stagedBundles={stagedBundles}
-                  setBindPort={setBindPort}
-                  setReceiveDir={setReceiveDir}
-                  onChooseReceiveDir={chooseReceiveDir}
                   onCopyConnectionCode={copyConnectionCode}
                   onOpenPath={openPath}
                   onRespondReceiveOffer={respondReceiveOffer}
@@ -1582,7 +1577,6 @@ export function App() {
                   onStopReceive={stopReceive}
                   onDeleteStagedBundle={deleteCurrentStagedBundle}
                   onImportStagedBundle={importCurrentStagedBundle}
-                  onUpdateReceivePolicy={updateReceivePolicy}
                 />
               ) : null}
 
@@ -1897,24 +1891,40 @@ function DevicePanel({
   onSelectTrustedDevice: (device: TrustedDeviceDto) => void;
   onTrustDevice: (device: DeviceDto) => void;
 }) {
-  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
+  const selectedNearby = nearbyDevices.find((device) => device.id === selectedDeviceId) ?? null;
+  const selectedTrusted =
+    trustedDevices.find((device) => device.device_id === selectedDeviceId) ?? null;
+  const hasSelection = Boolean(selectedNearby || selectedTrusted);
+  const selectedOnline = selectedTrusted
+    ? nearbyDevices.some((nearby) => nearby.id === selectedTrusted.device_id)
+    : true;
+  const selectedName = selectedTrusted?.device_name ?? selectedNearby?.name ?? "";
+  const selectedPlatform = selectedTrusted?.platform ?? selectedNearby?.platform ?? null;
+  const selectedFingerprint =
+    selectedTrusted?.public_key_fingerprint ?? selectedNearby?.public_key_fingerprint ?? null;
+  const selectedHost = selectedTrusted?.host ?? selectedNearby?.host ?? null;
+  const selectedPort = selectedTrusted?.port ?? selectedNearby?.port ?? null;
+  const selectedTrustLabel = selectedTrusted
+    ? "已信任"
+    : selectedNearby
+      ? trustStateLabel(selectedNearby.trust_state)
+      : "—";
 
   return (
     <section className="device-panel">
-      <div className="device-overview">
-        <div>
-          <strong>{trustedDevices.length}</strong>
-          <span>可信设备</span>
-        </div>
-        <div className={discoveryCopy.isError ? "is-warning" : undefined}>
-          <strong>{nearbyDevices.length > 0 ? nearbyDevices.length : discoveryCopy.label}</strong>
-          <span>{nearbyDevices.length > 0 ? "附近在线" : discoveryCopy.targetLabel}</span>
-        </div>
-      </div>
+      <NearbyDevices
+        busy={busy}
+        discoveryStatus={discoveryStatus}
+        devices={nearbyDevices}
+        localPlatform={localPlatform}
+        selectedDeviceId={selectedDeviceId}
+        onSelectDevice={onSelectNearbyDevice}
+        onTrustDevice={onTrustDevice}
+      />
 
       <section className="trusted-strip">
         <div className="section-head">
-          <strong>已信任</strong>
+          <strong>已信任设备</strong>
           <span>{trustedDevices.length > 0 ? "可直接发送" : "未配对"}</span>
         </div>
 
@@ -1952,15 +1962,53 @@ function DevicePanel({
         )}
       </section>
 
-      <NearbyDevices
-        busy={busy}
-        discoveryStatus={discoveryStatus}
-        devices={nearbyDevices}
-        localPlatform={localPlatform}
-        selectedDeviceId={selectedDeviceId}
-        onSelectDevice={onSelectNearbyDevice}
-        onTrustDevice={onTrustDevice}
-      />
+      {hasSelection ? (
+        <section className="device-detail">
+          <div className="section-head">
+            <strong title={selectedName}>{selectedName}</strong>
+            <span>{selectedOnline ? "在线" : "离线"} · {selectedTrustLabel}</span>
+          </div>
+          <div className="device-detail-rows">
+            <div className="device-detail-row">
+              <span>平台</span>
+              <strong>{selectedPlatform ? devicePlatformLabel(selectedPlatform) : "—"}</strong>
+            </div>
+            <div className="device-detail-row">
+              <span>地址</span>
+              <strong className="is-mono">{selectedHost && selectedPort ? `${selectedHost}:${selectedPort}` : "—"}</strong>
+            </div>
+            <div className="device-detail-row">
+              <span>指纹</span>
+              <strong className="is-mono" title={selectedFingerprint ?? undefined}>{selectedFingerprint ?? "—"}</strong>
+            </div>
+            <div className="device-detail-row">
+              <span>能力</span>
+              <strong>文件传输 · 资料包</strong>
+            </div>
+          </div>
+          <div className="device-detail-actions">
+            {selectedTrusted ? (
+              <>
+                <button className="primary-button" onClick={() => onSelectTrustedDevice(selectedTrusted)} type="button">
+                  发送到此设备
+                </button>
+                <button className="text-button" disabled={busy === "forget"} onClick={() => onForgetTrustedDevice(selectedTrusted)} type="button">
+                  忘记设备
+                </button>
+              </>
+            ) : selectedNearby ? (
+              <>
+                <button className="primary-button" onClick={() => onSelectNearbyDevice(selectedNearby)} type="button">
+                  发送到此设备
+                </button>
+                <button className="tool-button" onClick={() => onTrustDevice(selectedNearby)} type="button">
+                  配对
+                </button>
+              </>
+            ) : null}
+          </div>
+        </section>
+      ) : null}
     </section>
   );
 }
@@ -2402,19 +2450,13 @@ function SettingsFacts({
 }
 
 function ReceivePanel({
-  bindPort,
   busy,
   diagnostics,
-  receiveDir,
-  receivePolicy,
   pendingOffer,
   pendingPairingRequest,
   receiveReport,
   receiveSession,
   stagedBundles,
-  setBindPort,
-  setReceiveDir,
-  onChooseReceiveDir,
   onCopyConnectionCode,
   onOpenPath,
   onDeleteStagedBundle,
@@ -2422,22 +2464,15 @@ function ReceivePanel({
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
-  onStopReceive,
-  onUpdateReceivePolicy
+  onStopReceive
 }: {
-  bindPort: string;
   busy: BusyMode | null;
   diagnostics: ReceivePortDiagnosticsDto | null;
-  receiveDir: string;
-  receivePolicy: ReceivePolicyMode;
   pendingOffer: PendingReceiveOfferDto | null;
   pendingPairingRequest: PendingPairingRequestDto | null;
   receiveReport: ReceiveReportDto | null;
   receiveSession: ReceiveSessionDto | null;
   stagedBundles: ReceivedBundleDto[];
-  setBindPort: (value: string) => void;
-  setReceiveDir: (value: string) => void;
-  onChooseReceiveDir: () => void;
   onCopyConnectionCode: () => void;
   onOpenPath: (path: string) => void;
   onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
@@ -2446,7 +2481,6 @@ function ReceivePanel({
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
   onStopReceive: () => void;
-  onUpdateReceivePolicy: (policy: ReceivePolicyMode) => void;
 }) {
   const pendingOfferSender =
     pendingOffer?.sender_device_name?.trim() ||
@@ -2473,58 +2507,6 @@ function ReceivePanel({
 
   return (
     <section className="receive-page">
-      {!receiveSession ? (
-        <section className="receive-section receive-empty">
-          <p className="receive-section-note">
-            开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
-          </p>
-          <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
-            开启收件
-          </button>
-        </section>
-      ) : null}
-
-      {receiveSession ? (
-        <section className="receive-section">
-          <h2 className="receive-section-title">连接码</h2>
-          <p className="receive-section-note">
-            {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
-          </p>
-          <div className="code-highlight">
-            <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
-            <div className="code-highlight-actions">
-              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
-                复制连接码
-              </button>
-              <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
-                打开目录
-              </button>
-            </div>
-          </div>
-        </section>
-      ) : null}
-
-      {diagnostics ? (
-        <section className="receive-section">
-          <h2 className="receive-section-title">网络状态</h2>
-          <SettingsFacts
-            items={[
-              { label: "诊断", value: diagnostics.message },
-              { label: "广播地址", value: diagnostics.advertised_host },
-              { label: "端口", value: diagnostics.port != null ? String(diagnostics.port) : null },
-              { label: "局域网 IP", value: diagnostics.lan_ips.join(" · ") || null, mono: true }
-            ]}
-          />
-          {diagnostics.checks.length > 0 ? (
-            <ul className="settings-checks">
-              {diagnostics.checks.map((check) => (
-                <li key={check}>{check}</li>
-              ))}
-            </ul>
-          ) : null}
-        </section>
-      ) : null}
-
       {pendingOffer ? (
         <section className="receive-section">
           <h2 className="receive-section-title">待确认传输</h2>
@@ -2572,53 +2554,9 @@ function ReceivePanel({
         </section>
       ) : null}
 
-      <section className="receive-section">
-        <h2 className="receive-section-title">接收配置</h2>
-        <div className="settings-form-grid">
-          <label>
-            接收目录
-            <div className="input-action receive-dir-action">
-              <input
-                disabled={Boolean(receiveSession)}
-                value={receiveDir}
-                onChange={(event) => setReceiveDir(event.target.value)}
-              />
-              <button className="tool-button" disabled={busy === "pick-receive" || Boolean(receiveSession)} onClick={onChooseReceiveDir} type="button">
-                选择
-              </button>
-            </div>
-          </label>
-          <label className="port-field">
-            默认端口
-            <input
-              disabled={Boolean(receiveSession)}
-              value={bindPort}
-              onChange={(event) => setBindPort(event.target.value)}
-            />
-          </label>
-        </div>
-
-        <div className="policy-row">
-          <span>接收策略</span>
-          <div className="policy-segment">
-            {RECEIVE_POLICY_OPTIONS.map((option) => (
-              <button
-                className={receivePolicy === option.value ? "policy-button is-active" : "policy-button"}
-                disabled={busy === "receive-policy"}
-                key={option.value}
-                onClick={() => onUpdateReceivePolicy(option.value)}
-                type="button"
-              >
-                {option.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </section>
-
       {visibleStagedBundles.length > 0 ? (
         <section className="receive-section">
-          <h2 className="receive-section-title">暂存区</h2>
+          <h2 className="receive-section-title">待处理资料</h2>
           <div className="bundle-list">
             {visibleStagedBundles.map((bundle) => (
               <div className="bundle-line" key={bundle.bundle_id}>
@@ -2654,6 +2592,45 @@ function ReceivePanel({
           </div>
         </section>
       ) : null}
+
+      {receiveSession ? (
+        <section className="receive-section">
+          <h2 className="receive-section-title">等待接收</h2>
+          <p className="receive-section-note">
+            {diagnosticsAdvice ?? "发送端可粘贴此连接码，或输入你的局域网 IP:端口"}
+          </p>
+          <div className="code-highlight">
+            <code title={receiveSession.connection_code}>{receiveSession.connection_code}</code>
+            <div className="code-highlight-actions">
+              <button className="primary-button" onClick={onCopyConnectionCode} type="button">
+                复制连接码
+              </button>
+              <button className="tool-button" onClick={() => onOpenPath(receiveSession.receive_dir)} type="button">
+                打开目录
+              </button>
+              <button className="text-button" disabled={busy === "receive"} onClick={onStopReceive} type="button">
+                停止收件
+              </button>
+            </div>
+          </div>
+          {diagnostics && diagnostics.checks.length > 0 ? (
+            <ul className="settings-checks">
+              {diagnostics.checks.map((check) => (
+                <li key={check}>{check}</li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
+      ) : (
+        <section className="receive-section receive-empty">
+          <p className="receive-section-note">
+            开启收件后，附近设备可直接发送文件，或让对方粘贴连接码。
+          </p>
+          <button className="primary-button" disabled={busy === "receive"} onClick={onStartReceive} type="button">
+            开启收件
+          </button>
+        </section>
+      )}
 
       {receiveReport ? (
         <section className="receive-section">
@@ -2987,6 +2964,124 @@ function HistoryPanel({
   onSelectTransfer: (transfer: TransferDto) => void;
   onUseFallbackCode: () => void;
 }) {
+  const needsAttention = transfers.filter((transfer) => isTransferNeedsAttention(transfer));
+  const inProgress = transfers.filter((transfer) => isTransferInProgress(transfer));
+  const done = transfers.filter(
+    (transfer) => !isTransferNeedsAttention(transfer) && !isTransferInProgress(transfer)
+  );
+
+  const renderItem = (transfer: TransferDto, quickActions: boolean) => {
+    const selected = transfer.id === selectedTransferId;
+    const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
+    const detail = buildTransferHistoryDetailViewModel(transfer);
+    const fallbackActionLabel = transferFallbackActionLabel(transfer);
+    const security = buildTransferSecurityViewModel(transfer.security_mode);
+    return (
+      <div
+        className={[
+          "history-item",
+          selected ? "is-selected" : "",
+          transfer.status === "failed" ? "is-failed" : ""
+        ]
+          .filter(Boolean)
+          .join(" ")}
+        key={transfer.id}
+      >
+        <button className="history-row" onClick={() => onSelectTransfer(transfer)} type="button">
+          <span className="history-kind">{transferDirectionLabel(transfer)}</span>
+          <span className="history-main">
+            <strong title={transfer.root_name}>{transfer.root_name}</strong>
+            <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
+              {transferMetaLabel(transfer)}
+            </small>
+          </span>
+          <span className="history-size">
+            {transfer.file_count} 个 · {formatBytes(transfer.total_bytes)}
+          </span>
+          <time>{formatTransferTime(transfer.updated_at_ms)}</time>
+        </button>
+        {shouldShowHistoryProgress(transfer) ? (
+          <div className="history-progress" aria-label="历史传输进度">
+            <span style={{ width: `${Math.round(transfer.progress * 100)}%` }} />
+          </div>
+        ) : null}
+        {quickActions && !selected ? (
+          <div className="history-actions is-quick">
+            {detail.primaryActionLabel ? (
+              <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
+                {detail.primaryActionLabel}
+              </button>
+            ) : null}
+            {fallbackActionLabel ? (
+              <button className="text-button" onClick={onUseFallbackCode} type="button">
+                {fallbackActionLabel}
+              </button>
+            ) : null}
+            <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
+              删除
+            </button>
+          </div>
+        ) : null}
+        {selected ? (
+          <div className="history-detail">
+            <div className="history-detail-main">
+              <div className="history-detail-grid">
+                {detail.progressLabel ? (
+                  <span><strong>进度</strong>{detail.progressLabel}</span>
+                ) : null}
+                {detail.peerLabel ? (
+                  <span><strong>对方</strong>{detail.peerLabel}</span>
+                ) : null}
+                {detail.locationLabel ? (
+                  <span><strong>位置</strong>{detail.locationLabel}</span>
+                ) : null}
+                {security ? (
+                  <span>
+                    <strong>安全</strong>
+                    <SecurityBadge model={security} />
+                  </span>
+                ) : null}
+                {detail.recoveryLabel ? (
+                  <span><strong>恢复</strong>{detail.recoveryLabel}</span>
+                ) : null}
+                {detail.errorLabel ? (
+                  <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
+                ) : null}
+                {detail.adviceLabel ? (
+                  <span><strong>建议</strong>{detail.adviceLabel}</span>
+                ) : null}
+              </div>
+              <div className="history-paths">
+                {paths.slice(0, 6).map((path) => (
+                  <span key={path} title={path}>{path}</span>
+                ))}
+                {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
+              </div>
+            </div>
+            <div className="history-actions">
+              <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
+                打开
+              </button>
+              {detail.primaryActionLabel ? (
+                <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
+                  {detail.primaryActionLabel}
+                </button>
+              ) : null}
+              {fallbackActionLabel ? (
+                <button className="text-button" onClick={onUseFallbackCode} type="button">
+                  {fallbackActionLabel}
+                </button>
+              ) : null}
+              <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
+                删除
+              </button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+    );
+  };
+
   return (
     <section className="history-panel">
       <div className="history-toolbar">
@@ -3009,105 +3104,37 @@ function HistoryPanel({
         />
       ) : null}
 
-      {transfers.length > 0 ? (
-        <div className="history-list">
-          {transfers.map((transfer) => {
-            const selected = transfer.id === selectedTransferId;
-            const paths = transfer.received_paths.length > 0 ? transfer.received_paths : transfer.source_paths;
-            const detail = buildTransferHistoryDetailViewModel(transfer);
-            const fallbackActionLabel = transferFallbackActionLabel(transfer);
-            const security = buildTransferSecurityViewModel(transfer.security_mode);
-            return (
-              <div
-                className={[
-                  "history-item",
-                  selected ? "is-selected" : "",
-                  transfer.status === "failed" ? "is-failed" : ""
-                ]
-                  .filter(Boolean)
-                  .join(" ")}
-                key={transfer.id}
-              >
-                <button className="history-row" onClick={() => onSelectTransfer(transfer)} type="button">
-                  <span className="history-kind">{transferDirectionLabel(transfer)}</span>
-                  <span className="history-main">
-                    <strong title={transfer.root_name}>{transfer.root_name}</strong>
-                    <small title={transfer.error_message ?? transfer.peer_name ?? transfer.target_host ?? undefined}>
-                      {transferMetaLabel(transfer)}
-                    </small>
-                  </span>
-                  <span className="history-size">
-                    {transfer.file_count} 个 · {formatBytes(transfer.total_bytes)}
-                  </span>
-                  <time>{formatTransferTime(transfer.updated_at_ms)}</time>
-                </button>
-                {shouldShowHistoryProgress(transfer) ? (
-                  <div className="history-progress" aria-label="历史传输进度">
-                    <span style={{ width: `${Math.round(transfer.progress * 100)}%` }} />
-                  </div>
-                ) : null}
-                {selected ? (
-                  <div className="history-detail">
-                    <div className="history-detail-main">
-                      <div className="history-detail-grid">
-                        {detail.progressLabel ? (
-                          <span><strong>进度</strong>{detail.progressLabel}</span>
-                        ) : null}
-                        {detail.peerLabel ? (
-                          <span><strong>对方</strong>{detail.peerLabel}</span>
-                        ) : null}
-                        {detail.locationLabel ? (
-                          <span><strong>位置</strong>{detail.locationLabel}</span>
-                        ) : null}
-                        {security ? (
-                          <span>
-                            <strong>安全</strong>
-                            <SecurityBadge model={security} />
-                          </span>
-                        ) : null}
-                        {detail.recoveryLabel ? (
-                          <span><strong>恢复</strong>{detail.recoveryLabel}</span>
-                        ) : null}
-                        {detail.errorLabel ? (
-                          <span className="is-error"><strong>原因</strong>{detail.errorLabel}</span>
-                        ) : null}
-                        {detail.adviceLabel ? (
-                          <span><strong>建议</strong>{detail.adviceLabel}</span>
-                        ) : null}
-                      </div>
-                      <div className="history-paths">
-                        {paths.slice(0, 6).map((path) => (
-                          <span key={path} title={path}>{path}</span>
-                        ))}
-                        {paths.length > 6 ? <span>还有 {paths.length - 6} 个</span> : null}
-                      </div>
-                    </div>
-                    <div className="history-actions">
-                      <button className="text-button" disabled={busy === "open"} onClick={() => onOpenTransfer(transfer)} type="button">
-                        打开
-                      </button>
-                      {detail.primaryActionLabel ? (
-                        <button className="text-button" disabled={busy === "resend"} onClick={() => onResendTransfer(transfer)} type="button">
-                          {detail.primaryActionLabel}
-                        </button>
-                      ) : null}
-                      {fallbackActionLabel ? (
-                        <button className="text-button" onClick={onUseFallbackCode} type="button">
-                          {fallbackActionLabel}
-                        </button>
-                      ) : null}
-                      <button className="text-button" disabled={busy === "history"} onClick={() => onDeleteTransfer(transfer)} type="button">
-                        删除
-                      </button>
-                    </div>
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </div>
-      ) : (
+      {transfers.length === 0 ? (
         <div className="history-empty">暂无记录</div>
+      ) : (
+        <>
+          {needsAttention.length > 0 ? (
+            <section className="history-group">
+              <h2 className="history-group-title">需要处理</h2>
+              <div className="history-list">
+                {needsAttention.map((transfer) => renderItem(transfer, true))}
+              </div>
+            </section>
+          ) : null}
+
+          {inProgress.length > 0 ? (
+            <section className="history-group">
+              <h2 className="history-group-title">进行中</h2>
+              <div className="history-list">
+                {inProgress.map((transfer) => renderItem(transfer, false))}
+              </div>
+            </section>
+          ) : null}
+
+          {done.length > 0 ? (
+            <section className="history-group">
+              <h2 className="history-group-title">历史</h2>
+              <div className="history-list">
+                {done.map((transfer) => renderItem(transfer, false))}
+              </div>
+            </section>
+          ) : null}
+        </>
       )}
     </section>
   );
@@ -3713,6 +3740,23 @@ function shouldShowHistoryProgress(transfer: TransferDto) {
     transfer.transferred_bytes < transfer.total_bytes &&
     transfer.status !== "completed"
   );
+}
+
+const TRANSFER_ATTENTION_STATUSES = new Set(["failed", "cancelled"]);
+const TRANSFER_ACTIVE_STATUSES = new Set([
+  "connecting",
+  "accepted",
+  "awaiting_approval",
+  "transferring",
+  "verifying"
+]);
+
+function isTransferNeedsAttention(transfer: TransferDto) {
+  return TRANSFER_ATTENTION_STATUSES.has(transfer.status);
+}
+
+function isTransferInProgress(transfer: TransferDto) {
+  return TRANSFER_ACTIVE_STATUSES.has(transfer.status);
 }
 
 function formatTransferTime(timestampMs: number) {
