@@ -27,6 +27,21 @@ pub struct TrustedDeviceRecord {
     pub last_seen_at_ms: u128,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct TrustedDeviceRecordRaw {
+    pub schema_version: Option<u16>,
+    pub device_id: Option<String>,
+    pub device_name: Option<String>,
+    pub platform: Option<String>,
+    pub host: Option<String>,
+    pub port: Option<u16>,
+    pub public_key: Option<String>,
+    pub public_key_fingerprint: Option<String>,
+    pub pairing_code: Option<String>,
+    pub paired_at_ms: Option<u128>,
+    pub last_seen_at_ms: Option<u128>,
+}
+
 pub fn load_trusted_devices() -> Result<Vec<TrustedDeviceRecord>, String> {
     let path = trusted_devices_file_path()?;
     if !path.exists() {
@@ -35,12 +50,7 @@ pub fn load_trusted_devices() -> Result<Vec<TrustedDeviceRecord>, String> {
 
     let content = fs::read_to_string(&path)
         .map_err(|error| format!("无法读取可信设备文件 {}: {error}", path.display()))?;
-    let records = serde_json::from_str::<Vec<TrustedDeviceRecord>>(&content)
-        .map_err(|error| format!("可信设备文件格式无效 {}: {error}", path.display()))?;
-    let mut records = records;
-    retain_usable_trusted_devices(&mut records);
-    normalize_trusted_devices(&mut records);
-    Ok(records)
+    parse_trusted_devices(&content, &path.display().to_string())
 }
 
 pub fn save_trusted_devices(records: &[TrustedDeviceRecord]) -> Result<(), String> {
@@ -185,6 +195,37 @@ fn normalize_trusted_devices(records: &mut Vec<TrustedDeviceRecord>) {
 
 fn retain_usable_trusted_devices(records: &mut Vec<TrustedDeviceRecord>) {
     records.retain(|record| validate_trusted_device(record).is_ok());
+}
+
+fn parse_trusted_devices(
+    content: &str,
+    source_label: &str,
+) -> Result<Vec<TrustedDeviceRecord>, String> {
+    let raw_records = serde_json::from_str::<Vec<TrustedDeviceRecordRaw>>(content)
+        .map_err(|error| format!("可信设备文件格式无效 {source_label}: {error}"))?;
+    let mut records: Vec<TrustedDeviceRecord> = raw_records
+        .into_iter()
+        .filter_map(trusted_device_record_from_raw)
+        .collect();
+    retain_usable_trusted_devices(&mut records);
+    normalize_trusted_devices(&mut records);
+    Ok(records)
+}
+
+fn trusted_device_record_from_raw(raw: TrustedDeviceRecordRaw) -> Option<TrustedDeviceRecord> {
+    Some(TrustedDeviceRecord {
+        schema_version: raw.schema_version?,
+        device_id: raw.device_id?,
+        device_name: raw.device_name?,
+        platform: raw.platform?,
+        host: raw.host?,
+        port: raw.port?,
+        public_key: raw.public_key?,
+        public_key_fingerprint: raw.public_key_fingerprint?,
+        pairing_code: raw.pairing_code?,
+        paired_at_ms: raw.paired_at_ms?,
+        last_seen_at_ms: raw.last_seen_at_ms?,
+    })
 }
 
 fn sort_trusted_devices(records: &mut [TrustedDeviceRecord]) {
@@ -407,6 +448,28 @@ mod tests {
 
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].device_id, "device-a");
+    }
+
+    #[test]
+    fn parses_legacy_trusted_device_files_without_public_key_by_dropping_records() {
+        let content = r#"[
+          {
+            "schema_version": 1,
+            "device_id": "neko-device-d13c17bc86b1da42",
+            "device_name": "HISAKAZU",
+            "platform": "windows",
+            "host": "192.168.3.210",
+            "port": 45821,
+            "public_key_fingerprint": "sha256:d13c17bc86b1da42ab579897e0c2b5abb4cd5eedbc5f2cde9fe698bd0546d35d",
+            "pairing_code": "8EA-6DB",
+            "paired_at_ms": 1781096267906,
+            "last_seen_at_ms": 1781454291507
+          }
+        ]"#;
+
+        let records = parse_trusted_devices(content, "trusted_devices.json").unwrap();
+
+        assert!(records.is_empty());
     }
 
     fn trusted_record(
