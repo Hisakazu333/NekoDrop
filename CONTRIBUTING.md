@@ -102,12 +102,12 @@ topic branch
 ```text
 Rust / 协议 / 存储 / 网络 / 服务 / 安全 / bundle / bridge
   -> 从 develop 更新个人开发分支 dev/<name>
-  -> 在 dev/<name> 提交代码
+  -> 在 dev/<name> 或从 develop 开出的短分支提交代码
   -> PR 到 develop
 
 桌面端 UI / Tauri / IPC / 设置页 / 安装包 / 平台体验
   -> 从 desktop-develop 更新个人开发分支或短分支
-  -> 在个人分支提交代码
+  -> 在个人分支或短分支提交代码
   -> PR 到 desktop-develop
 
 发版收口
@@ -142,6 +142,14 @@ git merge --ff-only origin/develop
 ```bash
 git checkout dev/hisakazu
 git checkout -b security/hisakazu/session-policy
+```
+
+桌面端功能也可以直接从 `desktop-develop` 开短分支：
+
+```bash
+git checkout desktop-develop
+git pull --ff-only
+git checkout -b ui/hisakazu/receive-flow-polish
 ```
 
 短分支名前缀建议：
