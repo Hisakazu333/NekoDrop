@@ -3950,13 +3950,18 @@ function localBridgePendingActionTitle(action: LocalBridgePendingActionDto) {
 
 function localBridgeActionResultSummary(result: LocalBridgePendingActionResultDto) {
   const kind = localBridgePendingActionKindLabel(result.action_kind);
-  const status = localBridgeActionResultStatusLabel(result.status);
+  const status = localBridgeActionResultStatusLabel(result.lifecycle_status ?? result.status);
   const target = result.bundle_id ?? result.target_device_id ?? result.request_id;
   const reason = result.reason ? ` · ${localBridgeActionResultReasonLabel(result.reason)}` : "";
   return `${kind} · ${status}${reason} · ${target}`;
 }
 
 function localBridgeActionResultStatusLabel(status: string) {
+  if (status === "queued") return "排队中";
+  if (status === "running") return "执行中";
+  if (status === "succeeded") return "完成";
+  if (status === "conflict") return "有冲突";
+  if (status === "cancelled") return "已取消";
   if (status === "completed") return "完成";
   if (status === "failed") return "失败";
   if (status === "ready") return "可执行";
