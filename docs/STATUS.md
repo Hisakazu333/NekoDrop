@@ -92,11 +92,11 @@
 - iroh 真实运行时
 - Relay 服务器
 - P2P / NAT 打洞
-- 长期身份密钥认证
+- key rotation / OS keychain 级别的长期密钥管理
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - 上层应用自动导出和直接写入 NekoLink bundle
-- 本机 local bridge 真正事件流订阅接口
+- 本机 local bridge 真正长连接事件流订阅接口
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储
@@ -114,7 +114,7 @@ V0.7
 
 V0.8
   NekoLink 上层包格式：
-  定义 bundle manifest，为 skills、session、agent profile、workspace 这类上层数据传输提供统一校验、权限和兼容边界；桌面端已有 staging、预览、删除、过期清理和手动导入到本机导入区，下一步接本机 bridge runtime 和真实上层应用适配。
+  定义 bundle manifest，为 skills、session、agent profile、workspace 这类上层数据传输提供统一校验、权限和兼容边界；桌面端已有 staging、预览、删除、过期清理和手动导入到本机导入区；local bridge 已有 localhost runtime、授权、待执行队列、动作结果和事件轮询。下一步补导入计划、冲突策略和真实上层应用适配。
 
 V0.9
   transport 技术验证：

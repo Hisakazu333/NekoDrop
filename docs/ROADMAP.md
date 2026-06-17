@@ -40,15 +40,17 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - encrypted session 发送/接收路径的文件 payload 已切成加密 file frames。
 - file frame AAD 绑定 transfer_id、manifest_path、offset 和 plain_size。
 - encrypted session resume 仍按 partial offset 补传剩余 payload。
+- 桌面主线已经交换并验签 `session.identity`。
+- 可信设备的 authenticated session 会钉到记录里的长期 public key。
 
 仍未完成：
 
-- 长期身份密钥、签名和桌面主线校验
-- legacy plain file stream 的迁移或拒绝策略
+- legacy plain file stream 的迁移或拒绝策略继续收口
+- key rotation、OS keychain / credential-manager 存储和跨平台身份策略
 - iroh runtime
 - relay server
 - Agent command
-- skills/session bundle
+- 上层应用自动导出 / 导入 skills、session、workspace
 - 手机端互通
 
 ## 已完成：Encrypted File Stream 接收端 streaming 解密
@@ -67,7 +69,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - 明确 legacy plain file stream 的兼容策略和迁移策略。
 - checksum 继续作为落盘后的完整性校验。
 
-## 下一阶段：Session Identity Binding
+## 已完成：Session Identity Binding 桌面主线
 
 目标：把 encrypted session 从“ephemeral 会话加密”推进到“可绑定长期设备身份”的路径。
 
@@ -75,13 +77,16 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 - `nekolink-protocol` 可以从 verified handshake 生成 initiator / responder identity binding。
 - binding 的 canonical payload hash 绑定 session_id、设备 ID、fingerprint、session ephemeral key 和 handshake_hash。
+- 桌面端持久化 Ed25519 signing seed。
+- `session.ready` 后交换 signed `session.identity`。
+- 验签失败或可信设备 public key 不匹配会拒绝 session。
 
 后续范围：
 
-- 生成或迁移长期设备身份密钥。
-- 用长期身份密钥签名 session identity binding。
-- 接收端验证签名和可信设备记录。
-- 明确旧 seed-derived fingerprint 的兼容和迁移策略。
+- key rotation 和撤销策略。
+- macOS Keychain / Windows Credential Manager 或 DPAPI。
+- 更多跨版本迁移和异常路径测试。
+- legacy plain 兼容路径继续收窄。
 
 完成标准：
 
@@ -92,7 +97,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
-规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging 和手动创建入口；自动导出、导入确认和失败回滚还没有完成。
+规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理和导入到 NekoDrop 本机导入区；自动导出、导入计划预览和上层应用真实导入还没有完成。
 
 候选包类型：
 
@@ -127,6 +132,7 @@ permissions.json
 
 - 可以用现有 NekoDrop/NekoLink 通道发送一个 bundle。
 - 接收端能预览、校验、拒绝、保存。
+- local bridge 能授权请求发送、导入和查询动作结果。
 - 导入行为必须由上层应用显式触发，不能收到就自动改本机配置。
 
 ## 随后：本机 Local Bridge
@@ -144,11 +150,10 @@ local application
 
 本阶段要解决：
 
-- 本机 API 鉴权
-- 本机应用调用权限
-- bundle 发送入口
-- bundle 接收通知
-- 导入确认
+- 更完整的事件订阅，不只依赖短等待轮询
+- 本机接入 UI 对待授权、待执行和失败原因的展示
+- 通用 adapter 样例，让上层应用知道怎么导出和导入 bundle
+- 导入计划和冲突策略
 
 不做：
 

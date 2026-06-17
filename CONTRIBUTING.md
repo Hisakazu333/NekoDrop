@@ -31,11 +31,10 @@ NekoDrop 还在 beta 收口。先别从大功能下手。
 
 这些任务先开 issue 讨论：
 
-- 文件流加密
-- replay protection
-- 长期设备身份密钥
-- local bridge 鉴权
-- bundle 导入流程
+- bundle 导入计划和冲突策略
+- 上层 adapter 样例和真实导入 / 导出
+- local bridge 长连接事件流
+- key rotation 和 OS keychain / credential-manager 存储
 - iroh / relay / P2P
 - 手机端互通
 - Agent 远程调用

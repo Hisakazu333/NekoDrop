@@ -47,20 +47,24 @@ OpenNeko  = 上层 AI 桌面伴侣 / Agent 运行时
 - 传输历史持久化
 - NekoLink transport 抽象和 TCP 实现
 - encrypted `session.control` 桌面主线
+- offer / decision replay window
+- encrypted file frames 和接收端 streaming 解密
+- signed session identity binding 和可信设备 public key pinning
+- NekoLink bundle manifest、staging、手动创建和本机导入区
+- local bridge localhost runtime、授权码、待执行队列、动作结果和 `events.poll`
 - macOS DMG 打包脚本
 - Win11 NSIS / MSI 打包脚本
 
 当前还不能假装已经完成的能力：
 
-- 加密文件 payload
-- replay window
-- 长期身份密钥认证
 - 断点续传完整产品流程
 - 手机端互通
 - iroh runtime
 - Relay / P2P
 - OpenNeko Agent 指令通道
 - NekoState 状态同步
+- 上层应用自动导出 / 真实导入 session、skill、workspace
+- local bridge 长连接事件流
 
 这些能力可以在 UI 上保留方向，但必须明确标记为规划中或实验中，不能把 mock 数据描述为真实可用能力。
 
@@ -226,13 +230,13 @@ crates/
 
 ### V0.8 Encrypted Session
 
-状态：控制消息已经走 encrypted `session.control`，offer / decision 读取路径已经接入 replay window，encrypted session 路径的文件 payload 已经进入加密 file frames，接收端已改成逐帧 streaming 解密。长期身份密钥认证还没完成。
+状态：控制消息已经走 encrypted `session.control`，offer / decision 读取路径已经接入 replay window，encrypted session 路径的文件 payload 已经进入加密 file frames，接收端已改成逐帧 streaming 解密。桌面主线已经交换并验签 signed `session.identity`，可信设备会校验保存的长期 public key。
 
 目标：把文件互传从明文 TCP 升级为可信加密会话。
 
 要做的能力：
 
-- 设备长期密钥
+- key rotation 和密钥撤销
 - 会话密钥协商
 - session_id 绑定设备身份
 - message authentication
@@ -709,15 +713,15 @@ logs/
 最推荐的下一步顺序：
 
 ```text
-1. Encrypted File Stream
-2. NekoLink Bundle
-3. Local Bridge runtime
+1. Bundle import plan and conflict policy
+2. Generic adapter sample
+3. Local Bridge event stream and action UI
 4. iroh / Relay / P2P
 5. NekoState
 6. OpenNeko Agent Integration
 ```
 
-当前最不应该跳过的是长期身份认证和 bundle 闭环。设备身份、可信配对、encrypted control、replay window、encrypted file frames 和接收端 streaming 解密已经有基础，但长期身份密钥认证和上层导入边界还没压实；没有这些，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
+当前最不应该跳过的是 bundle 闭环和 local bridge 接入边界。设备身份、可信配对、encrypted control、replay window、encrypted file frames、接收端 streaming 解密和桌面 session identity binding 已经有基础；下一步要把上层导入、冲突处理、adapter 样例和 bridge 事件状态压实。没有这些，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
 
 ## 12. 一句话总结
 
