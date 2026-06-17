@@ -8,7 +8,7 @@ use std::sync::{
     Arc, Condvar, Mutex,
 };
 use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{
     Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, NekoDropError,
@@ -35,12 +35,14 @@ use nekodrop_storage::{
 };
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
-    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeAuthorizationRequest,
+    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeActionLifecycleStatus,
+    LocalBridgeActionUpdatedEvent, LocalBridgeAuthorizationRequest,
     LocalBridgeBundleSendPreflightEvent, LocalBridgeBundleSendPreflightStatus,
     LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
     SignedSessionIdentityBinding,
 };
 use serde::{Deserialize, Serialize};
+use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::app_config::{receive_policy_label, save_app_config};
@@ -361,6 +363,7 @@ pub struct LocalBridgeResponseDto {
     pub devices: Vec<TrustedDeviceDto>,
     pub staged_bundles: Vec<ReceivedBundleDto>,
     pub transfer_status: Option<TransferStatusDto>,
+    pub action_results: Vec<LocalBridgePendingActionResultDto>,
     pub events: Vec<serde_json::Value>,
 }
 
@@ -438,6 +441,7 @@ pub struct LocalBridgePendingActionResultDto {
     pub client_id: String,
     pub client_display_name: String,
     pub status: String,
+    pub lifecycle_status: Option<String>,
     pub reason: Option<String>,
     pub message: String,
     pub bundle_id: Option<String>,
@@ -929,6 +933,99 @@ pub fn preflight_next_local_bridge_bundle_send(
         &trusted_devices,
         now_ms(),
     )
+}
+
+#[tauri::command]
+pub fn execute_next_local_bridge_bundle_import(
+    state: State<'_, AppState>,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    let staging_root = bundle_staging_root()?;
+    let import_root = bundle_import_root()?;
+    execute_next_local_bridge_bundle_import_at(
+        &state.local_bridge_runtime,
+        &staging_root,
+        &import_root,
+        now_ms(),
+    )
+}
+
+#[tauri::command]
+pub fn execute_next_local_bridge_bundle_send(
+    state: State<'_, AppState>,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    execute_next_local_bridge_bundle_send_at(&state, &trusted_devices, now_ms())
+}
+
+#[tauri::command]
+pub fn run_local_bridge_runtime_worker_once(
+    state: State<'_, AppState>,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    run_local_bridge_runtime_worker_once_at(&state, now_ms())
+}
+
+pub(crate) fn start_local_bridge_runtime_worker(app: AppHandle) {
+    thread::spawn(move || loop {
+        let state = app.state::<AppState>();
+        if let Ok(mut actions) = state.local_bridge_runtime.pending_actions.lock() {
+            while actions.is_empty() {
+                match state
+                    .local_bridge_runtime
+                    .pending_actions_signal
+                    .wait_timeout(actions, Duration::from_secs(30))
+                {
+                    Ok((next_actions, wait_result)) => {
+                        actions = next_actions;
+                        if !actions.is_empty() || !wait_result.timed_out() {
+                            break;
+                        }
+                    }
+                    Err(error) => {
+                        eprintln!("local bridge worker wait failed: {error}");
+                        break;
+                    }
+                }
+            }
+        }
+        if let Err(error) = run_local_bridge_runtime_worker_once_at(&state, now_ms()) {
+            eprintln!("local bridge worker failed: {error}");
+            thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+pub(crate) fn run_local_bridge_runtime_worker_once_at(
+    state: &AppState,
+    now_ms: u128,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    let action = take_next_local_bridge_pending_action_raw(&state.local_bridge_runtime)?;
+    match action {
+        Some(LocalBridgePendingAction::SendBundle(action)) => {
+            execute_local_bridge_bundle_send_action_at(state, action, now_ms).map(Some)
+        }
+        Some(LocalBridgePendingAction::ImportBundle(action)) => {
+            let staging_root = bundle_staging_root()?;
+            let import_root = bundle_import_root()?;
+            let result = execute_local_bridge_bundle_import_action(
+                action,
+                &staging_root,
+                &import_root,
+                now_ms,
+            )?;
+            push_local_bridge_pending_action_result_record(
+                &state.local_bridge_runtime,
+                result.clone(),
+            )?;
+            Ok(Some(local_bridge_pending_action_result_to_dto(
+                &result, false,
+            )))
+        }
+        None => Ok(None),
+    }
 }
 
 #[tauri::command]
@@ -2831,6 +2928,7 @@ pub(crate) fn handle_local_bridge_request_for_runtime(
         transfer_status.as_ref(),
         &staging_root,
         runtime,
+        true,
         now_ms(),
     )
 }
@@ -2841,6 +2939,7 @@ fn handle_local_bridge_request_with_runtime_at(
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
     runtime: &LocalBridgeRuntimeState,
+    allow_wait: bool,
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
     let request: LocalBridgeRequest = serde_json::from_str(request_json)
@@ -2867,6 +2966,11 @@ fn handle_local_bridge_request_with_runtime_at(
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+    let action_results = runtime
+        .pending_action_results
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
 
     if let LocalBridgeRequest::SendBundle(request) = &request {
         if local_bridge_client_has_scope(
@@ -2875,11 +2979,12 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleSend,
             now_ms,
         ) {
-            push_local_bridge_pending_action(
+            push_local_bridge_pending_action_queued(
                 runtime,
                 LocalBridgePendingAction::SendBundle(
                     local_bridge_pending_send_action_from_request(request, now_ms)?,
                 ),
+                now_ms,
             )?;
             return Ok(local_bridge_authorized_runtime_pending_response(
                 request.request_id.clone(),
@@ -2896,11 +3001,12 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleImportRequest,
             now_ms,
         ) {
-            push_local_bridge_pending_action(
+            push_local_bridge_pending_action_queued(
                 runtime,
                 LocalBridgePendingAction::ImportBundle(
                     local_bridge_pending_import_action_from_request(request, now_ms)?,
                 ),
+                now_ms,
             )?;
             return Ok(local_bridge_authorized_runtime_pending_response(
                 request.request_id.clone(),
@@ -2910,21 +3016,60 @@ fn handle_local_bridge_request_with_runtime_at(
         }
     }
 
-    handle_validated_local_bridge_request_with_auth_at(
+    let response = handle_validated_local_bridge_request_with_auth_at(
         request,
         trusted_devices,
         transfer_status,
         staging_root,
         &authorizations,
         &events,
+        &action_results,
         now_ms,
+    )?;
+
+    if !allow_wait || response.status != "ok" || !response.events.is_empty() {
+        return Ok(response);
+    }
+
+    let request: LocalBridgeRequest = serde_json::from_str(request_json)
+        .map_err(|error| format!("invalid bridge request JSON: {error}"))?;
+    let LocalBridgeRequest::PollEvents(request) = request else {
+        return Ok(response);
+    };
+    let Some(timeout_ms) = request.timeout_ms else {
+        return Ok(response);
+    };
+    if timeout_ms == 0 {
+        return Ok(response);
+    }
+
+    wait_for_local_bridge_events(
+        runtime,
+        request,
+        trusted_devices,
+        transfer_status,
+        staging_root,
+        &authorizations,
+        now_ms,
+        Duration::from_millis(timeout_ms.min(30_000)),
     )
 }
 
-fn push_local_bridge_pending_action(
+fn push_local_bridge_pending_action_queued(
     runtime: &LocalBridgeRuntimeState,
     action: LocalBridgePendingAction,
+    now_ms: u128,
 ) -> Result<(), String> {
+    let result = local_bridge_action_lifecycle_result(
+        &action,
+        LocalBridgeActionLifecycleStatus::Queued,
+        None,
+        "local bridge action is queued for the desktop runtime",
+        None,
+        None,
+        None,
+        now_ms,
+    );
     let mut actions = runtime
         .pending_actions
         .lock()
@@ -2934,6 +3079,8 @@ fn push_local_bridge_pending_action(
         let excess = actions.len() - LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT;
         actions.drain(0..excess);
     }
+    runtime.pending_actions_signal.notify_one();
+    push_local_bridge_action_lifecycle_result(runtime, result)?;
     Ok(())
 }
 
@@ -2953,6 +3100,13 @@ fn list_local_bridge_pending_actions_at(
 fn take_next_local_bridge_pending_action_at(
     runtime: &LocalBridgeRuntimeState,
 ) -> Result<Option<LocalBridgePendingActionDto>, String> {
+    Ok(take_next_local_bridge_pending_action_raw(runtime)?
+        .map(|action| local_bridge_pending_action_to_dto(&action, true)))
+}
+
+fn take_next_local_bridge_pending_action_raw(
+    runtime: &LocalBridgeRuntimeState,
+) -> Result<Option<LocalBridgePendingAction>, String> {
     let mut actions = runtime
         .pending_actions
         .lock()
@@ -2960,8 +3114,7 @@ fn take_next_local_bridge_pending_action_at(
     if actions.is_empty() {
         return Ok(None);
     }
-    let action = actions.remove(0);
-    Ok(Some(local_bridge_pending_action_to_dto(&action, true)))
+    Ok(Some(actions.remove(0)))
 }
 
 fn preflight_next_local_bridge_bundle_send_at(
@@ -3000,6 +3153,377 @@ fn preflight_next_local_bridge_bundle_send_at(
     let result = preflight_local_bridge_bundle_send_action(action, trusted_devices, now_ms)?;
     push_local_bridge_pending_action_result(runtime, &result)?;
     Ok(result)
+}
+
+fn execute_next_local_bridge_bundle_import_at(
+    runtime: &LocalBridgeRuntimeState,
+    staging_root: &std::path::Path,
+    import_root: &std::path::Path,
+    now_ms: u128,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    let action = match take_next_local_bridge_pending_action_raw(runtime)? {
+        Some(LocalBridgePendingAction::ImportBundle(action)) => action,
+        Some(LocalBridgePendingAction::SendBundle(action)) => {
+            push_front_local_bridge_pending_action(
+                runtime,
+                LocalBridgePendingAction::SendBundle(action),
+            )?;
+            return Ok(None);
+        }
+        None => return Ok(None),
+    };
+
+    push_local_bridge_action_lifecycle_result(
+        runtime,
+        local_bridge_action_lifecycle_result(
+            &LocalBridgePendingAction::ImportBundle(action.clone()),
+            LocalBridgeActionLifecycleStatus::Running,
+            None,
+            "local bridge bundle import is running",
+            None,
+            action.expected_bundle_type,
+            None,
+            now_ms,
+        ),
+    )?;
+    let result =
+        execute_local_bridge_bundle_import_action(action, staging_root, import_root, now_ms)?;
+    push_local_bridge_action_lifecycle_result(runtime, result.clone())?;
+    Ok(Some(local_bridge_pending_action_result_to_dto(
+        &result, false,
+    )))
+}
+
+fn execute_next_local_bridge_bundle_send_at(
+    state: &AppState,
+    trusted_devices: &[TrustedDeviceRecord],
+    now_ms: u128,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
+    execute_next_local_bridge_bundle_send_with(
+        &state.local_bridge_runtime,
+        trusted_devices,
+        now_ms,
+        |action| {
+            let target_device_id = action
+                .target_device_id
+                .as_deref()
+                .ok_or_else(|| "local bridge bundle send requires target_device_id".to_string())?;
+            let (endpoint, peer) = endpoint_and_peer_for_device_id(state, target_device_id)?;
+            send_paths_to_endpoint(state, endpoint, action.bundle_root.clone(), peer).map(|_| ())
+        },
+    )
+}
+
+fn execute_local_bridge_bundle_send_action_at(
+    state: &AppState,
+    action: LocalBridgePendingSendBundleAction,
+    now_ms: u128,
+) -> Result<LocalBridgePendingActionResultDto, String> {
+    let trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+    execute_local_bridge_bundle_send_action_with(
+        &state.local_bridge_runtime,
+        &trusted_devices,
+        action,
+        now_ms,
+        |action| {
+            let target_device_id = action
+                .target_device_id
+                .as_deref()
+                .ok_or_else(|| "local bridge bundle send requires target_device_id".to_string())?;
+            let (endpoint, peer) = endpoint_and_peer_for_device_id(state, target_device_id)?;
+            send_paths_to_endpoint(state, endpoint, action.bundle_root.clone(), peer).map(|_| ())
+        },
+    )
+}
+
+fn execute_next_local_bridge_bundle_send_with<S>(
+    runtime: &LocalBridgeRuntimeState,
+    trusted_devices: &[TrustedDeviceRecord],
+    now_ms: u128,
+    mut send_bundle: S,
+) -> Result<Option<LocalBridgePendingActionResultDto>, String>
+where
+    S: FnMut(&LocalBridgePendingSendBundleAction) -> Result<(), String>,
+{
+    let action = match take_next_local_bridge_pending_action_raw(runtime)? {
+        Some(LocalBridgePendingAction::SendBundle(action)) => action,
+        Some(LocalBridgePendingAction::ImportBundle(action)) => {
+            push_front_local_bridge_pending_action(
+                runtime,
+                LocalBridgePendingAction::ImportBundle(action),
+            )?;
+            return Ok(None);
+        }
+        None => return Ok(None),
+    };
+
+    execute_local_bridge_bundle_send_action_with(
+        runtime,
+        trusted_devices,
+        action,
+        now_ms,
+        &mut send_bundle,
+    )
+    .map(Some)
+}
+
+fn execute_local_bridge_bundle_send_action_with<S>(
+    runtime: &LocalBridgeRuntimeState,
+    trusted_devices: &[TrustedDeviceRecord],
+    action: LocalBridgePendingSendBundleAction,
+    now_ms: u128,
+    mut send_bundle: S,
+) -> Result<LocalBridgePendingActionResultDto, String>
+where
+    S: FnMut(&LocalBridgePendingSendBundleAction) -> Result<(), String>,
+{
+    push_local_bridge_action_lifecycle_result(
+        runtime,
+        local_bridge_action_lifecycle_result(
+            &LocalBridgePendingAction::SendBundle(action.clone()),
+            LocalBridgeActionLifecycleStatus::Running,
+            None,
+            "local bridge bundle send is running",
+            None,
+            Some(action.bundle_type),
+            action.target_device_id.as_deref(),
+            now_ms,
+        ),
+    )?;
+    let preflight =
+        preflight_local_bridge_bundle_send_action(action.clone(), trusted_devices, now_ms)?;
+    let result = if preflight.status != "ready" {
+        local_bridge_bundle_send_result_from_preflight("failed", &preflight, &action, now_ms)
+    } else if action.target_device_id.as_deref().is_none() {
+        local_bridge_bundle_send_result(
+            "failed",
+            &action,
+            preflight.bundle_id.as_deref(),
+            preflight
+                .bundle_type
+                .as_deref()
+                .and_then(bundle_type_from_label),
+            Some("target_device_required"),
+            "local bridge bundle send requires target_device_id before desktop execution",
+            now_ms,
+        )
+    } else {
+        match send_bundle(&action) {
+            Ok(()) => local_bridge_bundle_send_result(
+                "completed",
+                &action,
+                preflight.bundle_id.as_deref(),
+                preflight
+                    .bundle_type
+                    .as_deref()
+                    .and_then(bundle_type_from_label),
+                None,
+                "local bridge bundle was sent by the desktop runtime",
+                now_ms,
+            ),
+            Err(error) => local_bridge_bundle_send_result(
+                "failed",
+                &action,
+                preflight.bundle_id.as_deref(),
+                preflight
+                    .bundle_type
+                    .as_deref()
+                    .and_then(bundle_type_from_label),
+                Some("bundle_send_failed"),
+                &format!(
+                    "local bridge bundle send failed: {}",
+                    friendly_transfer_error(&error)
+                ),
+                now_ms,
+            ),
+        }
+    };
+    push_local_bridge_action_lifecycle_result(runtime, result.clone())?;
+    Ok(local_bridge_pending_action_result_to_dto(&result, false))
+}
+
+fn execute_local_bridge_bundle_import_action(
+    action: LocalBridgePendingImportBundleAction,
+    staging_root: &std::path::Path,
+    import_root: &std::path::Path,
+    now_ms: u128,
+) -> Result<LocalBridgePendingActionResult, String> {
+    validate_safe_bundle_id(&action.staged_bundle_id)?;
+    let staged_path = staging_root.join(&action.staged_bundle_id);
+    let detected = match detect_bundle_directory(&staged_path) {
+        Ok(Some(detected)) => detected,
+        Ok(None) => {
+            return Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some("bundle_manifest_missing"),
+                "local bridge staged bundle does not contain bundle.json",
+                None,
+                None,
+                now_ms,
+            ));
+        }
+        Err(error) => {
+            return Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some("bundle_invalid"),
+                &format!("local bridge staged bundle validation failed: {error}"),
+                None,
+                None,
+                now_ms,
+            ));
+        }
+    };
+
+    let bundle_id = detected.manifest.bundle_id.clone();
+    let bundle_type = detected.manifest.bundle_type;
+    if let Some(expected_bundle_type) = action.expected_bundle_type {
+        if bundle_type != expected_bundle_type {
+            return Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some("bundle_type_mismatch"),
+                "local bridge expected bundle_type does not match the staged bundle manifest",
+                Some(bundle_id.as_str()),
+                Some(bundle_type),
+                now_ms,
+            ));
+        }
+    }
+
+    match import_staged_bundle_at(staging_root, import_root, &action.staged_bundle_id) {
+        Ok(imported) => Ok(local_bridge_bundle_import_result(
+            "completed",
+            &action,
+            None,
+            "local bridge staged bundle was imported",
+            Some(imported.bundle_id.as_str()),
+            bundle_type_from_label(&imported.bundle_type).or(Some(bundle_type)),
+            now_ms,
+        )),
+        Err(error) => {
+            let reason = local_bridge_bundle_import_failure_reason(&error);
+            Ok(local_bridge_bundle_import_result(
+                "failed",
+                &action,
+                Some(reason),
+                &format!("local bridge staged bundle import failed: {error}"),
+                Some(bundle_id.as_str()),
+                Some(bundle_type),
+                now_ms,
+            ))
+        }
+    }
+}
+
+fn local_bridge_bundle_import_failure_reason(error: &str) -> &'static str {
+    if error.contains("destination already exists") {
+        return "bundle_import_conflict";
+    }
+    "bundle_import_failed"
+}
+
+fn local_bridge_bundle_import_result(
+    status: &str,
+    action: &LocalBridgePendingImportBundleAction,
+    reason: Option<&str>,
+    message: &str,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    LocalBridgePendingActionResult {
+        request_id: action.request_id.clone(),
+        action_kind: "bundle.import".to_string(),
+        client_id: action.client.client_id.clone(),
+        client_display_name: action.client.display_name.clone(),
+        status: status.to_string(),
+        lifecycle_status: Some(
+            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
+        ),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        bundle_id: bundle_id.map(str::to_string),
+        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+        bundle_root: None,
+        target_device_id: None,
+        require_trusted_device: None,
+        requested_at_ms: action.requested_at_ms,
+        claimed_at_ms: now_ms,
+    }
+}
+
+fn local_bridge_bundle_send_result_from_preflight(
+    status: &str,
+    preflight: &LocalBridgeBundleSendPreflightDto,
+    action: &LocalBridgePendingSendBundleAction,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    local_bridge_bundle_send_result(
+        status,
+        action,
+        preflight.bundle_id.as_deref(),
+        preflight
+            .bundle_type
+            .as_deref()
+            .and_then(bundle_type_from_label),
+        preflight.reason.as_deref(),
+        &preflight.message,
+        now_ms,
+    )
+}
+
+fn local_bridge_bundle_send_result(
+    status: &str,
+    action: &LocalBridgePendingSendBundleAction,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    reason: Option<&str>,
+    message: &str,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    LocalBridgePendingActionResult {
+        request_id: action.request_id.clone(),
+        action_kind: "bundle.send".to_string(),
+        client_id: action.client.client_id.clone(),
+        client_display_name: action.client.display_name.clone(),
+        status: status.to_string(),
+        lifecycle_status: Some(
+            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
+        ),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        bundle_id: bundle_id.map(str::to_string),
+        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+        bundle_root: Some(action.bundle_root.clone()),
+        target_device_id: action.target_device_id.clone(),
+        require_trusted_device: Some(action.require_trusted_device),
+        requested_at_ms: action.requested_at_ms,
+        claimed_at_ms: now_ms,
+    }
+}
+
+fn local_bridge_lifecycle_status_from_result(status: &str, reason: Option<&str>) -> &'static str {
+    if reason == Some("bundle_import_conflict") {
+        return LocalBridgeActionLifecycleStatus::Conflict.as_str();
+    }
+    match status {
+        "queued" => LocalBridgeActionLifecycleStatus::Queued.as_str(),
+        "running" => LocalBridgeActionLifecycleStatus::Running.as_str(),
+        "completed" => LocalBridgeActionLifecycleStatus::Succeeded.as_str(),
+        "cancelled" => LocalBridgeActionLifecycleStatus::Cancelled.as_str(),
+        "failed" | "failed_preflight" => LocalBridgeActionLifecycleStatus::Failed.as_str(),
+        _ => LocalBridgeActionLifecycleStatus::Failed.as_str(),
+    }
+}
+
+fn local_bridge_lifecycle_status_label(status: LocalBridgeActionLifecycleStatus) -> &'static str {
+    status.as_str()
 }
 
 fn preflight_local_bridge_bundle_send_action(
@@ -3145,16 +3669,13 @@ fn push_local_bridge_pending_action_result(
     };
     let event_id = format!("bridge-action-{request_id}-{claimed_at_ms}");
 
-    let mut results = runtime
-        .pending_action_results
-        .lock()
-        .map_err(|error| error.to_string())?;
-    results.push(LocalBridgePendingActionResult {
+    let result = LocalBridgePendingActionResult {
         request_id: request_id.clone(),
         action_kind: "bundle.send".to_string(),
         client_id: client_id.clone(),
         client_display_name,
         status: result.status.clone(),
+        lifecycle_status: None,
         reason: result.reason.clone(),
         message: result.message.clone(),
         bundle_id: result.bundle_id.clone(),
@@ -3164,12 +3685,8 @@ fn push_local_bridge_pending_action_result(
         require_trusted_device: result.require_trusted_device,
         requested_at_ms,
         claimed_at_ms,
-    });
-    if results.len() > LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT {
-        let excess = results.len() - LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT;
-        results.drain(0..excess);
-    }
-    drop(results);
+    };
+    push_local_bridge_pending_action_result_record(runtime, result.clone())?;
 
     let status = match result.status.as_str() {
         "ready" => LocalBridgeBundleSendPreflightStatus::Ready,
@@ -3192,6 +3709,145 @@ fn push_local_bridge_pending_action_result(
             target_device_id: result.target_device_id.clone(),
         }),
     )?;
+    Ok(())
+}
+
+fn push_local_bridge_pending_action_result_record(
+    runtime: &LocalBridgeRuntimeState,
+    result: LocalBridgePendingActionResult,
+) -> Result<(), String> {
+    let mut results = runtime
+        .pending_action_results
+        .lock()
+        .map_err(|error| error.to_string())?;
+    results.retain(|existing| {
+        existing.request_id != result.request_id
+            || existing.action_kind != result.action_kind
+            || existing.client_id != result.client_id
+    });
+    results.push(result);
+    if results.len() > LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT {
+        let excess = results.len() - LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT;
+        results.drain(0..excess);
+    }
+    runtime.events_signal.notify_all();
+    Ok(())
+}
+
+fn push_local_bridge_action_lifecycle_result(
+    runtime: &LocalBridgeRuntimeState,
+    result: LocalBridgePendingActionResult,
+) -> Result<(), String> {
+    push_local_bridge_pending_action_result_record(runtime, result.clone())?;
+    push_local_bridge_runtime_event(
+        runtime,
+        LocalBridgeEvent::ActionUpdated(LocalBridgeActionUpdatedEvent {
+            event_id: format!(
+                "bridge-action-{}-{}-{}",
+                result.request_id,
+                result
+                    .lifecycle_status
+                    .as_deref()
+                    .unwrap_or(result.status.as_str()),
+                result.claimed_at_ms
+            ),
+            request_id: result.request_id,
+            action_kind: result.action_kind,
+            client_id: result.client_id,
+            status: local_bridge_lifecycle_status_from_label(
+                result
+                    .lifecycle_status
+                    .as_deref()
+                    .unwrap_or(result.status.as_str()),
+            ),
+            reason: result.reason,
+            message: result.message,
+            bundle_id: result.bundle_id,
+            bundle_type: result
+                .bundle_type
+                .as_deref()
+                .and_then(bundle_type_from_label),
+            target_device_id: result.target_device_id,
+            updated_at_ms: result.claimed_at_ms,
+        }),
+    )
+}
+
+fn local_bridge_action_lifecycle_result(
+    action: &LocalBridgePendingAction,
+    lifecycle_status: LocalBridgeActionLifecycleStatus,
+    reason: Option<&str>,
+    message: &str,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    target_device_id: Option<&str>,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => LocalBridgePendingActionResult {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.send".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            lifecycle_status: Some(
+                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            ),
+            reason: reason.map(str::to_string),
+            message: message.to_string(),
+            bundle_id: bundle_id.map(str::to_string),
+            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+            bundle_root: Some(action.bundle_root.clone()),
+            target_device_id: target_device_id
+                .map(str::to_string)
+                .or_else(|| action.target_device_id.clone()),
+            require_trusted_device: Some(action.require_trusted_device),
+            requested_at_ms: action.requested_at_ms,
+            claimed_at_ms: now_ms,
+        },
+        LocalBridgePendingAction::ImportBundle(action) => LocalBridgePendingActionResult {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.import".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            lifecycle_status: Some(
+                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            ),
+            reason: reason.map(str::to_string),
+            message: message.to_string(),
+            bundle_id: bundle_id.map(str::to_string),
+            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+            bundle_root: None,
+            target_device_id: None,
+            require_trusted_device: None,
+            requested_at_ms: action.requested_at_ms,
+            claimed_at_ms: now_ms,
+        },
+    }
+}
+
+fn local_bridge_lifecycle_status_from_label(label: &str) -> LocalBridgeActionLifecycleStatus {
+    match label {
+        "queued" => LocalBridgeActionLifecycleStatus::Queued,
+        "running" => LocalBridgeActionLifecycleStatus::Running,
+        "succeeded" => LocalBridgeActionLifecycleStatus::Succeeded,
+        "conflict" => LocalBridgeActionLifecycleStatus::Conflict,
+        "cancelled" => LocalBridgeActionLifecycleStatus::Cancelled,
+        _ => LocalBridgeActionLifecycleStatus::Failed,
+    }
+}
+
+fn push_front_local_bridge_pending_action(
+    runtime: &LocalBridgeRuntimeState,
+    action: LocalBridgePendingAction,
+) -> Result<(), String> {
+    let mut actions = runtime
+        .pending_actions
+        .lock()
+        .map_err(|error| error.to_string())?;
+    actions.insert(0, action);
+    runtime.pending_actions_signal.notify_one();
     Ok(())
 }
 
@@ -3218,6 +3874,7 @@ fn local_bridge_pending_action_result_to_dto(
         client_id: result.client_id.clone(),
         client_display_name: result.client_display_name.clone(),
         status: result.status.clone(),
+        lifecycle_status: result.lifecycle_status.clone(),
         reason: result.reason.clone(),
         message: result.message.clone(),
         bundle_id: result.bundle_id.clone(),
@@ -3243,9 +3900,34 @@ fn remove_local_bridge_pending_action_at(
         .pending_actions
         .lock()
         .map_err(|error| error.to_string())?;
-    let before_len = actions.len();
-    actions.retain(|action| local_bridge_pending_action_request_id(action) != request_id);
-    Ok(actions.len() != before_len)
+    let Some(position) = actions
+        .iter()
+        .position(|action| local_bridge_pending_action_request_id(action) == request_id)
+    else {
+        return Ok(false);
+    };
+    let action = actions.remove(position);
+    drop(actions);
+    push_local_bridge_action_lifecycle_result(
+        runtime,
+        local_bridge_action_lifecycle_result(
+            &action,
+            LocalBridgeActionLifecycleStatus::Cancelled,
+            None,
+            "local bridge action was cancelled before execution",
+            None,
+            match &action {
+                LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
+                LocalBridgePendingAction::ImportBundle(action) => action.expected_bundle_type,
+            },
+            match &action {
+                LocalBridgePendingAction::SendBundle(action) => action.target_device_id.as_deref(),
+                LocalBridgePendingAction::ImportBundle(_) => None,
+            },
+            now_ms(),
+        ),
+    )?;
+    Ok(true)
 }
 
 fn local_bridge_pending_action_to_dto(
@@ -3346,6 +4028,7 @@ fn handle_local_bridge_request_with_auth_at(
         staging_root,
         authorizations,
         &[],
+        &[],
         now_ms,
     )
 }
@@ -3357,6 +4040,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
     staging_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     events: &[LocalBridgeEvent],
+    action_results: &[LocalBridgePendingActionResult],
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
     match request {
@@ -3420,7 +4104,14 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 LocalBridgePermissionScope::BundleSend,
                 now_ms,
             );
-            if !can_read_bundles && !can_read_transfers && !can_send_bundles {
+            let can_import_bundles = local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleImportRequest,
+                now_ms,
+            );
+            if !can_read_bundles && !can_read_transfers && !can_send_bundles && !can_import_bundles
+            {
                 return Ok(local_bridge_pending_confirmation_response(
                     request.request_id,
                     request.client,
@@ -3433,11 +4124,33 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 can_read_bundles,
                 can_read_transfers,
                 can_send_bundles,
+                can_import_bundles,
             )?;
             Ok(local_bridge_events_response(
                 request.request_id,
                 request.client,
                 bridge_events,
+            ))
+        }
+        LocalBridgeRequest::ActionResults(request) => {
+            let action_results = local_bridge_action_results_for_client(
+                request.client.as_ref(),
+                authorizations,
+                action_results,
+                request.after_claimed_at_ms,
+                request.limit.unwrap_or(50),
+                now_ms,
+            )?;
+            if action_results.is_none() {
+                return Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ));
+            }
+            Ok(local_bridge_action_results_response(
+                request.request_id,
+                request.client,
+                action_results.unwrap_or_default(),
             ))
         }
         LocalBridgeRequest::SendBundle(request) => {
@@ -3502,6 +4215,7 @@ fn push_local_bridge_runtime_event(
         let excess = events.len() - LOCAL_BRIDGE_EVENT_QUEUE_LIMIT;
         events.drain(0..excess);
     }
+    runtime.events_signal.notify_all();
     Ok(())
 }
 
@@ -3587,6 +4301,7 @@ fn local_bridge_events_after(
     can_read_bundles: bool,
     can_read_transfers: bool,
     can_send_bundles: bool,
+    can_import_bundles: bool,
 ) -> Result<Vec<serde_json::Value>, String> {
     let mut after_cursor = after_event_id.is_none();
     let mut output = Vec::new();
@@ -3600,6 +4315,7 @@ fn local_bridge_events_after(
             can_read_bundles,
             can_read_transfers,
             can_send_bundles,
+            can_import_bundles,
         ) {
             continue;
         }
@@ -3611,10 +4327,54 @@ fn local_bridge_events_after(
     Ok(output)
 }
 
+fn local_bridge_action_results_for_client(
+    client: Option<&LocalBridgeClientIdentity>,
+    authorizations: &[LocalBridgeAuthorizationRecord],
+    results: &[LocalBridgePendingActionResult],
+    after_claimed_at_ms: Option<u128>,
+    limit: usize,
+    now_ms: u128,
+) -> Result<Option<Vec<LocalBridgePendingActionResultDto>>, String> {
+    let Some(client) = client else {
+        return Ok(None);
+    };
+    let can_read_send_results = local_bridge_client_has_scope(
+        Some(client),
+        authorizations,
+        LocalBridgePermissionScope::BundleSend,
+        now_ms,
+    );
+    let can_read_import_results = local_bridge_client_has_scope(
+        Some(client),
+        authorizations,
+        LocalBridgePermissionScope::BundleImportRequest,
+        now_ms,
+    );
+    if !can_read_send_results && !can_read_import_results {
+        return Ok(None);
+    }
+
+    let limit = limit.min(100);
+    let output = results
+        .iter()
+        .filter(|result| result.client_id == client.client_id)
+        .filter(|result| after_claimed_at_ms.is_none_or(|after| result.claimed_at_ms > after))
+        .filter(|result| match result.action_kind.as_str() {
+            "bundle.send" => can_read_send_results,
+            "bundle.import" => can_read_import_results,
+            _ => false,
+        })
+        .take(limit)
+        .map(|result| local_bridge_pending_action_result_to_dto(result, false))
+        .collect();
+    Ok(Some(output))
+}
+
 fn local_bridge_event_id(event: &LocalBridgeEvent) -> &str {
     match event {
         LocalBridgeEvent::BundleReceived(event) => &event.event_id,
         LocalBridgeEvent::BundleSendPreflight(event) => &event.event_id,
+        LocalBridgeEvent::ActionUpdated(event) => &event.event_id,
         LocalBridgeEvent::TransferUpdated(event) => &event.event_id,
     }
 }
@@ -3624,10 +4384,16 @@ fn local_bridge_event_is_allowed(
     can_read_bundles: bool,
     can_read_transfers: bool,
     can_send_bundles: bool,
+    can_import_bundles: bool,
 ) -> bool {
     match event {
         LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
         LocalBridgeEvent::BundleSendPreflight(_) => can_send_bundles,
+        LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
+            "bundle.send" => can_send_bundles,
+            "bundle.import" => can_import_bundles,
+            _ => false,
+        },
         LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
     }
 }
@@ -3897,6 +4663,7 @@ fn local_bridge_read_only_response(
         devices,
         staged_bundles,
         transfer_status,
+        action_results: Vec::new(),
         events: Vec::new(),
     }
 }
@@ -3924,6 +4691,7 @@ fn local_bridge_read_only_unsupported_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        action_results: Vec::new(),
         events: Vec::new(),
     }
 }
@@ -3950,6 +4718,7 @@ fn local_bridge_pending_confirmation_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        action_results: Vec::new(),
         events: Vec::new(),
     }
 }
@@ -3977,6 +4746,7 @@ fn local_bridge_authorized_runtime_pending_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        action_results: Vec::new(),
         events: Vec::new(),
     }
 }
@@ -4004,7 +4774,85 @@ fn local_bridge_events_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        action_results: Vec::new(),
         events,
+    }
+}
+
+fn wait_for_local_bridge_events(
+    runtime: &LocalBridgeRuntimeState,
+    request: nekolink_protocol::LocalBridgePollEventsRequest,
+    trusted_devices: &[TrustedDeviceRecord],
+    transfer_status: Option<&TransferStatusState>,
+    staging_root: &std::path::Path,
+    authorizations: &[LocalBridgeAuthorizationRecord],
+    now_ms: u128,
+    timeout: Duration,
+) -> Result<LocalBridgeResponseDto, String> {
+    let mut events = runtime.events.lock().map_err(|error| error.to_string())?;
+    let baseline_last_event_id = events.last().map(local_bridge_event_id).map(str::to_string);
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .unwrap_or_else(Instant::now);
+    while events.last().map(local_bridge_event_id).map(str::to_string) == baseline_last_event_id {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match runtime.events_signal.wait_timeout(events, remaining) {
+            Ok((next_events, wait_result)) => {
+                events = next_events;
+                if wait_result.timed_out() {
+                    break;
+                }
+            }
+            Err(error) => return Err(error.to_string()),
+        }
+    }
+    let events = events.clone();
+    let action_results = runtime
+        .pending_action_results
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
+
+    handle_validated_local_bridge_request_with_auth_at(
+        LocalBridgeRequest::PollEvents(request),
+        trusted_devices,
+        transfer_status,
+        staging_root,
+        authorizations,
+        &events,
+        &action_results,
+        now_ms,
+    )
+}
+
+fn local_bridge_action_results_response(
+    request_id: String,
+    client: Option<LocalBridgeClientIdentity>,
+    action_results: Vec<LocalBridgePendingActionResultDto>,
+) -> LocalBridgeResponseDto {
+    let client_metadata = local_bridge_client_metadata(client);
+    LocalBridgeResponseDto {
+        request_id,
+        status: "ok".to_string(),
+        message: "local bridge action result snapshot".to_string(),
+        security_state: "authorized".to_string(),
+        requires_user_confirmation: false,
+        client_state: client_metadata.0,
+        client_id: client_metadata.1,
+        client_display_name: client_metadata.2,
+        authorization_scopes: Vec::new(),
+        authorization_reason: None,
+        authorization_ttl_seconds: None,
+        authorization_code: None,
+        authorization_expires_at_ms: None,
+        devices: Vec::new(),
+        staged_bundles: Vec::new(),
+        transfer_status: None,
+        action_results,
+        events: Vec::new(),
     }
 }
 
@@ -4048,6 +4896,7 @@ fn local_bridge_pending_authorization_response(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        action_results: Vec::new(),
         events: Vec::new(),
     }
 }
@@ -4084,6 +4933,7 @@ fn local_bridge_pending_authorization_response_from_pending(
         devices: Vec::new(),
         staged_bundles: Vec::new(),
         transfer_status: None,
+        action_results: Vec::new(),
         events: Vec::new(),
     }
 }
@@ -6466,6 +7316,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_000,
         )
         .unwrap();
@@ -6530,6 +7381,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_000,
         )
         .unwrap();
@@ -6545,6 +7397,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_600,
         )
         .unwrap();
@@ -6597,6 +7450,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -6615,6 +7469,26 @@ mod tests {
                 assert_eq!(action.requested_at_ms, 1_500);
             }
             other => panic!("expected send bundle action, got {other:?}"),
+        }
+        drop(actions);
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-request-send");
+        assert_eq!(results[0].status, "queued");
+        assert_eq!(results[0].lifecycle_status.as_deref(), Some("queued"));
+        assert!(results[0].bundle_root.is_none());
+        let events = runtime.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => {
+                assert_eq!(event.request_id, "bridge-request-send");
+                assert_eq!(
+                    event.status,
+                    nekolink_protocol::LocalBridgeActionLifecycleStatus::Queued
+                );
+                assert_eq!(event.target_device_id.as_deref(), Some("device-a"));
+            }
+            other => panic!("expected action.updated event, got {other:?}"),
         }
 
         fs::remove_dir_all(dir).unwrap();
@@ -6656,6 +7530,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -6703,6 +7578,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -6799,6 +7675,24 @@ mod tests {
         assert!(!missing);
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].request_id, "bridge-import-1");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-send-1");
+        assert_eq!(results[0].status, "cancelled");
+        assert_eq!(results[0].lifecycle_status.as_deref(), Some("cancelled"));
+        assert!(results[0].bundle_root.is_none());
+        let events = runtime.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => {
+                assert_eq!(event.request_id, "bridge-send-1");
+                assert_eq!(
+                    event.status,
+                    nekolink_protocol::LocalBridgeActionLifecycleStatus::Cancelled
+                );
+            }
+            other => panic!("expected action.updated event, got {other:?}"),
+        }
     }
 
     #[test]
@@ -6853,6 +7747,224 @@ mod tests {
         let claimed = take_next_local_bridge_pending_action_at(&runtime).unwrap();
 
         assert!(claimed.is_none());
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_imports_staged_bundle_and_records_result() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::ImportBundle(
+                LocalBridgePendingImportBundleAction {
+                    request_id: "bridge-import-1".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    staged_bundle_id: "bundle_1234567890".to_string(),
+                    expected_bundle_type: Some(BundleType::Skill),
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap()
+        .expect("pending bundle.import action should be executed");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(result.request_id, "bridge-import-1");
+        assert_eq!(result.action_kind, "bundle.import");
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.lifecycle_status.as_deref(), Some("succeeded"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_1234567890"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert_eq!(result.requested_at_ms, 1_500);
+        assert_eq!(result.claimed_at_ms, 2_000);
+        assert!(result.bundle_root.is_none());
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-import-1");
+        assert_eq!(results[0].status, "completed");
+        assert_eq!(results[0].lifecycle_status.as_deref(), Some("succeeded"));
+        assert!(results[0].bundle_root.is_none());
+        assert!(import_root
+            .join("bundle_1234567890")
+            .join("content.bin")
+            .exists());
+        let events = runtime.events.lock().unwrap();
+        let statuses: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => Some(event.status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                nekolink_protocol::LocalBridgeActionLifecycleStatus::Succeeded,
+            ]
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_rejects_expected_type_mismatch() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution-type-mismatch");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::ImportBundle(
+                LocalBridgePendingImportBundleAction {
+                    request_id: "bridge-import-type".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    staged_bundle_id: "bundle_1234567890".to_string(),
+                    expected_bundle_type: Some(BundleType::Workspace),
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap()
+        .expect("pending bundle.import action should be consumed");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.reason.as_deref(), Some("bundle_type_mismatch"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_1234567890"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-import-type");
+        assert_eq!(results[0].status, "failed");
+        assert_eq!(results[0].reason.as_deref(), Some("bundle_type_mismatch"));
+        assert!(!import_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_reports_name_conflict() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution-conflict");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::ImportBundle(
+                LocalBridgePendingImportBundleAction {
+                    request_id: "bridge-import-conflict".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    staged_bundle_id: "bundle_1234567890".to_string(),
+                    expected_bundle_type: Some(BundleType::Skill),
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap()
+        .expect("pending bundle.import action should be consumed");
+
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.reason.as_deref(), Some("bundle_import_conflict"));
+        assert_eq!(result.lifecycle_status.as_deref(), Some("conflict"));
+        assert!(!import_root.join("bundle_1234567890.importing").exists());
+        let events = runtime.events.lock().unwrap();
+        let last_status = events.iter().rev().find_map(|event| match event {
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => Some(event.status),
+            _ => None,
+        });
+        assert_eq!(
+            last_status,
+            Some(nekolink_protocol::LocalBridgeActionLifecycleStatus::Conflict)
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_import_execution_skips_non_import_queue_head() {
+        let dir = unique_bundle_temp_dir("local-bridge-import-execution-skip");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-1".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: "/tmp/exported/bundle".to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: true,
+                    requested_at_ms: 1_500,
+                },
+            ));
+
+        let result = execute_next_local_bridge_bundle_import_at(
+            &runtime,
+            &staging_root,
+            &import_root,
+            2_000,
+        )
+        .unwrap();
+        let actions = list_local_bridge_pending_actions_at(&runtime).unwrap();
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert!(result.is_none());
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].request_id, "bridge-send-1");
+        assert!(results.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
@@ -6999,6 +8111,57 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_worker_executes_bundle_send_action_and_records_result() {
+        let dir = unique_bundle_temp_dir("local-bridge-worker-send");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_worker_send");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-worker".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: true,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+        let mut sent_bundle_root = None;
+
+        let result =
+            execute_next_local_bridge_bundle_send_with(&runtime, &trusted, 2_000, |action| {
+                sent_bundle_root = Some(action.bundle_root.clone());
+                Ok(())
+            })
+            .unwrap()
+            .expect("worker should execute queued bundle.send");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(
+            sent_bundle_root.as_deref(),
+            Some(bundle_root.to_str().unwrap())
+        );
+        assert_eq!(result.request_id, "bridge-send-worker");
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_worker_send"));
+        assert!(result.bundle_root.is_none());
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].status, "completed");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn local_bridge_bundle_send_preflight_records_result_without_sensitive_path() {
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-result-history");
         let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_result");
@@ -7077,6 +8240,129 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_bundle_send_execution_records_completed_result_without_sensitive_path() {
+        let dir = unique_bundle_temp_dir("local-bridge-send-execution-completed");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_send_execution");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-execute".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: true,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+
+        let result =
+            execute_next_local_bridge_bundle_send_with(&runtime, &trusted, 2_000, |action| {
+                assert_eq!(action.request_id, "bridge-send-execute");
+                assert_eq!(action.bundle_root, bundle_root.display().to_string());
+                Ok(())
+            })
+            .unwrap()
+            .expect("pending bundle.send action should be executed");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert_eq!(result.request_id, "bridge-send-execute");
+        assert_eq!(result.action_kind, "bundle.send");
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.lifecycle_status.as_deref(), Some("succeeded"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_send_execution"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert_eq!(result.target_device_id.as_deref(), Some("device-a"));
+        assert_eq!(result.requested_at_ms, 1_500);
+        assert_eq!(result.claimed_at_ms, 2_000);
+        assert!(result.bundle_root.is_none());
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-send-execute");
+        assert_eq!(results[0].status, "completed");
+        assert_eq!(results[0].lifecycle_status.as_deref(), Some("succeeded"));
+        assert!(results[0].bundle_root.is_none());
+        let events = runtime.events.lock().unwrap();
+        let statuses: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => Some(event.status),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            statuses,
+            vec![
+                nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                nekolink_protocol::LocalBridgeActionLifecycleStatus::Succeeded,
+            ]
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_send_execution_requires_target_device() {
+        let dir = unique_bundle_temp_dir("local-bridge-send-execution-target-required");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_send_no_target");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-no-target".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: None,
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        let mut called = false;
+
+        let result = execute_next_local_bridge_bundle_send_with(&runtime, &[], 2_000, |_| {
+            called = true;
+            Ok(())
+        })
+        .unwrap()
+        .expect("pending bundle.send action should be consumed");
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+
+        assert!(!called);
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.lifecycle_status.as_deref(), Some("failed"));
+        assert_eq!(result.reason.as_deref(), Some("target_device_required"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_send_no_target"));
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert!(result.bundle_root.is_none());
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-send-no-target");
+        assert_eq!(results[0].status, "failed");
+        assert_eq!(results[0].lifecycle_status.as_deref(), Some("failed"));
+        assert_eq!(results[0].reason.as_deref(), Some("target_device_required"));
+        assert!(results[0].bundle_root.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn authorized_local_bridge_client_can_poll_bundle_send_preflight_events() {
         let runtime = LocalBridgeRuntimeState::default();
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-event");
@@ -7132,6 +8418,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             2_500,
         )
         .unwrap();
@@ -7149,6 +8436,105 @@ mod tests {
         assert_eq!(
             response.events[0]["payload"]["status"].as_str(),
             Some("failed_preflight")
+        );
+        assert!(response.events[0]["payload"].get("bundle_root").is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_client_can_poll_action_updated_events_by_scope() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-updated-poll");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.authorizations.lock().unwrap().extend([
+            local_bridge_authorization(
+                "sender-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ),
+            local_bridge_authorization(
+                "importer-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ),
+        ]);
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-send-running".to_string(),
+                    request_id: "bridge-send-1".to_string(),
+                    action_kind: "bundle.send".to_string(),
+                    client_id: "sender-app".to_string(),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "send running".to_string(),
+                    bundle_id: Some("bundle_send".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: Some("device-a".to_string()),
+                    updated_at_ms: 2_000,
+                },
+            ),
+        )
+        .unwrap();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-import-running".to_string(),
+                    request_id: "bridge-import-1".to_string(),
+                    action_kind: "bundle.import".to_string(),
+                    client_id: "importer-app".to_string(),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "import running".to_string(),
+                    bundle_id: Some("bundle_1234567890".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: None,
+                    updated_at_ms: 2_100,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-action",
+                "client": {
+                    "client_id": "sender-app",
+                    "display_name": "Sender App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0]["kind"].as_str(), Some("action.updated"));
+        assert_eq!(
+            response.events[0]["payload"]["request_id"].as_str(),
+            Some("bridge-send-1")
+        );
+        assert_eq!(
+            response.events[0]["payload"]["status"].as_str(),
+            Some("running")
         );
         assert!(response.events[0]["payload"].get("bundle_root").is_none());
 
@@ -7208,6 +8594,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -7219,6 +8606,188 @@ mod tests {
             response.events[0]["payload"]["event_id"].as_str(),
             Some("bridge-event-1")
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_client_can_poll_action_results() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-results-poll");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        runtime
+            .pending_action_results
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingActionResult {
+                request_id: "bridge-import-1".to_string(),
+                action_kind: "bundle.import".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "completed".to_string(),
+                lifecycle_status: Some("succeeded".to_string()),
+                reason: None,
+                message: "local bridge staged bundle was imported".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                requested_at_ms: 1_500,
+                claimed_at_ms: 2_000,
+            });
+        let request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-1",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.security_state, "authorized");
+        assert_eq!(response.events.len(), 0);
+        assert!(response.staged_bundles.is_empty());
+        assert!(response.transfer_status.is_none());
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(response.action_results[0].request_id, "bridge-import-1");
+        assert_eq!(response.action_results[0].action_kind, "bundle.import");
+        assert_eq!(response.action_results[0].status, "completed");
+        assert_eq!(
+            response.action_results[0].bundle_id.as_deref(),
+            Some("bundle_1234567890")
+        );
+        assert!(response.action_results[0].bundle_root.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_action_results_are_scoped_to_client_and_permission() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-results-scope");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        runtime.pending_action_results.lock().unwrap().extend([
+            LocalBridgePendingActionResult {
+                request_id: "bridge-import-1".to_string(),
+                action_kind: "bundle.import".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "completed".to_string(),
+                lifecycle_status: Some("succeeded".to_string()),
+                reason: None,
+                message: "imported".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                requested_at_ms: 1_500,
+                claimed_at_ms: 2_000,
+            },
+            LocalBridgePendingActionResult {
+                request_id: "bridge-send-1".to_string(),
+                action_kind: "bundle.send".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "ready".to_string(),
+                lifecycle_status: None,
+                reason: None,
+                message: "send ready".to_string(),
+                bundle_id: Some("bundle_send".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: Some("/tmp/private/bundle".to_string()),
+                target_device_id: Some("device-a".to_string()),
+                require_trusted_device: Some(true),
+                requested_at_ms: 1_600,
+                claimed_at_ms: 2_100,
+            },
+            LocalBridgePendingActionResult {
+                request_id: "bridge-import-other".to_string(),
+                action_kind: "bundle.import".to_string(),
+                client_id: "other-app".to_string(),
+                client_display_name: "Other App".to_string(),
+                status: "completed".to_string(),
+                lifecycle_status: Some("succeeded".to_string()),
+                reason: None,
+                message: "other imported".to_string(),
+                bundle_id: Some("bundle_other".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                requested_at_ms: 1_700,
+                claimed_at_ms: 2_200,
+            },
+        ]);
+        let request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-scope",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_claimed_at_ms": 1_999,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(response.action_results[0].request_id, "bridge-import-1");
+        assert!(response.action_results[0].bundle_root.is_none());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -7285,6 +8854,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -7293,6 +8863,76 @@ mod tests {
         assert_eq!(
             response.events[0]["payload"]["event_id"].as_str(),
             Some("bridge-event-2")
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_can_wait_for_new_events() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-long-poll");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = Arc::new(LocalBridgeRuntimeState::default());
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            ));
+        let producer_runtime = runtime.clone();
+        let producer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            push_local_bridge_runtime_event(
+                &producer_runtime,
+                nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                    nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                        event_id: "bridge-event-waited".to_string(),
+                        transfer_id: "transfer-1".to_string(),
+                        phase: nekolink_protocol::LocalBridgeTransferPhase::Sending,
+                        bytes_transferred: 10,
+                        total_bytes: 100,
+                    },
+                ),
+            )
+            .unwrap();
+        });
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-wait",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10,
+                "timeout_ms": 500
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            true,
+            1_500,
+        )
+        .unwrap();
+        producer.join().unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(
+            response.events[0]["payload"]["event_id"].as_str(),
+            Some("bridge-event-waited")
         );
 
         fs::remove_dir_all(dir).unwrap();
@@ -7341,6 +8981,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -7348,6 +8989,45 @@ mod tests {
         assert_eq!(response.status, "pending_auth");
         assert_eq!(response.security_state, "requires_user_confirmation");
         assert!(response.events.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_timeout_does_not_delay_pending_auth() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-pending-auth-no-wait");
+        let staging_root = dir.join("bundle_staging");
+        let runtime = LocalBridgeRuntimeState::default();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-auth-timeout",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10,
+                "timeout_ms": 500
+            }
+        })
+        .to_string();
+        let started = Instant::now();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &runtime,
+            true,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_auth");
+        assert!(started.elapsed() < Duration::from_millis(100));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -7480,6 +9160,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_500,
         )
         .unwrap();
@@ -7522,6 +9203,7 @@ mod tests {
             None,
             &staging_root,
             &runtime,
+            false,
             1_000,
         )
         .unwrap();

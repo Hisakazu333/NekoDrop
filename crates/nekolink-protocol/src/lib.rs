@@ -1939,6 +1939,8 @@ pub enum LocalBridgeRequest {
     TransferStatus(LocalBridgeTransferStatusRequest),
     #[serde(rename = "events.poll")]
     PollEvents(LocalBridgePollEventsRequest),
+    #[serde(rename = "actions.results")]
+    ActionResults(LocalBridgeActionResultsRequest),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1990,8 +1992,21 @@ pub struct LocalBridgeTransferStatusRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgePollEventsRequest {
     pub request_id: String,
+    #[serde(default)]
     pub client: Option<LocalBridgeClientIdentity>,
+    #[serde(default)]
     pub after_event_id: Option<String>,
+    #[serde(default)]
+    pub limit: Option<usize>,
+    #[serde(default)]
+    pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeActionResultsRequest {
+    pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
+    pub after_claimed_at_ms: Option<u128>,
     pub limit: Option<usize>,
 }
 
@@ -2025,6 +2040,8 @@ pub enum LocalBridgeEvent {
     BundleReceived(LocalBridgeBundleReceivedEvent),
     #[serde(rename = "bundle.send.preflight")]
     BundleSendPreflight(LocalBridgeBundleSendPreflightEvent),
+    #[serde(rename = "action.updated")]
+    ActionUpdated(LocalBridgeActionUpdatedEvent),
     #[serde(rename = "transfer.updated")]
     TransferUpdated(LocalBridgeTransferUpdatedEvent),
 }
@@ -2061,6 +2078,45 @@ pub enum LocalBridgeBundleSendPreflightStatus {
     FailedPreflight,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalBridgeActionLifecycleStatus {
+    Queued,
+    Running,
+    Succeeded,
+    Failed,
+    Conflict,
+    Cancelled,
+}
+
+impl LocalBridgeActionLifecycleStatus {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Succeeded => "succeeded",
+            Self::Failed => "failed",
+            Self::Conflict => "conflict",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeActionUpdatedEvent {
+    pub event_id: String,
+    pub request_id: String,
+    pub action_kind: String,
+    pub client_id: String,
+    pub status: LocalBridgeActionLifecycleStatus,
+    pub reason: Option<String>,
+    pub message: String,
+    pub bundle_id: Option<String>,
+    pub bundle_type: Option<BundleType>,
+    pub target_device_id: Option<String>,
+    pub updated_at_ms: u128,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LocalBridgeTransferUpdatedEvent {
     pub event_id: String,
@@ -2091,6 +2147,7 @@ impl LocalBridgeRequest {
             Self::AuthorizationRequest(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
             Self::PollEvents(request) => request.validate(),
+            Self::ActionResults(request) => request.validate(),
         }
     }
 }
@@ -2148,6 +2205,30 @@ impl LocalBridgePollEventsRequest {
                 ));
             }
         }
+        if let Some(timeout_ms) = self.timeout_ms {
+            if timeout_ms > 30_000 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "event poll timeout_ms must be between 0 and 30000",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LocalBridgeActionResultsRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
+        if let Some(limit) = self.limit {
+            if limit == 0 || limit > 100 {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "action results limit must be between 1 and 100",
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -2188,6 +2269,7 @@ impl LocalBridgeEvent {
         match self {
             Self::BundleReceived(event) => event.validate(),
             Self::BundleSendPreflight(event) => event.validate(),
+            Self::ActionUpdated(event) => event.validate(),
             Self::TransferUpdated(event) => event.validate(),
         }
     }
@@ -2216,6 +2298,21 @@ impl LocalBridgeBundleSendPreflightEvent {
         validate_non_empty("request_id", &self.request_id)?;
         validate_bridge_client_id(&self.client_id)?;
         validate_optional_non_empty("reason", self.reason.as_deref())?;
+        if let Some(bundle_id) = self.bundle_id.as_deref() {
+            validate_staged_bundle_id(bundle_id)?;
+        }
+        validate_optional_non_empty("target_device_id", self.target_device_id.as_deref())
+    }
+}
+
+impl LocalBridgeActionUpdatedEvent {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("event_id", &self.event_id)?;
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_non_empty("action_kind", &self.action_kind)?;
+        validate_bridge_client_id(&self.client_id)?;
+        validate_optional_non_empty("reason", self.reason.as_deref())?;
+        validate_non_empty("message", &self.message)?;
         if let Some(bundle_id) = self.bundle_id.as_deref() {
             validate_staged_bundle_id(bundle_id)?;
         }
@@ -4941,6 +5038,7 @@ mod tests {
             }),
             after_event_id: Some("bridge-event-1".to_string()),
             limit: Some(10),
+            timeout_ms: Some(30_000),
         });
 
         request.validate().unwrap();
@@ -4949,6 +5047,33 @@ mod tests {
         assert_eq!(json["kind"], "events.poll");
         assert_eq!(json["payload"]["request_id"], "bridge-events-1");
         assert_eq!(json["payload"]["after_event_id"], "bridge-event-1");
+        assert_eq!(json["payload"]["limit"], 10);
+        assert_eq!(json["payload"]["timeout_ms"], 30_000);
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
+            request
+        );
+    }
+
+    #[test]
+    fn local_bridge_action_results_request_uses_stable_json_shape() {
+        let request = LocalBridgeRequest::ActionResults(LocalBridgeActionResultsRequest {
+            request_id: "bridge-results-1".to_string(),
+            client: Some(LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            }),
+            after_claimed_at_ms: Some(1_000),
+            limit: Some(10),
+        });
+
+        request.validate().unwrap();
+
+        let json = serde_json::to_value(&request).unwrap();
+        assert_eq!(json["kind"], "actions.results");
+        assert_eq!(json["payload"]["request_id"], "bridge-results-1");
+        assert_eq!(json["payload"]["after_claimed_at_ms"], 1_000);
         assert_eq!(json["payload"]["limit"], 10);
         assert_eq!(
             serde_json::from_value::<LocalBridgeRequest>(json).unwrap(),
@@ -5021,6 +5146,44 @@ mod tests {
         assert_eq!(json["payload"]["status"], "failed_preflight");
         assert_eq!(json["payload"]["reason"], "bundle_root_missing");
         assert_eq!(json["payload"]["bundle_type"], "skill");
+        assert!(json["payload"].get("bundle_root").is_none());
+        assert_eq!(
+            serde_json::from_value::<LocalBridgeEvent>(json).unwrap(),
+            event
+        );
+    }
+
+    #[test]
+    fn local_bridge_action_updated_event_uses_stable_json_shape() {
+        let event = LocalBridgeEvent::ActionUpdated(LocalBridgeActionUpdatedEvent {
+            event_id: "bridge-action-bridge-send-1-running-2000".to_string(),
+            request_id: "bridge-send-1".to_string(),
+            action_kind: "bundle.send".to_string(),
+            client_id: "local-agent-app".to_string(),
+            status: LocalBridgeActionLifecycleStatus::Running,
+            reason: None,
+            message: "local bridge bundle send is running".to_string(),
+            bundle_id: Some("bundle_1234567890".to_string()),
+            bundle_type: Some(BundleType::Skill),
+            target_device_id: Some("device-a".to_string()),
+            updated_at_ms: 2_000,
+        });
+
+        event.validate().unwrap();
+
+        let json = serde_json::to_value(&event).unwrap();
+        assert_eq!(json["kind"], "action.updated");
+        assert_eq!(
+            json["payload"]["event_id"],
+            "bridge-action-bridge-send-1-running-2000"
+        );
+        assert_eq!(json["payload"]["request_id"], "bridge-send-1");
+        assert_eq!(json["payload"]["action_kind"], "bundle.send");
+        assert_eq!(json["payload"]["client_id"], "local-agent-app");
+        assert_eq!(json["payload"]["status"], "running");
+        assert_eq!(json["payload"]["bundle_type"], "skill");
+        assert_eq!(json["payload"]["target_device_id"], "device-a");
+        assert_eq!(json["payload"]["updated_at_ms"], 2_000);
         assert!(json["payload"].get("bundle_root").is_none());
         assert_eq!(
             serde_json::from_value::<LocalBridgeEvent>(json).unwrap(),

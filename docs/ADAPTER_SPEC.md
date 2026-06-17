@@ -77,7 +77,13 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 }
 ```
 
-`client_id` 是本机应用自报身份，不是凭证。发送、导入这类动作必须先通过授权码确认，并且授权可以在设置页撤销。当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看和移除。内部 worker 可以取出 `bundle.send` 动作并做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。preflight 结果会进入最近结果记录，也会通过 `bundle.send.preflight` 事件返回给有 `bundle.send` 权限的本机应用；普通状态列表和事件都不返回本机 `bundle_root`。preflight 通过只表示可以进入桌面发送 worker，不代表文件已经发出。
+`client_id` 是本机应用自报身份，不是凭证。发送、导入这类动作必须先通过授权码确认，并且授权可以在设置页撤销。
+
+当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看和移除。后台 worker 会按 FIFO 自动取出动作执行。`bundle.send` 执行前先做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。执行时仍走桌面发送主线，不绕过可信设备和 session 校验。动作状态会按 `queued -> running -> succeeded / failed / conflict / cancelled` 写入最近结果，并通过 `events.poll` 的 `action.updated` 事件给授权 client 观察；普通状态列表和事件都不返回本机 `bundle_root`。
+
+`bundle.import` 动作只导入到 NekoDrop 本机导入区，不直接写第三方应用目录。导入使用临时 `.importing` 目录，失败会清理半成品；如果同名 bundle 已经导入，当前策略是拒绝覆盖，并在 `actions.results` 里返回 `bundle_import_conflict`。adapter 收到这个结果后应该让用户选择重命名、跳过或由上层应用自己处理合并，不能静默覆盖。
+
+adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。结果按 `client_id` 和授权 scope 过滤。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 
 ## 类型建议
 
@@ -101,12 +107,14 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 这些样例使用通用应用名，不绑定任何第三方项目。测试会校验样例的 manifest、checksum、权限和 payload 文件。
 
+本机应用接入 local bridge 的最小请求流程见 [generic-adapter](examples/generic-adapter/)。
+
 ## 仍未实现
 
 - 上层应用自动导出
 - 上层应用真实导入
-- local bridge 真实发送和真实导入
-- local bridge 事件订阅
+- 上层应用从 NekoDrop 导入区读取并落到自己的数据目录
+- 真正的事件流订阅接口
 - 跨网络 iroh / relay / P2P 传输
 
 这些能力后面接，但不能改变 adapter 和 bundle 的边界。

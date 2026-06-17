@@ -69,6 +69,9 @@ pub fn run() {
             commands::list_local_bridge_pending_action_results,
             commands::take_next_local_bridge_pending_action,
             commands::preflight_next_local_bridge_bundle_send,
+            commands::execute_next_local_bridge_bundle_send,
+            commands::execute_next_local_bridge_bundle_import,
+            commands::run_local_bridge_runtime_worker_once,
             commands::prune_local_bridge_authorizations,
             commands::handle_local_bridge_request,
             commands::confirm_local_bridge_authorization
@@ -78,6 +81,7 @@ pub fn run() {
             let state = app.state::<AppState>();
             discovery::start_discovery(&state);
             local_bridge_runtime::start_local_bridge_runtime(&state);
+            commands::start_local_bridge_runtime_worker(app.handle().clone());
             Ok(())
         })
         .run(tauri::generate_context!())
