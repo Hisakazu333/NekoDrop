@@ -58,6 +58,8 @@ Transfer history
 Trusted device store
 Desktop snapshot refresh
 Tray/window integration
+Local bridge localhost runtime
+Local bridge pending-action worker
 ```
 
 The React side renders state and calls commands. It does not scan folders,
@@ -101,10 +103,14 @@ traffic kind, direction, counter, nonce, and cipher. The receive side exposes a
 streaming reader that decrypts frames as storage reads, so it does not need a
 full single-file plaintext buffer.
 
-Long-term device identity keys are not wired yet. Current session encryption is
-ephemeral and tied to the existing desktop identity checks, not a full
-authenticated device-key system. The protocol crate has session identity binding
-material for later signatures, but desktop signing and verification are not wired.
+After `session.ready`, both sides exchange signed `session.identity` bindings.
+The desktop identity store persists an Ed25519 signing seed, verifies the peer
+binding, and pins authenticated trusted sessions to the public key saved in the
+trusted-device record. Manual connection-code transfers can still authenticate a
+session without becoming trusted devices.
+
+This is not yet a complete device-management system. Key rotation, OS keychain
+storage, and cross-platform identity policy still need separate work.
 
 ### Bundle Staging
 
@@ -118,28 +124,34 @@ selected bundle directory
   -> receiver detects valid bundle structure
   -> storage saves to application staging
   -> UI shows save/import state
-  -> upper-layer application can request import later
+  -> manual import writes into NekoDrop local import storage
+  -> upper-layer adapter can import into its own app later
 ```
 
 Bundle staging must not silently modify another application's config. Import is
-a separate user or upper-layer decision.
+a separate user or upper-layer decision. Current desktop import uses a temporary
+directory and refuses same-name conflicts instead of overwriting.
 
 ### Local Bridge
 
-Local Bridge is the future local API for desktop apps or plugins that want to
-use NekoLink without implementing the network protocol themselves.
+Local Bridge is the loopback API for desktop apps or plugins that want to use
+NekoLink without implementing the network protocol themselves.
 
 Current repository status:
 
 ```text
 local app request JSON
   -> LocalBridgeRequest model in nekolink-protocol
-  -> desktop internal handler for read-only snapshots
-  -> pending_auth for send/import/authorization paths
+  -> localhost POST /bridge/request bound to 127.0.0.1
+  -> scoped authorization with short confirmation code
+  -> read-only snapshots or queued mutating actions
+  -> worker executes authorized bundle.send / bundle.import
+  -> events.poll returns transfer, bundle, and action lifecycle events
 ```
 
-It is not a public localhost server yet. Persistent authorization, tokens,
-authorization code flow, and import execution are still pending.
+The bridge is not a LAN API. It must stay loopback-only, scoped, revocable, and
+careful about paths. Bridge responses and events must not expose local
+`bundle_root` values to ordinary clients.
 
 ## Transport Boundary
 
@@ -173,9 +185,10 @@ NekoDrop currently enforces these boundaries:
 
 Known gaps:
 
-- long-term identity keys and signatures are not wired into session authentication
+- key rotation and OS-level private-key protection are not implemented
 - legacy plain transfer compatibility still needs a retirement or migration policy
-- local bridge has no runtime server or persisted authorization yet
+- upper-layer adapters do not yet perform real app import/export
+- local bridge has short polling, but not a long-lived event stream
 - iroh / relay / P2P are not implemented transports
 - mobile and Agent command channels are not current product paths
 

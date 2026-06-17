@@ -105,20 +105,23 @@ Implemented in the current desktop path:
 - encrypted `session.control` for file offer / accept / decline
 - replay window on encrypted transfer control readers
 - encrypted file frames on the encrypted session transfer path
+- signed session identity binding on the desktop transfer path
+- trusted-device public key pinning for authenticated sessions
 - bundle manifest validation, staging, and manual bundle creation
-- local bridge protocol model, action result query, and internal read-only handler skeleton
+- local bridge localhost runtime, scoped authorization, action result query, pending-action worker, and `events.poll`
 - macOS and Windows packaging scripts
 
 Experimental or planned:
 
-- long-term authenticated device identity keys
+- key rotation and OS keychain / credential-manager storage
 - legacy plain transfer migration or retirement policy
 - iroh transport
 - Relay / P2P transport
 - mobile main flow
 - NekoState synchronization
 - OpenNeko Agent command channel
-- local bridge send execution and third-party adapter import execution
+- long-lived local bridge event stream
+- third-party adapter real import/export execution
 
 See [Current Status](STATUS.md) for the authoritative feature list.
 
