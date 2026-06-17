@@ -126,6 +126,7 @@ export interface LocalBridgePendingActionResultDto {
   client_id: string;
   client_display_name: string;
   status: string;
+  lifecycle_status: string | null;
   reason: string | null;
   message: string;
   bundle_id: string | null;
