@@ -146,6 +146,7 @@ pub struct LocalBridgePendingActionResult {
     pub client_id: String,
     pub client_display_name: String,
     pub status: String,
+    pub lifecycle_status: Option<String>,
     pub reason: Option<String>,
     pub message: String,
     pub bundle_id: Option<String>,
