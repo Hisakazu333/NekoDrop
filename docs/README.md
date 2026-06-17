@@ -21,6 +21,8 @@ For developers:
 - [Large File Transfer Test Matrix](testing/LARGE_FILE_TRANSFER_MATRIX.md): manual release gate for Mac / Windows transfer reliability.
 - [Transfer Test Result Template](testing/RESULT_TEMPLATE.md): evidence template for release-candidate test runs.
 
+Branch workflow lives in [Development](DEVELOPMENT.md) and [CONTRIBUTING.md](../CONTRIBUTING.md). In short: feature work lands in `dev/<name>` or a short topic branch, core work rolls into `develop`, desktop work rolls into `desktop-develop`, documentation rolls into `docs-develop`, and releases roll from `develop` into `main`.
+
 For maintainers and planning:
 
 - [Product Definition](PRODUCT.md): product scope and user jobs.

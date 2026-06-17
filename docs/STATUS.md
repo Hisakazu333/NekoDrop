@@ -2,7 +2,7 @@
 
 这份文档记录当前仓库的真实能力。以后 README、路线图和 UI 文案都应该以这里为准，避免把已完成、实验中、待接入混在一起。
 
-更新时间：2026-06-15
+更新时间：2026-06-17
 
 ## 状态定义
 
@@ -83,20 +83,20 @@
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
 | iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
 | Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
-| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录；桌面端会清理过期暂存，删除和导入失败状态会留在收件流程里。上层应用自动导出 session / skill / workspace、local bridge 真实发送执行和真实导入执行还没有接入。 |
-| Adapter 规范和 bundle 样例 | 部分接入 | [ADAPTER_SPEC.md](ADAPTER_SPEC.md) 已定义上层应用导出/导入 bundle 的边界；[bundle-samples](bundle-samples/) 提供 `skill`、`session`、`workspace`、`agent_profile`、`config_snapshot` 五类可校验样例。真实上层应用 adapter 还没有接入。 |
-| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入、查询传输状态和 `events.poll` 事件轮询；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测，并显示 localhost runtime 的真实监听状态、地址、待确认授权、已授权数量和待执行动作数量。桌面端启动时会开启只绑定 `127.0.0.1` 的 localhost runtime，只接受 `POST /bridge/request`，请求体有大小上限；只读请求和授权申请走同一套 handler。用户确认授权码后，runtime 会记录该 client 的限时权限并写入本机授权文件；下次启动会恢复未过期授权。已授权 client 调用 `bundle.send` / `bundle.import` 时，runtime 会把请求写入内存待执行队列，设置页可以查看概要并移除这些待执行动作；内部 consumer 可以按 FIFO 取出动作。`bundle.send` 已有发送前 preflight，可以校验 bundle_root 是否存在、bundle manifest 是否有效、请求类型是否匹配，以及 `require_trusted_device=true` 时目标是否在可信设备记录里；preflight 会留下最近结果记录，并通过 `bundle.send.preflight` 事件让已授权的本机应用轮询状态，普通列表和事件都不暴露本机 bundle_root；但通过 preflight 后仍不会真正发送。runtime 现在有内存事件队列，真实发送/接收主流程会写入 `transfer.updated`，收到 staged bundle 会写入 `bundle.received`；已授权 client 可用 `events.poll` 轮询快照。但真实 send/import 执行、长连接事件流和外部应用真实导入/发送还没有接入。 |
+| NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入使用临时目录落盘，失败不留下半成品目标目录；桌面端会清理过期暂存，删除和导入失败状态会留在收件流程里。`bundle.send` 的本机 local bridge 执行入口现在可以消费待执行动作并交给桌面发送主线；`bundle.import` 可以消费待执行动作并把 staged bundle 导入本机导入区；同名导入会拒绝覆盖并返回 `bundle_import_conflict`。上层应用自动导出 session / skill / workspace 还没有接入。 |
+| Adapter 规范和 bundle 样例 | 部分接入 | [ADAPTER_SPEC.md](ADAPTER_SPEC.md) 已定义上层应用导出/导入 bundle 的边界；[bundle-samples](bundle-samples/) 提供 `skill`、`session`、`workspace`、`agent_profile`、`config_snapshot` 五类可校验样例。真实上层应用 adapter 还没有接入，但本机 local bridge 的动作结果和短等待轮询已经有了。 |
+| 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入、查询传输状态、查询动作结果和 `events.poll` 事件轮询；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；设置页可以触发一次内部 `devices.list` 只读自测，并显示 localhost runtime 的真实监听状态、地址、待确认授权、已授权数量、待执行动作数量和最近结果。桌面端启动时会开启只绑定 `127.0.0.1` 的 localhost runtime，只接受 `POST /bridge/request`，请求体有大小上限；只读请求和授权申请走同一套 handler。用户确认授权码后，runtime 会记录该 client 的限时权限并写入本机授权文件；下次启动会恢复未过期授权。已授权 client 调用 `bundle.send` / `bundle.import` 时，runtime 会把请求写入内存待执行队列，后台 worker 会自动消费；设置页可以查看概要并移除这些待执行动作；`bundle.send` 会先做 preflight，再复用现有 authenticated send 主线发送到目标设备；`bundle.import` 可以按 FIFO 消费待执行动作，并把 staged bundle 导入本机导入区，同名导入返回 `bundle_import_conflict`。动作生命周期会写入 `queued`、`running`、`succeeded`、`failed`、`conflict`、`cancelled`，授权 client 可通过 `events.poll` 的 `action.updated` 持续观察，也可用 `actions.results` 补偿查询自己的最新动作结果。普通列表、事件和结果都不暴露本机 `bundle_root`。runtime 现在有内存事件队列，真实发送/接收主流程会写入 `transfer.updated`，收到 staged bundle 会写入 `bundle.received`；已授权 client 可用 `events.poll` 轮询快照或短等待新事件。 |
 
 ## 当前不能宣传为已完成
 
 - iroh 真实运行时
 - Relay 服务器
 - P2P / NAT 打洞
-- 长期身份密钥认证
+- key rotation / OS keychain 级别的长期密钥管理
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
 - 上层应用自动导出和直接写入 NekoLink bundle
-- 本机 local bridge 长连接事件流和真实发送/导入执行
+- 本机 local bridge 真正长连接事件流订阅接口
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
 - 云账号 / 云盘 / 中心化文件存储
@@ -114,7 +114,7 @@ V0.7
 
 V0.8
   NekoLink 上层包格式：
-  定义 bundle manifest，为 skills、session、agent profile、workspace 这类上层数据传输提供统一校验、权限和兼容边界；桌面端已有 staging、预览、删除、过期清理和手动导入到本机导入区，下一步接本机 bridge runtime 和真实上层应用适配。
+  定义 bundle manifest，为 skills、session、agent profile、workspace 这类上层数据传输提供统一校验、权限和兼容边界；桌面端已有 staging、预览、删除、过期清理和手动导入到本机导入区；local bridge 已有 localhost runtime、授权、待执行队列、动作结果和事件轮询。下一步补导入计划、冲突策略和真实上层应用适配。
 
 V0.9
   transport 技术验证：

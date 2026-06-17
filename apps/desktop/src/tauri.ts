@@ -49,7 +49,12 @@ type CommandName =
   | "revoke_local_bridge_authorization"
   | "list_local_bridge_pending_actions"
   | "remove_local_bridge_pending_action"
+  | "list_local_bridge_pending_action_results"
   | "take_next_local_bridge_pending_action"
+  | "preflight_next_local_bridge_bundle_send"
+  | "execute_next_local_bridge_bundle_send"
+  | "execute_next_local_bridge_bundle_import"
+  | "run_local_bridge_runtime_worker_once"
   | "prune_local_bridge_authorizations"
   | "handle_local_bridge_request"
   | "confirm_local_bridge_authorization";
