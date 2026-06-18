@@ -277,6 +277,9 @@ export interface ReceivedBundleDto {
   staging_status: "saved" | "imported" | "deleted" | "import_failed" | "expired" | string;
   can_import_now: boolean;
   import_path: string | null;
+  import_destination: string | null;
+  import_conflict: boolean;
+  import_blocking_reason: "destination_exists" | "not_importable" | string | null;
 }
 
 export interface ManualBundleCreateDto {
