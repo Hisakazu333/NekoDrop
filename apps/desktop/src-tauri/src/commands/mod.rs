@@ -30,8 +30,9 @@ use nekodrop_storage::{
     build_resume_plan_for_files, create_manual_bundle_directory,
     delete_staged_bundle as delete_staged_bundle_storage, detect_bundle_directory,
     import_staged_bundle as import_staged_bundle_storage,
-    list_staged_bundles as list_staged_bundles_storage, prune_staged_bundles_older_than,
-    ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan, StagedBundle,
+    list_staged_bundles as list_staged_bundles_storage, plan_staged_bundle_import,
+    prune_staged_bundles_older_than, ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan,
+    StagedBundle,
 };
 use nekolink_protocol::{
     BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
@@ -243,6 +244,9 @@ pub struct ReceivedBundleDto {
     pub staging_status: String,
     pub can_import_now: bool,
     pub import_path: Option<String>,
+    pub import_destination: Option<String>,
+    pub import_conflict: bool,
+    pub import_blocking_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -722,7 +726,8 @@ pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> 
 #[tauri::command]
 pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
     let staging_root = bundle_staging_root()?;
-    list_staged_bundle_dtos_at(&staging_root)
+    let import_root = bundle_import_root()?;
+    list_staged_bundle_dtos_at(&staging_root, &import_root)
 }
 
 #[tauri::command]
@@ -2790,6 +2795,9 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         staging_status: "saved".to_string(),
         can_import_now: false,
         import_path: None,
+        import_destination: None,
+        import_conflict: false,
+        import_blocking_reason: None,
     }
 }
 
@@ -2801,8 +2809,9 @@ fn transfer_security_mode_label(mode: TransferSecurityMode) -> &'static str {
     }
 }
 
-fn staged_bundle_to_dto(staged: &StagedBundle) -> ReceivedBundleDto {
+fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &std::path::Path) -> ReceivedBundleDto {
     let manifest = &staged.detected.manifest;
+    let plan = plan_staged_bundle_import(&staged.staging_path, import_root).ok();
     ReceivedBundleDto {
         bundle_id: manifest.bundle_id.clone(),
         bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
@@ -2814,25 +2823,42 @@ fn staged_bundle_to_dto(staged: &StagedBundle) -> ReceivedBundleDto {
         import_allowed: staged.detected.import_policy
             == nekodrop_storage::BundleImportPolicy::ImportAllowed,
         staging_status: "saved".to_string(),
-        can_import_now: staged.detected.import_policy
-            == nekodrop_storage::BundleImportPolicy::ImportAllowed,
+        can_import_now: plan
+            .as_ref()
+            .map(|plan| plan.can_import_now)
+            .unwrap_or(false),
         import_path: None,
+        import_destination: plan
+            .as_ref()
+            .map(|plan| plan.destination_path.display().to_string()),
+        import_conflict: plan
+            .as_ref()
+            .map(|plan| plan.destination_exists)
+            .unwrap_or(false),
+        import_blocking_reason: plan.and_then(|plan| plan.blocking_reason),
     }
 }
 
 fn list_staged_bundle_dtos_at(
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
 ) -> Result<Vec<ReceivedBundleDto>, String> {
     list_staged_bundles_storage(staging_root)
         .map_err(|error| error.to_string())
-        .map(|bundles| bundles.iter().map(staged_bundle_to_dto).collect())
+        .map(|bundles| {
+            bundles
+                .iter()
+                .map(|bundle| staged_bundle_to_dto(bundle, import_root))
+                .collect()
+        })
 }
 
 fn find_staged_bundle_dto_at(
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     bundle_id: &str,
 ) -> Result<Option<ReceivedBundleDto>, String> {
-    Ok(list_staged_bundle_dtos_at(staging_root)?
+    Ok(list_staged_bundle_dtos_at(staging_root, import_root)?
         .into_iter()
         .find(|bundle| bundle.bundle_id == bundle_id))
 }
@@ -2861,6 +2887,7 @@ fn import_staged_bundle_at(
     let staged_path = staging_root.join(bundle_id);
     let imported = import_staged_bundle_storage(&staged_path, import_root)
         .map_err(|error| error.to_string())?;
+    let import_path = imported.destination_path.display().to_string();
     Ok(ReceivedBundleDto {
         bundle_id: imported.bundle_id,
         bundle_type: bundle_type_label(imported.bundle_type).to_string(),
@@ -2872,7 +2899,10 @@ fn import_staged_bundle_at(
         import_allowed: true,
         staging_status: "imported".to_string(),
         can_import_now: false,
-        import_path: Some(imported.destination_path.display().to_string()),
+        import_path: Some(import_path.clone()),
+        import_destination: Some(import_path),
+        import_conflict: false,
+        import_blocking_reason: None,
     })
 }
 
@@ -2897,11 +2927,13 @@ fn handle_local_bridge_request_at(
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
 ) -> Result<LocalBridgeResponseDto, String> {
+    let import_root = bundle_import_root()?;
     handle_local_bridge_request_with_auth_at(
         request_json,
         trusted_devices,
         transfer_status,
         staging_root,
+        &import_root,
         &[],
         now_ms(),
     )
@@ -2922,11 +2954,13 @@ pub(crate) fn handle_local_bridge_request_for_runtime(
         .map_err(|error| error.to_string())?
         .clone();
     let staging_root = bundle_staging_root()?;
+    let import_root = bundle_import_root()?;
     handle_local_bridge_request_with_runtime_at(
         request_json,
         &trusted_devices,
         transfer_status.as_ref(),
         &staging_root,
+        &import_root,
         runtime,
         true,
         now_ms(),
@@ -2938,6 +2972,7 @@ fn handle_local_bridge_request_with_runtime_at(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     runtime: &LocalBridgeRuntimeState,
     allow_wait: bool,
     now_ms: u128,
@@ -3021,6 +3056,7 @@ fn handle_local_bridge_request_with_runtime_at(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         &authorizations,
         &events,
         &action_results,
@@ -3049,6 +3085,7 @@ fn handle_local_bridge_request_with_runtime_at(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         &authorizations,
         now_ms,
         Duration::from_millis(timeout_ms.min(30_000)),
@@ -4015,6 +4052,7 @@ fn handle_local_bridge_request_with_auth_at(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
@@ -4026,6 +4064,7 @@ fn handle_local_bridge_request_with_auth_at(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         authorizations,
         &[],
         &[],
@@ -4038,6 +4077,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     events: &[LocalBridgeEvent],
     action_results: &[LocalBridgePendingActionResult],
@@ -4051,7 +4091,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 client,
                 "local bridge read-only snapshot",
                 trusted_devices.iter().map(trusted_device_to_dto).collect(),
-                list_staged_bundle_dtos_at(staging_root)?,
+                list_staged_bundle_dtos_at(staging_root, import_root)?,
                 None,
             ))
         }
@@ -4068,7 +4108,8 @@ fn handle_validated_local_bridge_request_with_auth_at(
         }
         LocalBridgeRequest::BundleDetail(request) => {
             let client = request.client.clone();
-            let bundle = find_staged_bundle_dto_at(staging_root, &request.staged_bundle_id)?;
+            let bundle =
+                find_staged_bundle_dto_at(staging_root, import_root, &request.staged_bundle_id)?;
             match bundle {
                 Some(bundle) => Ok(local_bridge_read_only_response(
                     request.request_id,
@@ -4785,6 +4826,7 @@ fn wait_for_local_bridge_events(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     now_ms: u128,
     timeout: Duration,
@@ -4821,6 +4863,7 @@ fn wait_for_local_bridge_events(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         authorizations,
         &events,
         &action_results,
@@ -6804,15 +6847,49 @@ mod tests {
     fn staged_bundle_dto_marks_saved_status() {
         let dir = unique_bundle_temp_dir("desktop-bundle-list");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
         nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
 
-        let bundles = list_staged_bundle_dtos_at(&staging_root).unwrap();
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
 
         assert_eq!(bundles.len(), 1);
         assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
         assert_eq!(bundles[0].staging_status, "saved");
         assert!(bundles[0].can_import_now);
+        assert!(!bundles[0].import_conflict);
+        assert_eq!(
+            bundles[0].import_destination.as_deref(),
+            Some(
+                import_root
+                    .join("bundle_1234567890")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_bundle_dto_marks_import_destination_conflict() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-list-conflict");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
+
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
+
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
+        assert!(!bundles[0].can_import_now);
+        assert!(bundles[0].import_conflict);
+        assert_eq!(
+            bundles[0].import_blocking_reason.as_deref(),
+            Some("destination_exists")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -6880,6 +6957,7 @@ mod tests {
     fn prune_staged_bundle_dtos_at_removes_expired_bundles() {
         let dir = unique_bundle_temp_dir("desktop-bundle-prune");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let expired_root = create_desktop_test_bundle(&dir, "expired", "bundle_expired");
         let fresh_root = create_desktop_test_bundle(&dir, "fresh", "bundle_fresh");
         nekodrop_storage::stage_bundle_directory(&expired_root, &staging_root).unwrap();
@@ -6889,7 +6967,7 @@ mod tests {
         let pruned = prune_staged_bundle_dtos_at(&staging_root, cutoff).unwrap();
 
         assert_eq!(pruned, vec!["bundle_expired"]);
-        let remaining = list_staged_bundle_dtos_at(&staging_root).unwrap();
+        let remaining = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].bundle_id, "bundle_fresh");
 
@@ -7119,6 +7197,7 @@ mod tests {
     fn local_bridge_authorized_client_can_pass_import_gate() {
         let dir = unique_bundle_temp_dir("local-bridge-authorized-import");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let authorizations = vec![local_bridge_authorization(
             "local-agent-app",
             &[LocalBridgePermissionScope::BundleImportRequest],
@@ -7145,6 +7224,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &authorizations,
             1_500,
         )
@@ -7162,6 +7242,7 @@ mod tests {
     fn local_bridge_expired_authorization_requires_confirmation_again() {
         let dir = unique_bundle_temp_dir("local-bridge-expired-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let authorizations = vec![local_bridge_authorization(
             "local-agent-app",
             &[LocalBridgePermissionScope::BundleImportRequest],
@@ -7188,6 +7269,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &authorizations,
             1_500,
         )
@@ -7291,6 +7373,7 @@ mod tests {
     fn local_bridge_runtime_stores_pending_authorization_request() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let request = serde_json::json!({
             "kind": "authorization.request",
@@ -7315,6 +7398,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_000,
@@ -7342,6 +7426,7 @@ mod tests {
     fn confirmed_runtime_authorization_allows_future_mutating_request() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-confirmed-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let auth_request = serde_json::json!({
             "kind": "authorization.request",
@@ -7380,6 +7465,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_000,
@@ -7396,6 +7482,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_600,
@@ -7416,6 +7503,7 @@ mod tests {
     fn authorized_local_bridge_bundle_send_is_queued_as_pending_action() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-send-action");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -7449,6 +7537,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -7498,6 +7587,7 @@ mod tests {
     fn authorized_local_bridge_bundle_import_is_queued_as_pending_action() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-import-action");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -7529,6 +7619,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -7556,6 +7647,7 @@ mod tests {
     fn unauthorized_local_bridge_bundle_mutation_is_not_queued() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-no-pending-action");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let import_request = serde_json::json!({
             "kind": "bundle.import",
@@ -7577,6 +7669,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8367,6 +8460,7 @@ mod tests {
         let runtime = LocalBridgeRuntimeState::default();
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-event");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         runtime
             .authorizations
             .lock()
@@ -8417,6 +8511,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8446,6 +8541,7 @@ mod tests {
     fn authorized_local_bridge_client_can_poll_action_updated_events_by_scope() {
         let dir = unique_bundle_temp_dir("local-bridge-action-updated-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime.authorizations.lock().unwrap().extend([
             local_bridge_authorization(
@@ -8519,6 +8615,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8545,6 +8642,7 @@ mod tests {
     fn authorized_local_bridge_client_can_poll_runtime_events() {
         let dir = unique_bundle_temp_dir("local-bridge-events-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8593,6 +8691,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8614,6 +8713,7 @@ mod tests {
     fn authorized_local_bridge_client_can_poll_action_results() {
         let dir = unique_bundle_temp_dir("local-bridge-action-results-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8666,6 +8766,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8694,6 +8795,7 @@ mod tests {
     fn local_bridge_action_results_are_scoped_to_client_and_permission() {
         let dir = unique_bundle_temp_dir("local-bridge-action-results-scope");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8778,6 +8880,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8796,6 +8899,7 @@ mod tests {
     fn local_bridge_event_poll_returns_only_events_after_cursor() {
         let dir = unique_bundle_temp_dir("local-bridge-events-after");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8853,6 +8957,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8872,6 +8977,7 @@ mod tests {
     fn local_bridge_event_poll_can_wait_for_new_events() {
         let dir = unique_bundle_temp_dir("local-bridge-events-long-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = Arc::new(LocalBridgeRuntimeState::default());
         runtime
             .authorizations
@@ -8921,6 +9027,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             true,
             1_500,
@@ -8942,6 +9049,7 @@ mod tests {
     fn local_bridge_event_poll_requires_authorized_client_scope() {
         let dir = unique_bundle_temp_dir("local-bridge-events-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         push_local_bridge_runtime_event(
             &runtime,
@@ -8980,6 +9088,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8997,6 +9106,7 @@ mod tests {
     fn local_bridge_event_poll_timeout_does_not_delay_pending_auth() {
         let dir = unique_bundle_temp_dir("local-bridge-events-pending-auth-no-wait");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let poll_request = serde_json::json!({
             "kind": "events.poll",
@@ -9020,6 +9130,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             true,
             1_500,
@@ -9101,6 +9212,7 @@ mod tests {
     fn local_bridge_event_poll_reads_events_from_producers() {
         let dir = unique_bundle_temp_dir("local-bridge-produced-events-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -9159,6 +9271,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -9177,6 +9290,7 @@ mod tests {
     fn confirmed_runtime_authorization_is_saved_for_restart() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-persisted-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let authorizations_path = dir.join("local_bridge_authorizations.json");
         let runtime = LocalBridgeRuntimeState::default();
         let auth_request = serde_json::json!({
@@ -9202,6 +9316,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_000,

@@ -48,6 +48,21 @@ pub struct ImportedBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleImportPlan {
+    pub bundle_id: String,
+    pub bundle_type: BundleType,
+    pub display_name: String,
+    pub source_app: String,
+    pub destination_path: PathBuf,
+    pub file_count: usize,
+    pub total_bytes: u64,
+    pub import_allowed: bool,
+    pub can_import_now: bool,
+    pub destination_exists: bool,
+    pub blocking_reason: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManualBundleCreateRequest {
     pub source_path: PathBuf,
     pub output_root: PathBuf,
@@ -419,19 +434,19 @@ pub fn import_staged_bundle(
     staged_bundle_root: &Path,
     import_root: &Path,
 ) -> NekoDropResult<ImportedBundle> {
-    let detected = detect_bundle_directory(staged_bundle_root)?.ok_or_else(|| {
-        NekoDropError::Storage(format!(
-            "staged bundle is missing bundle.json: {}",
-            staged_bundle_root.display()
-        ))
-    })?;
-    if detected.import_policy != BundleImportPolicy::ImportAllowed {
+    let plan = plan_staged_bundle_import(staged_bundle_root, import_root)?;
+    if !plan.import_allowed {
         return Err(NekoDropError::Storage(format!(
             "bundle is not importable: {}",
-            detected.manifest.bundle_id
+            plan.bundle_id
         )));
     }
-    validate_bundle_id_for_staging(&detected.manifest.bundle_id)?;
+    if plan.destination_exists {
+        return Err(NekoDropError::Storage(format!(
+            "bundle import destination already exists: {}",
+            plan.destination_path.display()
+        )));
+    }
 
     fs::create_dir_all(import_root).map_err(|error| {
         NekoDropError::Storage(format!(
@@ -440,14 +455,15 @@ pub fn import_staged_bundle(
         ))
     })?;
 
-    let destination_path = import_root.join(&detected.manifest.bundle_id);
-    let temp_path = import_root.join(format!("{}.importing", detected.manifest.bundle_id));
-    if destination_path.exists() {
-        return Err(NekoDropError::Storage(format!(
-            "bundle import destination already exists: {}",
-            destination_path.display()
-        )));
-    }
+    let detected = detect_bundle_directory(staged_bundle_root)?.ok_or_else(|| {
+        NekoDropError::Storage(format!(
+            "staged bundle is missing bundle.json: {}",
+            staged_bundle_root.display()
+        ))
+    })?;
+
+    let destination_path = plan.destination_path;
+    let temp_path = import_root.join(format!("{}.importing", plan.bundle_id));
     if temp_path.exists() {
         fs::remove_dir_all(&temp_path).map_err(|error| {
             NekoDropError::Storage(format!(
@@ -482,6 +498,40 @@ pub fn import_staged_bundle(
     })?;
 
     Ok(ImportedBundle {
+        bundle_id: plan.bundle_id,
+        bundle_type: plan.bundle_type,
+        display_name: plan.display_name,
+        source_app: plan.source_app,
+        destination_path,
+        file_count: plan.file_count,
+        total_bytes: plan.total_bytes,
+    })
+}
+
+pub fn plan_staged_bundle_import(
+    staged_bundle_root: &Path,
+    import_root: &Path,
+) -> NekoDropResult<BundleImportPlan> {
+    let detected = detect_bundle_directory(staged_bundle_root)?.ok_or_else(|| {
+        NekoDropError::Storage(format!(
+            "staged bundle is missing bundle.json: {}",
+            staged_bundle_root.display()
+        ))
+    })?;
+    validate_bundle_id_for_staging(&detected.manifest.bundle_id)?;
+
+    let destination_path = import_root.join(&detected.manifest.bundle_id);
+    let import_allowed = detected.import_policy == BundleImportPolicy::ImportAllowed;
+    let destination_exists = destination_path.exists();
+    let blocking_reason = if !import_allowed {
+        Some("not_importable".to_string())
+    } else if destination_exists {
+        Some("destination_exists".to_string())
+    } else {
+        None
+    };
+
+    Ok(BundleImportPlan {
         bundle_id: detected.manifest.bundle_id,
         bundle_type: detected.manifest.bundle_type,
         display_name: detected.manifest.display_name,
@@ -489,6 +539,10 @@ pub fn import_staged_bundle(
         destination_path,
         file_count: detected.manifest.summary.file_count,
         total_bytes: detected.manifest.summary.total_bytes,
+        import_allowed,
+        can_import_now: import_allowed && !destination_exists,
+        destination_exists,
+        blocking_reason,
     })
 }
 
@@ -1136,6 +1190,71 @@ mod tests {
             fs::read(imported.destination_path.join("content.bin")).unwrap(),
             b"hello bundle"
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plans_importable_staged_bundle_without_mutating_disk() {
+        let dir = unique_temp_dir("bundle-import-plan-ready");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+
+        let plan = plan_staged_bundle_import(&staged.staging_path, &import_root).unwrap();
+
+        assert_eq!(plan.bundle_id, "bundle_1234567890");
+        assert_eq!(plan.bundle_type, BundleType::Skill);
+        assert_eq!(plan.display_name, "voice_transcribe");
+        assert_eq!(plan.destination_path, import_root.join("bundle_1234567890"));
+        assert_eq!(plan.file_count, 2);
+        assert_eq!(plan.total_bytes, 28);
+        assert!(plan.import_allowed);
+        assert!(plan.can_import_now);
+        assert!(!plan.destination_exists);
+        assert_eq!(plan.blocking_reason, None);
+        assert!(!import_root.exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plans_import_conflict_without_creating_temp_directory() {
+        let dir = unique_temp_dir("bundle-import-plan-conflict");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
+
+        let plan = plan_staged_bundle_import(&staged.staging_path, &import_root).unwrap();
+
+        assert!(plan.import_allowed);
+        assert!(!plan.can_import_now);
+        assert!(plan.destination_exists);
+        assert_eq!(plan.blocking_reason.as_deref(), Some("destination_exists"));
+        assert!(!import_root.join("bundle_1234567890.importing").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plans_save_only_bundle_as_not_importable() {
+        let dir = unique_temp_dir("bundle-import-plan-save-only");
+        let source = create_valid_bundle(&dir, false);
+        fs::remove_file(source.join("permissions.json")).unwrap();
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+
+        let plan = plan_staged_bundle_import(&staged.staging_path, &import_root).unwrap();
+
+        assert!(!plan.import_allowed);
+        assert!(!plan.can_import_now);
+        assert!(!plan.destination_exists);
+        assert_eq!(plan.blocking_reason.as_deref(), Some("not_importable"));
+        assert!(!import_root.exists());
 
         fs::remove_dir_all(dir).unwrap();
     }

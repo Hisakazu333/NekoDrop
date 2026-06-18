@@ -23,6 +23,9 @@ function bundle(overrides: Partial<ReceivedBundleDto> = {}): ReceivedBundleDto {
     staging_status: "saved",
     can_import_now: true,
     import_path: null,
+    import_destination: "/tmp/imports/bundle_123",
+    import_conflict: false,
+    import_blocking_reason: null,
     ...overrides
   };
 }
@@ -68,4 +71,16 @@ test("labels expired staged bundles as cleaned up", () => {
 
   assert.equal(receiveBundleStatusLabel(report(expired)), "已过期");
   assert.equal(receiveBundleImportHint(expired), "暂存已过期清理");
+});
+
+test("labels import conflicts before the user retries import", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_blocking_reason: "destination_exists"
+  });
+
+  assert.equal(bundleStatusLabel(conflicted), "已存在");
+  assert.equal(receiveBundleImportHint(conflicted), "同名资料已存在，当前不会覆盖");
+  assert.equal(markBundleImportFailed(conflicted).can_import_now, false);
 });
