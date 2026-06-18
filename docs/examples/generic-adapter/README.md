@@ -184,6 +184,14 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 
 `action.updated` 事件会带 `request_id`、`action_kind`、`status`、`reason`、`bundle_id`、`bundle_type` 和 `target_device_id`。事件不会返回本机 `bundle_root`。
 
+响应里除了 `events` 数组，还会带：
+
+- `events_last_id`
+- `events_next_after_id`
+- `events_has_more`
+
+adapter 下一次请求可以把 `events_next_after_id` 放回 `after_event_id`。如果 `events_has_more=true`，应继续拉下一页，不要等下一轮定时器。
+
 这只是本机短等待，不是公网长连接。
 
 ## 导入

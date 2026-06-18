@@ -369,6 +369,9 @@ pub struct LocalBridgeResponseDto {
     pub transfer_status: Option<TransferStatusDto>,
     pub action_results: Vec<LocalBridgePendingActionResultDto>,
     pub events: Vec<serde_json::Value>,
+    pub events_last_id: Option<String>,
+    pub events_next_after_id: Option<String>,
+    pub events_has_more: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -4335,6 +4338,14 @@ fn local_bridge_transfer_phase_from_status(
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+struct LocalBridgeEventPage {
+    events: Vec<serde_json::Value>,
+    last_event_id: Option<String>,
+    next_after_event_id: Option<String>,
+    has_more: bool,
+}
+
 fn local_bridge_events_after(
     events: &[LocalBridgeEvent],
     after_event_id: Option<&str>,
@@ -4343,9 +4354,12 @@ fn local_bridge_events_after(
     can_read_transfers: bool,
     can_send_bundles: bool,
     can_import_bundles: bool,
-) -> Result<Vec<serde_json::Value>, String> {
+) -> Result<LocalBridgeEventPage, String> {
     let mut after_cursor = after_event_id.is_none();
     let mut output = Vec::new();
+    let mut last_event_id = None;
+    let mut next_after_event_id = None;
+    let mut has_more = false;
     for event in events {
         if !after_cursor {
             after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
@@ -4360,12 +4374,21 @@ fn local_bridge_events_after(
         ) {
             continue;
         }
-        output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
+        let event_id = local_bridge_event_id(event).to_string();
         if output.len() >= limit {
+            has_more = true;
             break;
         }
+        output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
+        last_event_id = Some(event_id.clone());
+        next_after_event_id = Some(event_id);
     }
-    Ok(output)
+    Ok(LocalBridgeEventPage {
+        events: output,
+        last_event_id,
+        next_after_event_id,
+        has_more,
+    })
 }
 
 fn local_bridge_action_results_for_client(
@@ -4706,6 +4729,9 @@ fn local_bridge_read_only_response(
         transfer_status,
         action_results: Vec::new(),
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -4734,6 +4760,9 @@ fn local_bridge_read_only_unsupported_response(
         transfer_status: None,
         action_results: Vec::new(),
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -4761,6 +4790,9 @@ fn local_bridge_pending_confirmation_response(
         transfer_status: None,
         action_results: Vec::new(),
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -4789,13 +4821,16 @@ fn local_bridge_authorized_runtime_pending_response(
         transfer_status: None,
         action_results: Vec::new(),
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
 fn local_bridge_events_response(
     request_id: String,
     client: Option<LocalBridgeClientIdentity>,
-    events: Vec<serde_json::Value>,
+    page: LocalBridgeEventPage,
 ) -> LocalBridgeResponseDto {
     let client_metadata = local_bridge_client_metadata(client);
     LocalBridgeResponseDto {
@@ -4816,7 +4851,10 @@ fn local_bridge_events_response(
         staged_bundles: Vec::new(),
         transfer_status: None,
         action_results: Vec::new(),
-        events,
+        events: page.events,
+        events_last_id: page.last_event_id,
+        events_next_after_id: page.next_after_event_id,
+        events_has_more: page.has_more,
     }
 }
 
@@ -4896,6 +4934,9 @@ fn local_bridge_action_results_response(
         transfer_status: None,
         action_results,
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -4941,6 +4982,9 @@ fn local_bridge_pending_authorization_response(
         transfer_status: None,
         action_results: Vec::new(),
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -4978,6 +5022,9 @@ fn local_bridge_pending_authorization_response_from_pending(
         transfer_status: None,
         action_results: Vec::new(),
         events: Vec::new(),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -8969,6 +9016,114 @@ mod tests {
             response.events[0]["payload"]["event_id"].as_str(),
             Some("bridge-event-2")
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_returns_cursor_metadata_for_paging() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-cursor-page");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            ));
+        for (event_id, bytes_transferred) in [
+            ("bridge-event-1", 10_u64),
+            ("bridge-event-2", 20_u64),
+            ("bridge-event-3", 30_u64),
+        ] {
+            push_local_bridge_runtime_event(
+                &runtime,
+                nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                    nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                        event_id: event_id.to_string(),
+                        transfer_id: "transfer-1".to_string(),
+                        phase: nekolink_protocol::LocalBridgeTransferPhase::Sending,
+                        bytes_transferred,
+                        total_bytes: 100,
+                    },
+                ),
+            )
+            .unwrap();
+        }
+        let first_page_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-page-1",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 1
+            }
+        })
+        .to_string();
+
+        let first_page = handle_local_bridge_request_with_runtime_at(
+            &first_page_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+        let second_page_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-page-2",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": first_page.events_next_after_id,
+                "limit": 2
+            }
+        })
+        .to_string();
+        let second_page = handle_local_bridge_request_with_runtime_at(
+            &second_page_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_600,
+        )
+        .unwrap();
+
+        assert_eq!(first_page.events.len(), 1);
+        assert_eq!(first_page.events_last_id.as_deref(), Some("bridge-event-1"));
+        assert_eq!(
+            first_page.events_next_after_id.as_deref(),
+            Some("bridge-event-1")
+        );
+        assert!(first_page.events_has_more);
+        assert_eq!(second_page.events.len(), 2);
+        assert_eq!(
+            second_page.events[0]["payload"]["event_id"].as_str(),
+            Some("bridge-event-2")
+        );
+        assert_eq!(
+            second_page.events_last_id.as_deref(),
+            Some("bridge-event-3")
+        );
+        assert!(!second_page.events_has_more);
 
         fs::remove_dir_all(dir).unwrap();
     }
