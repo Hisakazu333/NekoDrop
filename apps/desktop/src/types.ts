@@ -71,6 +71,9 @@ export interface LocalBridgeResponseDto {
   transfer_status: TransferStatusDto | null;
   action_results: LocalBridgePendingActionResultDto[];
   events: unknown[];
+  events_last_id: string | null;
+  events_next_after_id: string | null;
+  events_has_more: boolean;
 }
 
 export interface LocalBridgeAuthorizationDto {
