@@ -39,6 +39,7 @@ mod device_dtos;
 mod dto;
 mod local_bridge_action_results;
 mod local_bridge_dtos;
+mod local_bridge_events;
 mod local_bridge_responses;
 mod path_dialog;
 mod receive_diagnostics;
@@ -65,12 +66,13 @@ use local_bridge_dtos::{
     local_bridge_pending_action_result_to_dto, local_bridge_pending_action_to_dto,
     local_bridge_runtime_status_to_dto,
 };
+use local_bridge_events::{local_bridge_event_id, local_bridge_events_after};
 use local_bridge_responses::{
     local_bridge_action_results_response, local_bridge_authorized_runtime_pending_response,
     local_bridge_client_metadata, local_bridge_events_response,
     local_bridge_pending_authorization_response_from_pending,
     local_bridge_pending_confirmation_response, local_bridge_read_only_response,
-    local_bridge_read_only_unsupported_response, LocalBridgeEventPage,
+    local_bridge_read_only_unsupported_response,
 };
 use path_dialog::{
     bind_available_listener, choose_paths, default_receive_dir, expand_home_dir,
@@ -3126,51 +3128,6 @@ fn local_bridge_transfer_phase_from_status(
     }
 }
 
-fn local_bridge_events_after(
-    events: &[LocalBridgeEvent],
-    after_event_id: Option<&str>,
-    limit: usize,
-    can_read_bundles: bool,
-    can_read_transfers: bool,
-    can_send_bundles: bool,
-    can_import_bundles: bool,
-) -> Result<LocalBridgeEventPage, String> {
-    let mut after_cursor = after_event_id.is_none();
-    let mut output = Vec::new();
-    let mut last_event_id = None;
-    let mut next_after_event_id = None;
-    let mut has_more = false;
-    for event in events {
-        if !after_cursor {
-            after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
-            continue;
-        }
-        if !local_bridge_event_is_allowed(
-            event,
-            can_read_bundles,
-            can_read_transfers,
-            can_send_bundles,
-            can_import_bundles,
-        ) {
-            continue;
-        }
-        let event_id = local_bridge_event_id(event).to_string();
-        if output.len() >= limit {
-            has_more = true;
-            break;
-        }
-        output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
-        last_event_id = Some(event_id.clone());
-        next_after_event_id = Some(event_id);
-    }
-    Ok(LocalBridgeEventPage {
-        events: output,
-        last_event_id,
-        next_after_event_id,
-        has_more,
-    })
-}
-
 fn local_bridge_action_results_for_client(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],
@@ -3212,34 +3169,6 @@ fn local_bridge_action_results_for_client(
         .map(|result| local_bridge_pending_action_result_to_dto(result, false))
         .collect();
     Ok(Some(output))
-}
-
-fn local_bridge_event_id(event: &LocalBridgeEvent) -> &str {
-    match event {
-        LocalBridgeEvent::BundleReceived(event) => &event.event_id,
-        LocalBridgeEvent::BundleSendPreflight(event) => &event.event_id,
-        LocalBridgeEvent::ActionUpdated(event) => &event.event_id,
-        LocalBridgeEvent::TransferUpdated(event) => &event.event_id,
-    }
-}
-
-fn local_bridge_event_is_allowed(
-    event: &LocalBridgeEvent,
-    can_read_bundles: bool,
-    can_read_transfers: bool,
-    can_send_bundles: bool,
-    can_import_bundles: bool,
-) -> bool {
-    match event {
-        LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
-        LocalBridgeEvent::BundleSendPreflight(_) => can_send_bundles,
-        LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
-            "bundle.send" => can_send_bundles,
-            "bundle.import" => can_import_bundles,
-            _ => false,
-        },
-        LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
-    }
 }
 
 fn confirm_local_bridge_runtime_authorization_at(
