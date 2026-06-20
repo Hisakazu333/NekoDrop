@@ -179,6 +179,65 @@ git diff --check
 
 Release 安装包必须从 tag 对应代码构建，不从临时工作区随手打包。预览版 tag 使用 `v0.1.0-preview.N` 形式，发布资产需要同时写出 DMG / Windows 安装包的 SHA256。完整规范见仓库根目录 `CONTRIBUTING.md`。
 
+## 结构治理
+
+现在仓库不是重写阶段，但已经有几个明显的热点文件。后续开发不能继续把所有能力塞进这些文件：
+
+```text
+apps/desktop/src-tauri/src/commands/mod.rs
+crates/nekolink-protocol/src/lib.rs
+apps/desktop/src/App.tsx
+apps/desktop/src/styles.css
+crates/nekodrop-network/src/tcp_file.rs
+crates/nekodrop-service/src/lib.rs
+```
+
+规则：
+
+- 小 bug 可以就地修。
+- 新命令族不要继续塞进 `commands/mod.rs`，先拆到 `commands/<area>.rs`。
+- 新页面状态不要继续塞进 `App.tsx`，先拆到 `views/<ViewName>.tsx`。
+- 新样式不要继续把全局 CSS 变成杂物间，能按 layout / view / component 拆就拆。
+- 新协议模型不要和桌面业务混在一起，先放 `nekolink-protocol`，再由 service/network 调用。
+- 新上层应用能力不能写死某个第三方应用，先走 bundle / adapter / local bridge。
+
+拆分不单独追求文件数量。只有在下面情况出现时才拆：
+
+- 新功能会让一个热点文件继续明显变大；
+- 一个文件里已经混了两个以上不同职责；
+- 测试很难只覆盖这次改动；
+- 贡献者必须读无关流程才能改当前功能。
+
+推荐下一阶段先做渐进拆分：
+
+```text
+commands/mod.rs
+  -> commands/transfer.rs
+  -> commands/devices.rs
+  -> commands/bundles.rs
+  -> commands/bridge.rs
+  -> commands/settings.rs
+  -> commands/security.rs
+
+App.tsx
+  -> views/OverviewView.tsx
+  -> views/SendView.tsx
+  -> views/ReceiveView.tsx
+  -> views/DevicesView.tsx
+  -> views/TransfersView.tsx
+  -> views/SettingsView.tsx
+
+nekolink-protocol/src/lib.rs
+  -> envelope.rs
+  -> identity.rs
+  -> session.rs
+  -> bundle.rs
+  -> bridge.rs
+  -> crypto.rs
+```
+
+功能 PR 可以顺手做小范围拆分，但不要把一次 PR 变成大搬家。大拆分要单独开 `refactor/...` 分支，保证行为不变、测试先跑通。
+
 ## 实现顺序
 
 1. 保持 `nekodrop-core` 作为产品模型源头。
