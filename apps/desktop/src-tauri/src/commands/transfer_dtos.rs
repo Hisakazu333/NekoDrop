@@ -1,12 +1,21 @@
 use nekodrop_core::{FileManifest, ManifestItem, ManifestItemKind};
+use nekodrop_network::TransferOffer;
 use nekodrop_service::{
     ReceivedBundleReport, TransferPlanScanProgress, TransferReceiveReport, TransferSecurityMode,
     TransferSendReport, TransferSourceFile, TransferSourcePlan,
 };
+use nekodrop_storage::{build_resume_plan_for_files, ResumeExpectedFile, ResumePlan};
+
+use crate::app_state::{
+    PendingPairingRequest, PendingReceiveOffer, PendingReceiveResumeSummary, TransferStatusState,
+};
+use crate::transfer_history::TransferHistoryRecord;
 
 use super::{
-    bundle_type_label, ManifestItemDto, ReceiveReportDto, ReceivedBundleDto, ReceivedFileDto,
-    SendReportDto, SentFileDto, TransferPlanDto, TransferScanProgressDto, TransferSourceFileDto,
+    bundle_type_label, ManifestItemDto, PendingPairingRequestDto, PendingReceiveFileDto,
+    PendingReceiveOfferDto, ReceiveReportDto, ReceiveResumeSummaryDto, ReceivedBundleDto,
+    ReceivedFileDto, SendReportDto, SentFileDto, TransferDto, TransferPlanDto,
+    TransferScanProgressDto, TransferSourceFileDto, TransferStatusDto,
 };
 
 pub(super) const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
@@ -117,6 +126,136 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         import_destination: None,
         import_conflict: false,
         import_blocking_reason: None,
+    }
+}
+
+pub(super) fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
+    PendingReceiveOfferDto {
+        transfer_id: offer.transfer_id.clone(),
+        root_name: offer.root_name.clone(),
+        file_count: offer.file_count,
+        total_bytes: offer.total_bytes,
+        sender_device_id: offer.sender_device_id.clone(),
+        sender_device_name: offer.sender_device_name.clone(),
+        sender_public_key_fingerprint: offer.sender_public_key_fingerprint.clone(),
+        preview_file_count: offer.files.len().min(RECEIVE_FILE_PREVIEW_LIMIT),
+        files: offer
+            .files
+            .iter()
+            .take(RECEIVE_FILE_PREVIEW_LIMIT)
+            .map(|file| PendingReceiveFileDto {
+                manifest_path: file.manifest_path.clone(),
+                size: file.size,
+                sha256: file.sha256.clone(),
+            })
+            .collect(),
+        resume_summary: offer.resume_summary.map(|summary| ReceiveResumeSummaryDto {
+            resumable_file_count: summary.resumable_file_count,
+            completed_file_count: summary.completed_file_count,
+            partial_file_count: summary.partial_file_count,
+            received_bytes: summary.received_bytes,
+        }),
+    }
+}
+
+pub(super) fn pending_resume_summary_from_offer(
+    receive_dir: &std::path::Path,
+    offer: &TransferOffer,
+) -> Option<PendingReceiveResumeSummary> {
+    let mut expected_files = Vec::with_capacity(offer.files.len());
+    for file in &offer.files {
+        expected_files.push(
+            ResumeExpectedFile::new(
+                file.manifest_path.clone(),
+                file.size,
+                Some(file.sha256.clone()),
+            )
+            .ok()?,
+        );
+    }
+
+    let plan =
+        build_resume_plan_for_files(receive_dir, &offer.transfer_id, &expected_files).ok()?;
+    pending_resume_summary_from_plan(&plan)
+}
+
+pub(super) fn pending_resume_summary_from_plan(
+    plan: &ResumePlan,
+) -> Option<PendingReceiveResumeSummary> {
+    if plan.is_empty() {
+        return None;
+    }
+
+    Some(PendingReceiveResumeSummary {
+        resumable_file_count: plan.files.len(),
+        completed_file_count: plan.completed_file_count(),
+        partial_file_count: plan.partial_file_count(),
+        received_bytes: plan.total_received_bytes(),
+    })
+}
+
+pub(super) fn pending_pairing_request_to_dto(
+    request: &PendingPairingRequest,
+) -> PendingPairingRequestDto {
+    PendingPairingRequestDto {
+        request_id: request.request_id.clone(),
+        device_id: request.device_id.clone(),
+        device_name: request.device_name.clone(),
+        platform: request.platform.clone(),
+        host: request.host.clone(),
+        port: request.port,
+        public_key: request.public_key.clone(),
+        public_key_fingerprint: request.public_key_fingerprint.clone(),
+        pairing_code: request.pairing_code.clone(),
+    }
+}
+
+pub(super) fn transfer_status_to_dto(status: &TransferStatusState) -> TransferStatusDto {
+    let progress = if status.total_bytes == 0 {
+        0.0
+    } else {
+        (status.bytes_transferred as f32 / status.total_bytes as f32).clamp(0.0, 1.0)
+    };
+    TransferStatusDto {
+        direction: status.direction.clone(),
+        phase: status.phase.clone(),
+        root_name: status.root_name.clone(),
+        file_count: status.file_count,
+        file_index: status.file_index,
+        current_file: status.current_file.clone(),
+        bytes_transferred: status.bytes_transferred,
+        total_bytes: status.total_bytes,
+        progress,
+        message: status.message.clone(),
+        updated_at_ms: status.updated_at_ms,
+    }
+}
+
+pub(super) fn transfer_to_dto(record: &TransferHistoryRecord) -> TransferDto {
+    let progress = if record.total_bytes == 0 {
+        0.0
+    } else {
+        (record.transferred_bytes as f32 / record.total_bytes as f32).clamp(0.0, 1.0)
+    };
+    TransferDto {
+        id: record.id.clone(),
+        root_name: record.root_name.clone(),
+        peer_device_id: record.peer_device_id.clone(),
+        peer_name: record.peer_name.clone(),
+        target_host: record.target_host.clone(),
+        source_paths: record.source_paths.clone(),
+        received_paths: record.received_paths.clone(),
+        direction: record.direction.clone(),
+        status: record.status.clone(),
+        file_count: record.file_count,
+        total_bytes: record.total_bytes,
+        transferred_bytes: record.transferred_bytes,
+        progress,
+        receive_dir: record.receive_dir.clone(),
+        error_message: record.error_message.clone(),
+        security_mode: record.security_mode.clone(),
+        created_at_ms: record.created_at_ms,
+        updated_at_ms: record.updated_at_ms,
     }
 }
 
