@@ -1,8 +1,7 @@
 use std::fs;
 use std::io::ErrorKind;
-use std::net::{IpAddr, SocketAddr, TcpListener};
+use std::net::IpAddr;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Condvar, Mutex,
@@ -10,10 +9,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nekodrop_core::{
-    Device, DeviceTrustState, FileManifest, ManifestItem, ManifestItemKind, NekoDropError,
-    ReceivePolicy,
-};
+use nekodrop_core::{Device, DeviceTrustState, NekoDropError, ReceivePolicy};
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
     TransferProgress,
@@ -23,27 +19,84 @@ use nekodrop_service::{
     create_transfer_plan as create_service_transfer_plan, create_transfer_plan_with_scan_progress,
     send_pairing_request, send_plan_with_authenticated_session_peer_verifier_and_cancel,
     IncomingSessionReport, ReceivedBundleReport, TransferPlanScanProgress, TransferProgressEvent,
-    TransferReceiveReport, TransferSecurityMode, TransferSendReport, TransferSourceFile,
-    TransferSourcePlan,
+    TransferReceiveReport, TransferSecurityMode,
 };
 use nekodrop_storage::{
-    build_resume_plan_for_files, create_manual_bundle_directory,
-    delete_staged_bundle as delete_staged_bundle_storage, detect_bundle_directory,
-    import_staged_bundle as import_staged_bundle_storage,
-    list_staged_bundles as list_staged_bundles_storage, prune_staged_bundles_older_than,
-    ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan, StagedBundle,
+    create_manual_bundle_directory, detect_bundle_directory, ManualBundleCreateRequest,
 };
 use nekolink_protocol::{
-    BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
-    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeActionLifecycleStatus,
+    BundleSender, BundleType, DeviceIdentity, LocalBridgeActionLifecycleStatus,
     LocalBridgeActionUpdatedEvent, LocalBridgeAuthorizationRequest,
     LocalBridgeBundleSendPreflightEvent, LocalBridgeBundleSendPreflightStatus,
     LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
     SignedSessionIdentityBinding,
 };
-use serde::{Deserialize, Serialize};
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
+
+mod bundle_helpers;
+mod device_dtos;
+mod dto;
+mod local_bridge_action_results;
+mod local_bridge_dtos;
+mod local_bridge_events;
+mod local_bridge_responses;
+mod path_dialog;
+mod receive_diagnostics;
+mod staged_bundles;
+mod transfer_dtos;
+mod transfer_feedback;
+mod transfer_targets;
+mod user_paths;
+pub use dto::*;
+
+use bundle_helpers::{
+    bundle_type_from_label, bundle_type_label, manual_bundle_id, manual_bundle_permissions,
+    parse_bundle_type, sha256_hex,
+};
+use device_dtos::{
+    device_identity_to_dto, device_to_dto, discovery_status_snapshot, trusted_device_to_dto,
+};
+use local_bridge_action_results::{
+    local_bridge_action_lifecycle_result, local_bridge_bundle_import_result,
+    local_bridge_bundle_send_result, local_bridge_bundle_send_result_from_preflight,
+};
+use local_bridge_dtos::{
+    local_bridge_authorization_to_dto, local_bridge_authorizations_to_dtos,
+    local_bridge_pending_action_result_to_dto, local_bridge_pending_action_to_dto,
+    local_bridge_runtime_status_to_dto,
+};
+use local_bridge_events::{local_bridge_event_id, local_bridge_events_after};
+use local_bridge_responses::{
+    local_bridge_action_results_response, local_bridge_authorized_runtime_pending_response,
+    local_bridge_client_metadata, local_bridge_events_response,
+    local_bridge_pending_authorization_response_from_pending,
+    local_bridge_pending_confirmation_response, local_bridge_read_only_response,
+    local_bridge_read_only_unsupported_response,
+};
+use path_dialog::{
+    bind_available_listener, choose_paths, default_receive_dir, expand_home_dir,
+    open_path_with_system, PathDialogKind,
+};
+use receive_diagnostics::{receive_port_diagnostics_from_session, receive_session_to_dto};
+use staged_bundles::{
+    delete_staged_bundle_at, find_staged_bundle_dto_at, import_staged_bundle_at,
+    list_staged_bundle_dtos_at, prune_staged_bundle_dtos_at, validate_safe_bundle_id,
+};
+use transfer_dtos::{
+    pending_offer_to_dto, pending_pairing_request_to_dto, pending_resume_summary_from_offer,
+    receive_report_to_dto, send_report_to_dto, source_plan_to_dto, transfer_scan_progress_to_dto,
+    transfer_security_mode_label, transfer_status_to_dto, transfer_to_dto,
+};
+use transfer_feedback::friendly_transfer_error;
+use transfer_targets::{
+    endpoint_and_peer_for_device_id, endpoint_and_peer_for_history_record,
+    endpoint_and_peer_from_connection_input, reject_self_peer, validate_endpoint_for_desktop_send,
+    verify_incoming_peer_against_trusted_devices, verify_peer_matches_transfer_peer, TransferPeer,
+};
+#[cfg(test)]
+use transfer_targets::{is_current_lan_ip, trusted_peer_from_nearby_device};
+use user_paths::{parse_paths_text, path_bufs_to_strings, string_paths_to_path_bufs};
 
 use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
@@ -67,11 +120,10 @@ use crate::transfer_history::{
 use crate::trusted_devices::{
     pairing_code_for_device, pairing_code_for_values, refresh_trusted_device_contact,
     save_trusted_devices, trust_device_record, trusted_device_record_from_remote,
-    trusted_record_matches, upsert_trusted_device, TrustedDeviceRecord,
+    upsert_trusted_device, TrustedDeviceRecord,
 };
 
 const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
-const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
 const LOCAL_BRIDGE_EVENT_QUEUE_LIMIT: usize = 256;
 const LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT: usize = 128;
@@ -81,411 +133,6 @@ const LOCAL_BRIDGE_PENDING_ACTION_RESULT_LIMIT: usize = 128;
 enum ReceiveTrustContext {
     Untrusted,
     AuthenticatedTrusted,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct AppSnapshot {
-    pub device_name: String,
-    pub receive_dir: String,
-    pub receive_port: u16,
-    pub receive_policy: String,
-    pub discovery_enabled: bool,
-    pub tray_enabled: bool,
-    pub device_identity: DeviceIdentityDto,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DeviceIdentityDto {
-    pub device_id: String,
-    pub device_name: String,
-    pub device_kind: String,
-    pub platform: String,
-    pub public_key_fingerprint: String,
-    pub capabilities: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DeviceDto {
-    pub id: String,
-    pub name: String,
-    pub platform: String,
-    pub host: String,
-    pub port: u16,
-    pub trust_state: String,
-    pub public_key: Option<String>,
-    pub public_key_fingerprint: Option<String>,
-    pub pairing_code: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TrustedDeviceDto {
-    pub device_id: String,
-    pub device_name: String,
-    pub platform: String,
-    pub host: String,
-    pub port: u16,
-    pub public_key: String,
-    pub public_key_fingerprint: String,
-    pub pairing_code: String,
-    pub paired_at_ms: u128,
-    pub last_seen_at_ms: u128,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TransferDto {
-    pub id: String,
-    pub root_name: String,
-    pub peer_device_id: Option<String>,
-    pub peer_name: Option<String>,
-    pub target_host: Option<String>,
-    pub source_paths: Vec<String>,
-    pub received_paths: Vec<String>,
-    pub direction: String,
-    pub status: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub transferred_bytes: u64,
-    pub progress: f32,
-    pub receive_dir: Option<String>,
-    pub error_message: Option<String>,
-    pub security_mode: Option<String>,
-    pub created_at_ms: u128,
-    pub updated_at_ms: u128,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManifestItemDto {
-    pub path: String,
-    pub kind: String,
-    pub size: u64,
-    pub modified_at: Option<String>,
-    pub sha256: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TransferSourceFileDto {
-    pub manifest_path: String,
-    pub source_path: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TransferPlanDto {
-    pub root_name: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub items: Vec<ManifestItemDto>,
-    pub files: Vec<TransferSourceFileDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TransferScanProgressDto {
-    pub phase: String,
-    pub current_path: Option<String>,
-    pub files_found: usize,
-    pub directories_found: usize,
-    pub bytes_found: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReceiveSessionDto {
-    pub bind_addr: String,
-    pub receive_dir: String,
-    pub connection_code: String,
-}
-
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
-pub struct ReceivePortDiagnosticsDto {
-    pub phase: String,
-    pub listening: bool,
-    pub bind_addr: Option<String>,
-    pub advertised_host: Option<String>,
-    pub port: Option<u16>,
-    pub lan_ips: Vec<String>,
-    pub message: String,
-    pub checks: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SentFileDto {
-    pub manifest_path: String,
-    pub bytes_sent: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct SendReportDto {
-    pub root_name: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub sent_files: Vec<SentFileDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReceivedFileDto {
-    pub path: String,
-    pub manifest_path: String,
-    pub bytes_written: u64,
-    pub sha256: String,
-    pub verified: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReceivedBundleDto {
-    pub bundle_id: String,
-    pub bundle_type: String,
-    pub display_name: String,
-    pub source_app: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub staging_path: String,
-    pub import_allowed: bool,
-    pub staging_status: String,
-    pub can_import_now: bool,
-    pub import_path: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ManualBundleCreateDto {
-    pub bundle_id: String,
-    pub bundle_type: String,
-    pub display_name: String,
-    pub source_app: String,
-    pub staging_path: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct ManualBundleCreateRequestDto {
-    pub source_path: String,
-    pub bundle_type: String,
-    pub display_name: String,
-    pub source_app: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReceiveReportDto {
-    pub transfer_id: String,
-    pub root_name: String,
-    pub security_mode: String,
-    pub sender_device_id: Option<String>,
-    pub sender_device_name: Option<String>,
-    pub sender_public_key_fingerprint: Option<String>,
-    pub file_count: usize,
-    pub bundle: Option<ReceivedBundleDto>,
-    pub files: Vec<ReceivedFileDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingReceiveFileDto {
-    pub manifest_path: String,
-    pub size: u64,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct ReceiveResumeSummaryDto {
-    pub resumable_file_count: usize,
-    pub completed_file_count: usize,
-    pub partial_file_count: usize,
-    pub received_bytes: u64,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingReceiveOfferDto {
-    pub transfer_id: String,
-    pub root_name: String,
-    pub file_count: usize,
-    pub total_bytes: u64,
-    pub sender_device_id: Option<String>,
-    pub sender_device_name: Option<String>,
-    pub sender_public_key_fingerprint: Option<String>,
-    pub preview_file_count: usize,
-    pub files: Vec<PendingReceiveFileDto>,
-    pub resume_summary: Option<ReceiveResumeSummaryDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct PendingPairingRequestDto {
-    pub request_id: String,
-    pub device_id: String,
-    pub device_name: String,
-    pub platform: String,
-    pub host: String,
-    pub port: u16,
-    pub public_key: String,
-    pub public_key_fingerprint: String,
-    pub pairing_code: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TransferStatusDto {
-    pub direction: String,
-    pub phase: String,
-    pub root_name: Option<String>,
-    pub file_count: usize,
-    pub file_index: usize,
-    pub current_file: Option<String>,
-    pub bytes_transferred: u64,
-    pub total_bytes: u64,
-    pub progress: f32,
-    pub message: String,
-    pub updated_at_ms: u128,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DesktopRealtimeSnapshotDto {
-    pub receive_status: Option<String>,
-    pub receive_session: Option<ReceiveSessionDto>,
-    pub receive_report: Option<ReceiveReportDto>,
-    pub pending_receive_offer: Option<PendingReceiveOfferDto>,
-    pub pending_pairing_request: Option<PendingPairingRequestDto>,
-    pub transfer_status: Option<TransferStatusDto>,
-    pub discovery_status: DiscoveryStatusDto,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgeResponseDto {
-    pub request_id: String,
-    pub status: String,
-    pub message: String,
-    pub security_state: String,
-    pub requires_user_confirmation: bool,
-    pub client_state: String,
-    pub client_id: Option<String>,
-    pub client_display_name: Option<String>,
-    pub authorization_scopes: Vec<String>,
-    pub authorization_reason: Option<String>,
-    pub authorization_ttl_seconds: Option<u64>,
-    pub authorization_code: Option<String>,
-    pub authorization_expires_at_ms: Option<u128>,
-    pub devices: Vec<TrustedDeviceDto>,
-    pub staged_bundles: Vec<ReceivedBundleDto>,
-    pub transfer_status: Option<TransferStatusDto>,
-    pub action_results: Vec<LocalBridgePendingActionResultDto>,
-    pub events: Vec<serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgeAuthorizationDto {
-    pub client_id: String,
-    pub display_name: String,
-    pub app_kind: Option<String>,
-    pub scopes: Vec<String>,
-    pub granted_at_ms: u128,
-    pub expires_at_ms: Option<u128>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgeRuntimeStatusDto {
-    pub active: bool,
-    pub bind_host: String,
-    pub port: u16,
-    pub request_path: String,
-    pub max_request_bytes: usize,
-    pub pending_authorization_client: Option<String>,
-    pub authorization_count: usize,
-    pub pending_action_count: usize,
-    pub last_error: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgeAuthorizationListDto {
-    pub authorizations: Vec<LocalBridgeAuthorizationDto>,
-    pub pruned_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgeAuthorizationRevokeDto {
-    pub revoked: bool,
-    pub authorizations: Vec<LocalBridgeAuthorizationDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgePendingActionDto {
-    pub request_id: String,
-    pub action_kind: String,
-    pub client_id: String,
-    pub client_display_name: String,
-    pub bundle_type: Option<String>,
-    pub target_device_id: Option<String>,
-    pub staged_bundle_id: Option<String>,
-    pub expected_bundle_type: Option<String>,
-    pub require_trusted_device: Option<bool>,
-    pub requested_at_ms: u128,
-    pub bundle_root: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgePendingActionListDto {
-    pub actions: Vec<LocalBridgePendingActionDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgePendingActionRemoveDto {
-    pub removed: bool,
-    pub actions: Vec<LocalBridgePendingActionDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgePendingActionTakeDto {
-    pub action: Option<LocalBridgePendingActionDto>,
-    pub remaining_count: usize,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgePendingActionResultDto {
-    pub request_id: String,
-    pub action_kind: String,
-    pub client_id: String,
-    pub client_display_name: String,
-    pub status: String,
-    pub lifecycle_status: Option<String>,
-    pub reason: Option<String>,
-    pub message: String,
-    pub bundle_id: Option<String>,
-    pub bundle_type: Option<String>,
-    pub bundle_root: Option<String>,
-    pub target_device_id: Option<String>,
-    pub require_trusted_device: Option<bool>,
-    pub requested_at_ms: u128,
-    pub claimed_at_ms: u128,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgePendingActionResultListDto {
-    pub results: Vec<LocalBridgePendingActionResultDto>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocalBridgeBundleSendPreflightDto {
-    pub status: String,
-    pub request_id: Option<String>,
-    pub reason: Option<String>,
-    pub message: String,
-    pub client_id: Option<String>,
-    pub client_display_name: Option<String>,
-    pub bundle_id: Option<String>,
-    pub bundle_type: Option<String>,
-    pub bundle_root: Option<String>,
-    pub target_device_id: Option<String>,
-    pub require_trusted_device: Option<bool>,
-    pub requested_at_ms: Option<u128>,
-    pub claimed_at_ms: Option<u128>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct DiscoveryStatusDto {
-    pub phase: String,
-    pub message: String,
-    pub service_type: String,
-    pub advertised: bool,
-    pub lan_ip: Option<String>,
-    pub port: Option<u16>,
-    pub device_count: usize,
-    pub last_seen_seconds_ago: Option<u64>,
-    pub last_error: Option<String>,
 }
 
 #[tauri::command]
@@ -722,7 +369,8 @@ pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> 
 #[tauri::command]
 pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
     let staging_root = bundle_staging_root()?;
-    list_staged_bundle_dtos_at(&staging_root)
+    let import_root = bundle_import_root()?;
+    list_staged_bundle_dtos_at(&staging_root, &import_root)
 }
 
 #[tauri::command]
@@ -1133,254 +781,6 @@ pub fn open_transfer_location(
     };
 
     open_path_with_system(target)
-}
-
-#[derive(Debug, Clone)]
-struct TransferPeer {
-    device_id: Option<String>,
-    name: Option<String>,
-    fingerprint: Option<String>,
-    trusted_public_key: Option<String>,
-    trusted_public_key_fingerprint: Option<String>,
-    target_host: Option<String>,
-}
-
-fn endpoint_and_peer_for_device_id(
-    state: &AppState,
-    device_id: &str,
-) -> Result<(Endpoint, TransferPeer), String> {
-    if let Some((endpoint, peer)) = endpoint_and_peer_from_nearby_device(state, device_id)? {
-        return Ok((endpoint, peer));
-    }
-    if let Some((endpoint, peer)) = endpoint_and_peer_from_trusted_device(state, device_id)? {
-        return Ok((endpoint, peer));
-    }
-    Err("设备不在线或尚未被自动扫描到，请确认对方收件开启后重试。".to_string())
-}
-
-fn endpoint_and_peer_from_nearby_device(
-    state: &AppState,
-    device_id: &str,
-) -> Result<Option<(Endpoint, TransferPeer)>, String> {
-    let device = {
-        let devices = state
-            .nearby_devices
-            .lock()
-            .map_err(|error| error.to_string())?;
-        devices
-            .iter()
-            .find(|item| item.id.as_str() == device_id)
-            .cloned()
-    };
-    let Some(device) = device else {
-        return Ok(None);
-    };
-
-    let trusted_devices = state
-        .trusted_devices
-        .lock()
-        .map_err(|error| error.to_string())?;
-    Ok(Some(trusted_peer_from_nearby_device(
-        &device,
-        &trusted_devices,
-    )?))
-}
-
-fn trusted_peer_from_nearby_device(
-    device: &Device,
-    trusted_devices: &[TrustedDeviceRecord],
-) -> Result<(Endpoint, TransferPeer), String> {
-    let trusted_record = trusted_devices
-        .iter()
-        .find(|record| trusted_record_matches(device, record));
-    let Some(trusted_record) = trusted_record else {
-        return Err("这台设备还没有可信配对，请先完成配对再发送文件。".to_string());
-    };
-
-    let endpoint = Endpoint::tcp(device.host.clone(), device.port);
-    let peer = TransferPeer {
-        device_id: Some(device.id.as_str().to_string()),
-        name: Some(device.name.clone()),
-        fingerprint: device.public_key_fingerprint.clone(),
-        trusted_public_key: Some(trusted_record.public_key.clone()),
-        trusted_public_key_fingerprint: Some(trusted_record.public_key_fingerprint.clone()),
-        target_host: Some(endpoint_label(&endpoint)),
-    };
-    Ok((endpoint, peer))
-}
-
-fn reject_self_peer(local_identity: &DeviceIdentity, peer: &TransferPeer) -> Result<(), String> {
-    if peer
-        .device_id
-        .as_deref()
-        .is_some_and(|device_id| device_id == local_identity.device_id)
-    {
-        return Err("不能把文件发送给本机，请选择另一台设备。".to_string());
-    }
-    Ok(())
-}
-
-fn verify_signed_session_against_trusted_pin(
-    identity: &DeviceIdentity,
-    signed_binding: &SignedSessionIdentityBinding,
-    expected_device_id: Option<&str>,
-    expected_public_key: Option<&str>,
-    expected_public_key_fingerprint: Option<&str>,
-) -> Result<(), String> {
-    signed_binding
-        .binding
-        .verify_identity(identity)
-        .map_err(|error| format!("可信设备身份校验失败：binding 不匹配: {}", error.message))?;
-    if let Some(expected_device_id) = expected_device_id {
-        if identity.device_id != expected_device_id {
-            return Err("可信设备身份校验失败：device_id 不匹配".to_string());
-        }
-    }
-    if let Some(expected_fingerprint) = expected_public_key_fingerprint {
-        if identity.public_key_fingerprint != expected_fingerprint {
-            return Err("可信设备身份校验失败：session 指纹不匹配".to_string());
-        }
-        if signed_binding.public_key_fingerprint != expected_fingerprint {
-            return Err("可信设备身份校验失败：签名指纹不匹配".to_string());
-        }
-    }
-    let Some(expected_public_key) = expected_public_key else {
-        return Ok(());
-    };
-    if expected_public_key_fingerprint.is_none() {
-        return Err("可信设备身份校验失败：缺少可信指纹".to_string());
-    }
-    if signed_binding.public_key != expected_public_key {
-        return Err("可信设备身份校验失败：长期公钥不匹配".to_string());
-    }
-    Ok(())
-}
-
-fn verify_peer_matches_transfer_peer(
-    peer: &TransferPeer,
-    identity: &DeviceIdentity,
-    signed_binding: &SignedSessionIdentityBinding,
-) -> Result<(), String> {
-    verify_signed_session_against_trusted_pin(
-        identity,
-        signed_binding,
-        peer.device_id.as_deref(),
-        peer.trusted_public_key.as_deref(),
-        peer.trusted_public_key_fingerprint
-            .as_deref()
-            .or(peer.fingerprint.as_deref()),
-    )
-}
-
-fn verify_incoming_peer_against_trusted_devices(
-    trusted_devices: &[TrustedDeviceRecord],
-    identity: &DeviceIdentity,
-    signed_binding: &SignedSessionIdentityBinding,
-) -> Result<ReceiveTrustContext, String> {
-    let Some(record) = trusted_devices
-        .iter()
-        .find(|record| record.device_id == identity.device_id)
-    else {
-        return Ok(ReceiveTrustContext::Untrusted);
-    };
-
-    verify_signed_session_against_trusted_pin(
-        identity,
-        signed_binding,
-        Some(record.device_id.as_str()),
-        Some(record.public_key.as_str()),
-        Some(record.public_key_fingerprint.as_str()),
-    )?;
-    Ok(ReceiveTrustContext::AuthenticatedTrusted)
-}
-
-fn endpoint_and_peer_from_trusted_device(
-    state: &AppState,
-    device_id: &str,
-) -> Result<Option<(Endpoint, TransferPeer)>, String> {
-    let trusted_devices = state
-        .trusted_devices
-        .lock()
-        .map_err(|error| error.to_string())?;
-    Ok(trusted_devices
-        .iter()
-        .find(|item| item.device_id == device_id)
-        .map(|device| {
-            let endpoint = Endpoint::tcp(device.host.clone(), device.port);
-            let peer = TransferPeer {
-                device_id: Some(device.device_id.clone()),
-                name: Some(device.device_name.clone()),
-                fingerprint: Some(device.public_key_fingerprint.clone()),
-                trusted_public_key: Some(device.public_key.clone()),
-                trusted_public_key_fingerprint: Some(device.public_key_fingerprint.clone()),
-                target_host: Some(endpoint_label(&endpoint)),
-            };
-            (endpoint, peer)
-        }))
-}
-
-fn endpoint_and_peer_for_history_record(
-    state: &AppState,
-    record: &TransferHistoryRecord,
-) -> Result<(Endpoint, TransferPeer), String> {
-    if let Some(device_id) = record.peer_device_id.as_deref() {
-        return endpoint_and_peer_for_device_id(state, device_id)
-            .map_err(|error| format!("这条历史记录绑定的设备当前不能重发：{error}"));
-    }
-
-    let target_host = record
-        .target_host
-        .as_deref()
-        .ok_or_else(|| "这条历史没有可重连的目标地址".to_string())?;
-    let endpoint = endpoint_from_label(target_host)?;
-    let peer = TransferPeer {
-        device_id: record.peer_device_id.clone(),
-        name: record.peer_name.clone(),
-        fingerprint: None,
-        trusted_public_key: None,
-        trusted_public_key_fingerprint: None,
-        target_host: Some(endpoint_label(&endpoint)),
-    };
-    Ok((endpoint, peer))
-}
-
-fn endpoint_and_peer_from_connection_input(
-    value: &str,
-) -> Result<(Endpoint, TransferPeer), String> {
-    match ConnectionTicket::parse(value) {
-        Ok(ticket) => {
-            let endpoint = ticket.endpoint.clone();
-            let peer = TransferPeer {
-                device_id: ticket.device_id.clone(),
-                name: ticket.device_name.clone(),
-                fingerprint: ticket.fingerprint.clone(),
-                trusted_public_key: None,
-                trusted_public_key_fingerprint: None,
-                target_host: Some(endpoint_label(&endpoint)),
-            };
-            Ok((endpoint, peer))
-        }
-        Err(error) => {
-            if looks_like_endpoint_label(value) {
-                let endpoint = endpoint_from_label(value)?;
-                let peer = TransferPeer {
-                    device_id: None,
-                    name: None,
-                    fingerprint: None,
-                    trusted_public_key: None,
-                    trusted_public_key_fingerprint: None,
-                    target_host: Some(endpoint_label(&endpoint)),
-                };
-                return Ok((endpoint, peer));
-            }
-            Err(friendly_transfer_error(&error.to_string()))
-        }
-    }
-}
-
-fn looks_like_endpoint_label(value: &str) -> bool {
-    let value = value.trim();
-    !value.starts_with("nekodrop-v1") && value.rsplit_once(':').is_some()
 }
 
 fn clear_active_send_cancel(
@@ -2521,374 +1921,11 @@ fn desktop_realtime_snapshot(state: &AppState) -> Result<DesktopRealtimeSnapshot
     })
 }
 
-fn discovery_status_snapshot(
-    state: &AppState,
-    device_count: usize,
-) -> Result<DiscoveryStatusDto, String> {
-    let status = state
-        .discovery_status
-        .lock()
-        .map_err(|error| error.to_string())?;
-
-    Ok(DiscoveryStatusDto {
-        phase: status.phase.clone(),
-        message: status.message.clone(),
-        service_type: status.service_type.clone(),
-        advertised: status.advertised,
-        lan_ip: status.lan_ip.clone(),
-        port: status.port,
-        device_count,
-        last_seen_seconds_ago: status
-            .last_seen_at
-            .map(|seen_at| seen_at.elapsed().as_secs()),
-        last_error: status.last_error.clone(),
-    })
-}
-
-fn receive_session_to_dto(session: &ActiveReceiveSession) -> ReceiveSessionDto {
-    ReceiveSessionDto {
-        bind_addr: session.bind_addr.clone(),
-        receive_dir: session.receive_dir.clone(),
-        connection_code: session.connection_code.clone(),
-    }
-}
-
-fn receive_port_diagnostics_from_session(
-    session: Option<&ActiveReceiveSession>,
-    lan_ips: Vec<IpAddr>,
-) -> ReceivePortDiagnosticsDto {
-    let lan_ip_labels = lan_ips.iter().map(ToString::to_string).collect::<Vec<_>>();
-    let Some(session) = session else {
-        return ReceivePortDiagnosticsDto {
-            phase: "closed".to_string(),
-            listening: false,
-            bind_addr: None,
-            advertised_host: None,
-            port: None,
-            lan_ips: lan_ip_labels,
-            message: "收件未开启，当前没有监听端口".to_string(),
-            checks: vec!["打开收件后才会生成连接码和监听端口".to_string()],
-        };
-    };
-
-    let Some((bind_ip, port)) = parse_receive_bind_addr(&session.bind_addr) else {
-        return ReceivePortDiagnosticsDto {
-            phase: "invalid_bind_addr".to_string(),
-            listening: true,
-            bind_addr: Some(session.bind_addr.clone()),
-            advertised_host: None,
-            port: None,
-            lan_ips: lan_ip_labels,
-            message: "收件监听地址异常，请关闭收件后重新开启".to_string(),
-            checks: receive_port_diagnostic_checks(),
-        };
-    };
-
-    let advertised_host = if bind_ip.is_unspecified() {
-        lan_ips.first().map(ToString::to_string)
-    } else {
-        Some(bind_ip.to_string())
-    };
-    let phase = if advertised_host.is_some() {
-        "listening"
-    } else {
-        "no_lan_ip"
-    };
-    let message = if let Some(host) = advertised_host.as_deref() {
-        format!("收件监听中，其他设备应连接 {host}:{port}")
-    } else {
-        "收件监听已开启，但没有可用于其他设备连接的局域网地址".to_string()
-    };
-
-    ReceivePortDiagnosticsDto {
-        phase: phase.to_string(),
-        listening: true,
-        bind_addr: Some(session.bind_addr.clone()),
-        advertised_host,
-        port: Some(port),
-        lan_ips: lan_ip_labels,
-        message,
-        checks: receive_port_diagnostic_checks(),
-    }
-}
-
-fn parse_receive_bind_addr(bind_addr: &str) -> Option<(IpAddr, u16)> {
-    bind_addr
-        .parse::<SocketAddr>()
-        .ok()
-        .map(|addr| (addr.ip(), addr.port()))
-}
-
-fn receive_port_diagnostic_checks() -> Vec<String> {
-    vec![
-        "确认两台设备在同一局域网，且没有被路由器 AP 隔离".to_string(),
-        "Windows 防火墙需要允许 NekoDrop 访问专用网络".to_string(),
-        "VPN、代理或虚拟网卡可能让连接码拿到错误地址".to_string(),
-    ]
-}
-
-fn device_to_dto(
-    device: &Device,
-    local_identity: &DeviceIdentity,
-    trusted_devices: &[TrustedDeviceRecord],
-) -> DeviceDto {
-    let is_trusted = trusted_devices
-        .iter()
-        .any(|record| trusted_record_matches(device, record));
-    DeviceDto {
-        id: device.id.as_str().to_string(),
-        name: device.name.clone(),
-        platform: format!("{:?}", device.platform),
-        host: device.host.clone(),
-        port: device.port,
-        trust_state: if is_trusted {
-            "Trusted".to_string()
-        } else {
-            format!("{:?}", device.trust_state)
-        },
-        public_key: device.public_key.clone(),
-        public_key_fingerprint: device.public_key_fingerprint.clone(),
-        pairing_code: pairing_code_for_device(local_identity, device),
-    }
-}
-
-fn trusted_device_to_dto(device: &TrustedDeviceRecord) -> TrustedDeviceDto {
-    TrustedDeviceDto {
-        device_id: device.device_id.clone(),
-        device_name: device.device_name.clone(),
-        platform: device.platform.clone(),
-        host: device.host.clone(),
-        port: device.port,
-        public_key: device.public_key.clone(),
-        public_key_fingerprint: device.public_key_fingerprint.clone(),
-        pairing_code: device.pairing_code.clone(),
-        paired_at_ms: device.paired_at_ms,
-        last_seen_at_ms: device.last_seen_at_ms,
-    }
-}
-
-fn device_identity_to_dto(identity: &DeviceIdentity) -> DeviceIdentityDto {
-    DeviceIdentityDto {
-        device_id: identity.device_id.clone(),
-        device_name: identity.device_name.clone(),
-        device_kind: identity.device_kind.as_str().to_string(),
-        platform: identity.platform.as_str().to_string(),
-        public_key_fingerprint: identity.public_key_fingerprint.clone(),
-        capabilities: identity
-            .capabilities
-            .iter()
-            .map(|capability| capability.as_str().to_string())
-            .collect(),
-    }
-}
-
-fn source_plan_to_dto(plan: &TransferSourcePlan) -> TransferPlanDto {
-    TransferPlanDto {
-        root_name: plan.manifest.root_name.clone(),
-        file_count: plan.file_count(),
-        total_bytes: plan.total_bytes(),
-        items: manifest_items_to_dto(&plan.manifest),
-        files: plan.files.iter().map(source_file_to_dto).collect(),
-    }
-}
-
 fn emit_transfer_scan_progress(app: &AppHandle, progress: TransferPlanScanProgress) {
     let _ = app.emit(
         TRANSFER_SCAN_PROGRESS_EVENT,
         transfer_scan_progress_to_dto(progress),
     );
-}
-
-fn transfer_scan_progress_to_dto(progress: TransferPlanScanProgress) -> TransferScanProgressDto {
-    TransferScanProgressDto {
-        phase: progress.phase.as_str().to_string(),
-        current_path: progress.current_path,
-        files_found: progress.files_found,
-        directories_found: progress.directories_found,
-        bytes_found: progress.bytes_found,
-    }
-}
-
-fn manifest_items_to_dto(manifest: &FileManifest) -> Vec<ManifestItemDto> {
-    manifest.items.iter().map(manifest_item_to_dto).collect()
-}
-
-fn manifest_item_to_dto(item: &ManifestItem) -> ManifestItemDto {
-    ManifestItemDto {
-        path: item.path.clone(),
-        kind: match item.kind {
-            ManifestItemKind::File => "file",
-            ManifestItemKind::Directory => "directory",
-        }
-        .to_string(),
-        size: item.size,
-        modified_at: item.modified_at.clone(),
-        sha256: item.sha256.clone(),
-    }
-}
-
-fn source_file_to_dto(file: &TransferSourceFile) -> TransferSourceFileDto {
-    TransferSourceFileDto {
-        manifest_path: file.manifest_path.clone(),
-        source_path: file.source_path.display().to_string(),
-        size: file.size,
-        sha256: file.sha256.clone(),
-    }
-}
-
-fn send_report_to_dto(report: &TransferSendReport) -> SendReportDto {
-    SendReportDto {
-        root_name: report.plan.manifest.root_name.clone(),
-        file_count: report.plan.file_count(),
-        total_bytes: report.plan.total_bytes(),
-        sent_files: report
-            .sent_files
-            .iter()
-            .map(|file| SentFileDto {
-                manifest_path: file.manifest_path.clone(),
-                bytes_sent: file.bytes_sent,
-            })
-            .collect(),
-    }
-}
-
-fn receive_report_to_dto(report: &TransferReceiveReport) -> ReceiveReportDto {
-    ReceiveReportDto {
-        transfer_id: report.transfer_id.clone(),
-        root_name: report.root_name.clone(),
-        security_mode: transfer_security_mode_label(report.security_mode).to_string(),
-        sender_device_id: report.sender_device_id.clone(),
-        sender_device_name: report.sender_device_name.clone(),
-        sender_public_key_fingerprint: report.sender_public_key_fingerprint.clone(),
-        file_count: report.files.len(),
-        bundle: report.bundle.as_ref().map(received_bundle_to_dto),
-        files: report
-            .files
-            .iter()
-            .take(RECEIVE_FILE_PREVIEW_LIMIT)
-            .map(|file| ReceivedFileDto {
-                path: file.path.display().to_string(),
-                manifest_path: file.manifest_path.clone(),
-                bytes_written: file.bytes_written,
-                sha256: file.sha256.clone(),
-                verified: file.verified,
-            })
-            .collect(),
-    }
-}
-
-fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
-    ReceivedBundleDto {
-        bundle_id: bundle.bundle_id.clone(),
-        bundle_type: bundle_type_label(bundle.bundle_type).to_string(),
-        display_name: bundle.display_name.clone(),
-        source_app: bundle.source_app.clone(),
-        file_count: bundle.file_count,
-        total_bytes: bundle.total_bytes,
-        staging_path: bundle.staging_path.display().to_string(),
-        import_allowed: bundle.import_allowed,
-        staging_status: "saved".to_string(),
-        can_import_now: false,
-        import_path: None,
-    }
-}
-
-fn transfer_security_mode_label(mode: TransferSecurityMode) -> &'static str {
-    match mode {
-        TransferSecurityMode::LegacyPlain => "legacy_plain",
-        TransferSecurityMode::EncryptedSession => "encrypted_session",
-        TransferSecurityMode::AuthenticatedEncryptedSession => "authenticated_encrypted_session",
-    }
-}
-
-fn staged_bundle_to_dto(staged: &StagedBundle) -> ReceivedBundleDto {
-    let manifest = &staged.detected.manifest;
-    ReceivedBundleDto {
-        bundle_id: manifest.bundle_id.clone(),
-        bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
-        display_name: manifest.display_name.clone(),
-        source_app: manifest.source_app.clone(),
-        file_count: manifest.summary.file_count,
-        total_bytes: manifest.summary.total_bytes,
-        staging_path: staged.staging_path.display().to_string(),
-        import_allowed: staged.detected.import_policy
-            == nekodrop_storage::BundleImportPolicy::ImportAllowed,
-        staging_status: "saved".to_string(),
-        can_import_now: staged.detected.import_policy
-            == nekodrop_storage::BundleImportPolicy::ImportAllowed,
-        import_path: None,
-    }
-}
-
-fn list_staged_bundle_dtos_at(
-    staging_root: &std::path::Path,
-) -> Result<Vec<ReceivedBundleDto>, String> {
-    list_staged_bundles_storage(staging_root)
-        .map_err(|error| error.to_string())
-        .map(|bundles| bundles.iter().map(staged_bundle_to_dto).collect())
-}
-
-fn find_staged_bundle_dto_at(
-    staging_root: &std::path::Path,
-    bundle_id: &str,
-) -> Result<Option<ReceivedBundleDto>, String> {
-    Ok(list_staged_bundle_dtos_at(staging_root)?
-        .into_iter()
-        .find(|bundle| bundle.bundle_id == bundle_id))
-}
-
-fn prune_staged_bundle_dtos_at(
-    staging_root: &std::path::Path,
-    cutoff: SystemTime,
-) -> Result<Vec<String>, String> {
-    prune_staged_bundles_older_than(staging_root, cutoff).map_err(|error| error.to_string())
-}
-
-fn delete_staged_bundle_at(
-    staging_root: &std::path::Path,
-    bundle_id: &str,
-) -> Result<bool, String> {
-    validate_safe_bundle_id(bundle_id)?;
-    delete_staged_bundle_storage(staging_root, bundle_id).map_err(|error| error.to_string())
-}
-
-fn import_staged_bundle_at(
-    staging_root: &std::path::Path,
-    import_root: &std::path::Path,
-    bundle_id: &str,
-) -> Result<ReceivedBundleDto, String> {
-    validate_safe_bundle_id(bundle_id)?;
-    let staged_path = staging_root.join(bundle_id);
-    let imported = import_staged_bundle_storage(&staged_path, import_root)
-        .map_err(|error| error.to_string())?;
-    Ok(ReceivedBundleDto {
-        bundle_id: imported.bundle_id,
-        bundle_type: bundle_type_label(imported.bundle_type).to_string(),
-        display_name: imported.display_name,
-        source_app: imported.source_app,
-        file_count: imported.file_count,
-        total_bytes: imported.total_bytes,
-        staging_path: staged_path.display().to_string(),
-        import_allowed: true,
-        staging_status: "imported".to_string(),
-        can_import_now: false,
-        import_path: Some(imported.destination_path.display().to_string()),
-    })
-}
-
-fn validate_safe_bundle_id(bundle_id: &str) -> Result<(), String> {
-    let trimmed = bundle_id.trim();
-    if trimmed.is_empty()
-        || trimmed != bundle_id
-        || bundle_id.contains('/')
-        || bundle_id.contains('\\')
-        || bundle_id.contains("..")
-        || bundle_id.contains(':')
-        || bundle_id.contains('\0')
-    {
-        return Err(format!("bundle_id 不安全: {bundle_id}"));
-    }
-    Ok(())
 }
 
 fn handle_local_bridge_request_at(
@@ -2897,11 +1934,13 @@ fn handle_local_bridge_request_at(
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
 ) -> Result<LocalBridgeResponseDto, String> {
+    let import_root = bundle_import_root()?;
     handle_local_bridge_request_with_auth_at(
         request_json,
         trusted_devices,
         transfer_status,
         staging_root,
+        &import_root,
         &[],
         now_ms(),
     )
@@ -2922,11 +1961,13 @@ pub(crate) fn handle_local_bridge_request_for_runtime(
         .map_err(|error| error.to_string())?
         .clone();
     let staging_root = bundle_staging_root()?;
+    let import_root = bundle_import_root()?;
     handle_local_bridge_request_with_runtime_at(
         request_json,
         &trusted_devices,
         transfer_status.as_ref(),
         &staging_root,
+        &import_root,
         runtime,
         true,
         now_ms(),
@@ -2938,6 +1979,7 @@ fn handle_local_bridge_request_with_runtime_at(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     runtime: &LocalBridgeRuntimeState,
     allow_wait: bool,
     now_ms: u128,
@@ -3021,6 +2063,7 @@ fn handle_local_bridge_request_with_runtime_at(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         &authorizations,
         &events,
         &action_results,
@@ -3049,6 +2092,7 @@ fn handle_local_bridge_request_with_runtime_at(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         &authorizations,
         now_ms,
         Duration::from_millis(timeout_ms.min(30_000)),
@@ -3428,104 +2472,6 @@ fn local_bridge_bundle_import_failure_reason(error: &str) -> &'static str {
     "bundle_import_failed"
 }
 
-fn local_bridge_bundle_import_result(
-    status: &str,
-    action: &LocalBridgePendingImportBundleAction,
-    reason: Option<&str>,
-    message: &str,
-    bundle_id: Option<&str>,
-    bundle_type: Option<BundleType>,
-    now_ms: u128,
-) -> LocalBridgePendingActionResult {
-    LocalBridgePendingActionResult {
-        request_id: action.request_id.clone(),
-        action_kind: "bundle.import".to_string(),
-        client_id: action.client.client_id.clone(),
-        client_display_name: action.client.display_name.clone(),
-        status: status.to_string(),
-        lifecycle_status: Some(
-            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
-        ),
-        reason: reason.map(str::to_string),
-        message: message.to_string(),
-        bundle_id: bundle_id.map(str::to_string),
-        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
-        bundle_root: None,
-        target_device_id: None,
-        require_trusted_device: None,
-        requested_at_ms: action.requested_at_ms,
-        claimed_at_ms: now_ms,
-    }
-}
-
-fn local_bridge_bundle_send_result_from_preflight(
-    status: &str,
-    preflight: &LocalBridgeBundleSendPreflightDto,
-    action: &LocalBridgePendingSendBundleAction,
-    now_ms: u128,
-) -> LocalBridgePendingActionResult {
-    local_bridge_bundle_send_result(
-        status,
-        action,
-        preflight.bundle_id.as_deref(),
-        preflight
-            .bundle_type
-            .as_deref()
-            .and_then(bundle_type_from_label),
-        preflight.reason.as_deref(),
-        &preflight.message,
-        now_ms,
-    )
-}
-
-fn local_bridge_bundle_send_result(
-    status: &str,
-    action: &LocalBridgePendingSendBundleAction,
-    bundle_id: Option<&str>,
-    bundle_type: Option<BundleType>,
-    reason: Option<&str>,
-    message: &str,
-    now_ms: u128,
-) -> LocalBridgePendingActionResult {
-    LocalBridgePendingActionResult {
-        request_id: action.request_id.clone(),
-        action_kind: "bundle.send".to_string(),
-        client_id: action.client.client_id.clone(),
-        client_display_name: action.client.display_name.clone(),
-        status: status.to_string(),
-        lifecycle_status: Some(
-            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
-        ),
-        reason: reason.map(str::to_string),
-        message: message.to_string(),
-        bundle_id: bundle_id.map(str::to_string),
-        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
-        bundle_root: Some(action.bundle_root.clone()),
-        target_device_id: action.target_device_id.clone(),
-        require_trusted_device: Some(action.require_trusted_device),
-        requested_at_ms: action.requested_at_ms,
-        claimed_at_ms: now_ms,
-    }
-}
-
-fn local_bridge_lifecycle_status_from_result(status: &str, reason: Option<&str>) -> &'static str {
-    if reason == Some("bundle_import_conflict") {
-        return LocalBridgeActionLifecycleStatus::Conflict.as_str();
-    }
-    match status {
-        "queued" => LocalBridgeActionLifecycleStatus::Queued.as_str(),
-        "running" => LocalBridgeActionLifecycleStatus::Running.as_str(),
-        "completed" => LocalBridgeActionLifecycleStatus::Succeeded.as_str(),
-        "cancelled" => LocalBridgeActionLifecycleStatus::Cancelled.as_str(),
-        "failed" | "failed_preflight" => LocalBridgeActionLifecycleStatus::Failed.as_str(),
-        _ => LocalBridgeActionLifecycleStatus::Failed.as_str(),
-    }
-}
-
-fn local_bridge_lifecycle_status_label(status: LocalBridgeActionLifecycleStatus) -> &'static str {
-    status.as_str()
-}
-
 fn preflight_local_bridge_bundle_send_action(
     action: LocalBridgePendingSendBundleAction,
     trusted_devices: &[TrustedDeviceRecord],
@@ -3773,60 +2719,6 @@ fn push_local_bridge_action_lifecycle_result(
     )
 }
 
-fn local_bridge_action_lifecycle_result(
-    action: &LocalBridgePendingAction,
-    lifecycle_status: LocalBridgeActionLifecycleStatus,
-    reason: Option<&str>,
-    message: &str,
-    bundle_id: Option<&str>,
-    bundle_type: Option<BundleType>,
-    target_device_id: Option<&str>,
-    now_ms: u128,
-) -> LocalBridgePendingActionResult {
-    match action {
-        LocalBridgePendingAction::SendBundle(action) => LocalBridgePendingActionResult {
-            request_id: action.request_id.clone(),
-            action_kind: "bundle.send".to_string(),
-            client_id: action.client.client_id.clone(),
-            client_display_name: action.client.display_name.clone(),
-            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
-            lifecycle_status: Some(
-                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
-            ),
-            reason: reason.map(str::to_string),
-            message: message.to_string(),
-            bundle_id: bundle_id.map(str::to_string),
-            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
-            bundle_root: Some(action.bundle_root.clone()),
-            target_device_id: target_device_id
-                .map(str::to_string)
-                .or_else(|| action.target_device_id.clone()),
-            require_trusted_device: Some(action.require_trusted_device),
-            requested_at_ms: action.requested_at_ms,
-            claimed_at_ms: now_ms,
-        },
-        LocalBridgePendingAction::ImportBundle(action) => LocalBridgePendingActionResult {
-            request_id: action.request_id.clone(),
-            action_kind: "bundle.import".to_string(),
-            client_id: action.client.client_id.clone(),
-            client_display_name: action.client.display_name.clone(),
-            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
-            lifecycle_status: Some(
-                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
-            ),
-            reason: reason.map(str::to_string),
-            message: message.to_string(),
-            bundle_id: bundle_id.map(str::to_string),
-            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
-            bundle_root: None,
-            target_device_id: None,
-            require_trusted_device: None,
-            requested_at_ms: action.requested_at_ms,
-            claimed_at_ms: now_ms,
-        },
-    }
-}
-
 fn local_bridge_lifecycle_status_from_label(label: &str) -> LocalBridgeActionLifecycleStatus {
     match label {
         "queued" => LocalBridgeActionLifecycleStatus::Queued,
@@ -3862,31 +2754,6 @@ fn list_local_bridge_pending_action_results_at(
         .iter()
         .map(|result| local_bridge_pending_action_result_to_dto(result, false))
         .collect())
-}
-
-fn local_bridge_pending_action_result_to_dto(
-    result: &LocalBridgePendingActionResult,
-    include_sensitive_paths: bool,
-) -> LocalBridgePendingActionResultDto {
-    LocalBridgePendingActionResultDto {
-        request_id: result.request_id.clone(),
-        action_kind: result.action_kind.clone(),
-        client_id: result.client_id.clone(),
-        client_display_name: result.client_display_name.clone(),
-        status: result.status.clone(),
-        lifecycle_status: result.lifecycle_status.clone(),
-        reason: result.reason.clone(),
-        message: result.message.clone(),
-        bundle_id: result.bundle_id.clone(),
-        bundle_type: result.bundle_type.clone(),
-        bundle_root: include_sensitive_paths
-            .then(|| result.bundle_root.clone())
-            .flatten(),
-        target_device_id: result.target_device_id.clone(),
-        require_trusted_device: result.require_trusted_device,
-        requested_at_ms: result.requested_at_ms,
-        claimed_at_ms: result.claimed_at_ms,
-    }
 }
 
 fn remove_local_bridge_pending_action_at(
@@ -3928,43 +2795,6 @@ fn remove_local_bridge_pending_action_at(
         ),
     )?;
     Ok(true)
-}
-
-fn local_bridge_pending_action_to_dto(
-    action: &LocalBridgePendingAction,
-    include_sensitive_paths: bool,
-) -> LocalBridgePendingActionDto {
-    match action {
-        LocalBridgePendingAction::SendBundle(action) => LocalBridgePendingActionDto {
-            request_id: action.request_id.clone(),
-            action_kind: "bundle.send".to_string(),
-            client_id: action.client.client_id.clone(),
-            client_display_name: action.client.display_name.clone(),
-            bundle_type: Some(bundle_type_label(action.bundle_type).to_string()),
-            target_device_id: action.target_device_id.clone(),
-            staged_bundle_id: None,
-            expected_bundle_type: None,
-            require_trusted_device: Some(action.require_trusted_device),
-            requested_at_ms: action.requested_at_ms,
-            bundle_root: include_sensitive_paths.then(|| action.bundle_root.clone()),
-        },
-        LocalBridgePendingAction::ImportBundle(action) => LocalBridgePendingActionDto {
-            request_id: action.request_id.clone(),
-            action_kind: "bundle.import".to_string(),
-            client_id: action.client.client_id.clone(),
-            client_display_name: action.client.display_name.clone(),
-            bundle_type: None,
-            target_device_id: None,
-            staged_bundle_id: Some(action.staged_bundle_id.clone()),
-            expected_bundle_type: action
-                .expected_bundle_type
-                .map(bundle_type_label)
-                .map(str::to_string),
-            require_trusted_device: None,
-            requested_at_ms: action.requested_at_ms,
-            bundle_root: None,
-        },
-    }
 }
 
 fn local_bridge_pending_action_request_id(action: &LocalBridgePendingAction) -> &str {
@@ -4015,6 +2845,7 @@ fn handle_local_bridge_request_with_auth_at(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
@@ -4026,6 +2857,7 @@ fn handle_local_bridge_request_with_auth_at(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         authorizations,
         &[],
         &[],
@@ -4038,6 +2870,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     events: &[LocalBridgeEvent],
     action_results: &[LocalBridgePendingActionResult],
@@ -4051,7 +2884,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 client,
                 "local bridge read-only snapshot",
                 trusted_devices.iter().map(trusted_device_to_dto).collect(),
-                list_staged_bundle_dtos_at(staging_root)?,
+                list_staged_bundle_dtos_at(staging_root, import_root)?,
                 None,
             ))
         }
@@ -4068,7 +2901,8 @@ fn handle_validated_local_bridge_request_with_auth_at(
         }
         LocalBridgeRequest::BundleDetail(request) => {
             let client = request.client.clone();
-            let bundle = find_staged_bundle_dto_at(staging_root, &request.staged_bundle_id)?;
+            let bundle =
+                find_staged_bundle_dto_at(staging_root, import_root, &request.staged_bundle_id)?;
             match bundle {
                 Some(bundle) => Ok(local_bridge_read_only_response(
                     request.request_id,
@@ -4294,39 +3128,6 @@ fn local_bridge_transfer_phase_from_status(
     }
 }
 
-fn local_bridge_events_after(
-    events: &[LocalBridgeEvent],
-    after_event_id: Option<&str>,
-    limit: usize,
-    can_read_bundles: bool,
-    can_read_transfers: bool,
-    can_send_bundles: bool,
-    can_import_bundles: bool,
-) -> Result<Vec<serde_json::Value>, String> {
-    let mut after_cursor = after_event_id.is_none();
-    let mut output = Vec::new();
-    for event in events {
-        if !after_cursor {
-            after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
-            continue;
-        }
-        if !local_bridge_event_is_allowed(
-            event,
-            can_read_bundles,
-            can_read_transfers,
-            can_send_bundles,
-            can_import_bundles,
-        ) {
-            continue;
-        }
-        output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
-        if output.len() >= limit {
-            break;
-        }
-    }
-    Ok(output)
-}
-
 fn local_bridge_action_results_for_client(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],
@@ -4368,34 +3169,6 @@ fn local_bridge_action_results_for_client(
         .map(|result| local_bridge_pending_action_result_to_dto(result, false))
         .collect();
     Ok(Some(output))
-}
-
-fn local_bridge_event_id(event: &LocalBridgeEvent) -> &str {
-    match event {
-        LocalBridgeEvent::BundleReceived(event) => &event.event_id,
-        LocalBridgeEvent::BundleSendPreflight(event) => &event.event_id,
-        LocalBridgeEvent::ActionUpdated(event) => &event.event_id,
-        LocalBridgeEvent::TransferUpdated(event) => &event.event_id,
-    }
-}
-
-fn local_bridge_event_is_allowed(
-    event: &LocalBridgeEvent,
-    can_read_bundles: bool,
-    can_read_transfers: bool,
-    can_send_bundles: bool,
-    can_import_bundles: bool,
-) -> bool {
-    match event {
-        LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
-        LocalBridgeEvent::BundleSendPreflight(_) => can_send_bundles,
-        LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
-            "bundle.send" => can_send_bundles,
-            "bundle.import" => can_import_bundles,
-            _ => false,
-        },
-        LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
-    }
 }
 
 fn confirm_local_bridge_runtime_authorization_at(
@@ -4637,154 +3410,13 @@ fn local_bridge_authorization_code(
     format!("{}-{}", &digest[..3], &digest[3..6])
 }
 
-fn local_bridge_read_only_response(
-    request_id: String,
-    client: Option<LocalBridgeClientIdentity>,
-    message: &str,
-    devices: Vec<TrustedDeviceDto>,
-    staged_bundles: Vec<ReceivedBundleDto>,
-    transfer_status: Option<TransferStatusDto>,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(client);
-    LocalBridgeResponseDto {
-        request_id,
-        status: "ok".to_string(),
-        message: message.to_string(),
-        security_state: "read_only".to_string(),
-        requires_user_confirmation: false,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: Vec::new(),
-        authorization_reason: None,
-        authorization_ttl_seconds: None,
-        authorization_code: None,
-        authorization_expires_at_ms: None,
-        devices,
-        staged_bundles,
-        transfer_status,
-        action_results: Vec::new(),
-        events: Vec::new(),
-    }
-}
-
-fn local_bridge_read_only_unsupported_response(
-    request_id: String,
-    client: Option<LocalBridgeClientIdentity>,
-    message: &str,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(client);
-    LocalBridgeResponseDto {
-        request_id,
-        status: "unsupported".to_string(),
-        message: message.to_string(),
-        security_state: "read_only".to_string(),
-        requires_user_confirmation: false,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: Vec::new(),
-        authorization_reason: None,
-        authorization_ttl_seconds: None,
-        authorization_code: None,
-        authorization_expires_at_ms: None,
-        devices: Vec::new(),
-        staged_bundles: Vec::new(),
-        transfer_status: None,
-        action_results: Vec::new(),
-        events: Vec::new(),
-    }
-}
-
-fn local_bridge_pending_confirmation_response(
-    request_id: String,
-    client: Option<LocalBridgeClientIdentity>,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(client);
-    LocalBridgeResponseDto {
-        request_id,
-        status: "pending_auth".to_string(),
-        message: "local bridge auth runtime is not connected; user confirmation is required before this request can run".to_string(),
-        security_state: "requires_user_confirmation".to_string(),
-        requires_user_confirmation: true,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: Vec::new(),
-        authorization_reason: None,
-        authorization_ttl_seconds: None,
-        authorization_code: None,
-        authorization_expires_at_ms: None,
-        devices: Vec::new(),
-        staged_bundles: Vec::new(),
-        transfer_status: None,
-        action_results: Vec::new(),
-        events: Vec::new(),
-    }
-}
-
-fn local_bridge_authorized_runtime_pending_response(
-    request_id: String,
-    client: Option<LocalBridgeClientIdentity>,
-    message: &str,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(client);
-    LocalBridgeResponseDto {
-        request_id,
-        status: "pending_runtime".to_string(),
-        message: message.to_string(),
-        security_state: "authorized".to_string(),
-        requires_user_confirmation: false,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: Vec::new(),
-        authorization_reason: None,
-        authorization_ttl_seconds: None,
-        authorization_code: None,
-        authorization_expires_at_ms: None,
-        devices: Vec::new(),
-        staged_bundles: Vec::new(),
-        transfer_status: None,
-        action_results: Vec::new(),
-        events: Vec::new(),
-    }
-}
-
-fn local_bridge_events_response(
-    request_id: String,
-    client: Option<LocalBridgeClientIdentity>,
-    events: Vec<serde_json::Value>,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(client);
-    LocalBridgeResponseDto {
-        request_id,
-        status: "ok".to_string(),
-        message: "local bridge event snapshot".to_string(),
-        security_state: "authorized".to_string(),
-        requires_user_confirmation: false,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: Vec::new(),
-        authorization_reason: None,
-        authorization_ttl_seconds: None,
-        authorization_code: None,
-        authorization_expires_at_ms: None,
-        devices: Vec::new(),
-        staged_bundles: Vec::new(),
-        transfer_status: None,
-        action_results: Vec::new(),
-        events,
-    }
-}
-
 fn wait_for_local_bridge_events(
     runtime: &LocalBridgeRuntimeState,
     request: nekolink_protocol::LocalBridgePollEventsRequest,
     trusted_devices: &[TrustedDeviceRecord],
     transfer_status: Option<&TransferStatusState>,
     staging_root: &std::path::Path,
+    import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     now_ms: u128,
     timeout: Duration,
@@ -4821,39 +3453,12 @@ fn wait_for_local_bridge_events(
         trusted_devices,
         transfer_status,
         staging_root,
+        import_root,
         authorizations,
         &events,
         &action_results,
         now_ms,
     )
-}
-
-fn local_bridge_action_results_response(
-    request_id: String,
-    client: Option<LocalBridgeClientIdentity>,
-    action_results: Vec<LocalBridgePendingActionResultDto>,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(client);
-    LocalBridgeResponseDto {
-        request_id,
-        status: "ok".to_string(),
-        message: "local bridge action result snapshot".to_string(),
-        security_state: "authorized".to_string(),
-        requires_user_confirmation: false,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: Vec::new(),
-        authorization_reason: None,
-        authorization_ttl_seconds: None,
-        authorization_code: None,
-        authorization_expires_at_ms: None,
-        devices: Vec::new(),
-        staged_bundles: Vec::new(),
-        transfer_status: None,
-        action_results,
-        events: Vec::new(),
-    }
 }
 
 fn local_bridge_pending_authorization_response(
@@ -4898,99 +3503,9 @@ fn local_bridge_pending_authorization_response(
         transfer_status: None,
         action_results: Vec::new(),
         events: Vec::new(),
-    }
-}
-
-fn local_bridge_pending_authorization_response_from_pending(
-    pending: &PendingLocalBridgeAuthorization,
-) -> LocalBridgeResponseDto {
-    let client_metadata = local_bridge_client_metadata(Some(pending.client.clone()));
-    LocalBridgeResponseDto {
-        request_id: pending.request_id.clone(),
-        status: "pending_auth".to_string(),
-        message: "local bridge authorization request is waiting for user confirmation".to_string(),
-        security_state: "requires_user_confirmation".to_string(),
-        requires_user_confirmation: true,
-        client_state: client_metadata.0,
-        client_id: client_metadata.1,
-        client_display_name: client_metadata.2,
-        authorization_scopes: pending
-            .requested_scopes
-            .iter()
-            .copied()
-            .map(local_bridge_permission_scope_label)
-            .map(str::to_string)
-            .collect(),
-        authorization_reason: Some(pending.reason.clone()),
-        authorization_ttl_seconds: Some(
-            ((pending
-                .expires_at_ms
-                .saturating_sub(pending.requested_at_ms))
-                / 1_000) as u64,
-        ),
-        authorization_code: Some(pending.authorization_code.clone()),
-        authorization_expires_at_ms: Some(pending.expires_at_ms),
-        devices: Vec::new(),
-        staged_bundles: Vec::new(),
-        transfer_status: None,
-        action_results: Vec::new(),
-        events: Vec::new(),
-    }
-}
-
-fn local_bridge_authorization_to_dto(
-    authorization: LocalBridgeAuthorizationRecord,
-) -> LocalBridgeAuthorizationDto {
-    LocalBridgeAuthorizationDto {
-        client_id: authorization.client_id,
-        display_name: authorization.display_name,
-        app_kind: authorization.app_kind,
-        scopes: authorization
-            .scopes
-            .into_iter()
-            .map(local_bridge_permission_scope_label)
-            .map(str::to_string)
-            .collect(),
-        granted_at_ms: authorization.granted_at_ms,
-        expires_at_ms: authorization.expires_at_ms,
-    }
-}
-
-fn local_bridge_authorizations_to_dtos(
-    authorizations: Vec<LocalBridgeAuthorizationRecord>,
-) -> Vec<LocalBridgeAuthorizationDto> {
-    authorizations
-        .into_iter()
-        .map(local_bridge_authorization_to_dto)
-        .collect()
-}
-
-fn local_bridge_runtime_status_to_dto(
-    status: local_bridge_runtime::LocalBridgeRuntimeStatusSnapshot,
-) -> LocalBridgeRuntimeStatusDto {
-    LocalBridgeRuntimeStatusDto {
-        active: status.active,
-        bind_host: status.bind_host,
-        port: status.port,
-        request_path: status.request_path,
-        max_request_bytes: status.max_request_bytes,
-        pending_authorization_client: status.pending_authorization_client,
-        authorization_count: status.authorization_count,
-        pending_action_count: status.pending_action_count,
-        last_error: status.last_error,
-    }
-}
-
-fn local_bridge_client_metadata(
-    client: Option<LocalBridgeClientIdentity>,
-) -> (String, Option<String>, Option<String>) {
-    match client {
-        Some(client) => (
-            "identified".to_string(),
-            Some(client.client_id),
-            Some(client.display_name),
-        ),
-        None => ("anonymous".to_string(), None, None),
+        events_last_id: None,
+        events_next_after_id: None,
+        events_has_more: false,
     }
 }
 
@@ -5022,31 +3537,6 @@ fn parse_local_bridge_permission_scope(value: &str) -> Result<LocalBridgePermiss
         "bundle.import.request" => Ok(LocalBridgePermissionScope::BundleImportRequest),
         _ => Err(format!("未知本机接入权限: {value}")),
     }
-}
-
-fn bundle_type_label(bundle_type: nekolink_protocol::BundleType) -> &'static str {
-    match bundle_type {
-        nekolink_protocol::BundleType::Skill => "skill",
-        nekolink_protocol::BundleType::Session => "session",
-        nekolink_protocol::BundleType::Workspace => "workspace",
-        nekolink_protocol::BundleType::AgentProfile => "agent_profile",
-        nekolink_protocol::BundleType::ConfigSnapshot => "config_snapshot",
-    }
-}
-
-fn parse_bundle_type(value: &str) -> Result<BundleType, String> {
-    match value {
-        "skill" => Ok(BundleType::Skill),
-        "session" => Ok(BundleType::Session),
-        "workspace" => Ok(BundleType::Workspace),
-        "agent_profile" => Ok(BundleType::AgentProfile),
-        "config_snapshot" => Ok(BundleType::ConfigSnapshot),
-        _ => Err(format!("不支持的资料包类型：{value}")),
-    }
-}
-
-fn bundle_type_from_label(value: &str) -> Option<BundleType> {
-    parse_bundle_type(value).ok()
 }
 
 fn received_root_name(report: &TransferReceiveReport) -> String {
@@ -5088,73 +3578,6 @@ fn current_utc_timestamp() -> String {
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
 }
 
-fn manual_bundle_id(
-    display_name: &str,
-    bundle_type: &BundleType,
-    source_path: &std::path::Path,
-) -> String {
-    let mut slug = display_name
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        slug = match bundle_type {
-            BundleType::Skill => "skill".to_string(),
-            BundleType::Session => "session".to_string(),
-            BundleType::Workspace => "workspace".to_string(),
-            BundleType::AgentProfile => "agent-profile".to_string(),
-            BundleType::ConfigSnapshot => "config-snapshot".to_string(),
-        };
-    }
-    let source_hash = sha256_hex(source_path.display().to_string().as_bytes());
-    format!("bundle_{slug}_{}", &source_hash[..8.min(source_hash.len())])
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
-}
-
-fn manual_bundle_permissions(bundle_type: &BundleType) -> BundlePermissions {
-    let requested_scopes = match bundle_type {
-        BundleType::Skill => vec![BundlePermissionScope::SkillInstall],
-        BundleType::Session => vec![BundlePermissionScope::SessionImport],
-        BundleType::Workspace => vec![BundlePermissionScope::WorkspaceImport],
-        BundleType::AgentProfile => vec![BundlePermissionScope::AgentProfileImport],
-        BundleType::ConfigSnapshot => vec![BundlePermissionScope::ConfigImport],
-    };
-
-    let target = match bundle_type {
-        BundleType::Skill => "bundle.skill",
-        BundleType::Session => "bundle.session",
-        BundleType::Workspace => "bundle.workspace",
-        BundleType::AgentProfile => "bundle.agent_profile",
-        BundleType::ConfigSnapshot => "bundle.config_snapshot",
-    };
-
-    BundlePermissions {
-        requested_scopes,
-        writes: vec![BundleWritePermission {
-            target: target.to_string(),
-            mode: BundleWriteMode::ManualImport,
-        }],
-        secrets: BundleSecretsPolicy {
-            contains_secrets: false,
-            redacted_fields: Vec::new(),
-        },
-    }
-}
-
 fn push_receive_failure_history(
     transfer_history: &Arc<Mutex<Vec<TransferHistoryRecord>>>,
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
@@ -5190,132 +3613,6 @@ fn push_receive_failure_history(
     record.receive_dir = Some(receive_dir.display().to_string());
     record.error_message = Some(error_message);
     let _ = push_transfer_history_record(transfer_history, record);
-}
-
-fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
-    PendingReceiveOfferDto {
-        transfer_id: offer.transfer_id.clone(),
-        root_name: offer.root_name.clone(),
-        file_count: offer.file_count,
-        total_bytes: offer.total_bytes,
-        sender_device_id: offer.sender_device_id.clone(),
-        sender_device_name: offer.sender_device_name.clone(),
-        sender_public_key_fingerprint: offer.sender_public_key_fingerprint.clone(),
-        preview_file_count: offer.files.len().min(RECEIVE_FILE_PREVIEW_LIMIT),
-        files: offer
-            .files
-            .iter()
-            .take(RECEIVE_FILE_PREVIEW_LIMIT)
-            .map(|file| PendingReceiveFileDto {
-                manifest_path: file.manifest_path.clone(),
-                size: file.size,
-                sha256: file.sha256.clone(),
-            })
-            .collect(),
-        resume_summary: offer.resume_summary.map(|summary| ReceiveResumeSummaryDto {
-            resumable_file_count: summary.resumable_file_count,
-            completed_file_count: summary.completed_file_count,
-            partial_file_count: summary.partial_file_count,
-            received_bytes: summary.received_bytes,
-        }),
-    }
-}
-
-fn pending_resume_summary_from_offer(
-    receive_dir: &std::path::Path,
-    offer: &TransferOffer,
-) -> Option<PendingReceiveResumeSummary> {
-    let mut expected_files = Vec::with_capacity(offer.files.len());
-    for file in &offer.files {
-        expected_files.push(
-            ResumeExpectedFile::new(
-                file.manifest_path.clone(),
-                file.size,
-                Some(file.sha256.clone()),
-            )
-            .ok()?,
-        );
-    }
-
-    let plan =
-        build_resume_plan_for_files(receive_dir, &offer.transfer_id, &expected_files).ok()?;
-    pending_resume_summary_from_plan(&plan)
-}
-
-fn pending_resume_summary_from_plan(plan: &ResumePlan) -> Option<PendingReceiveResumeSummary> {
-    if plan.is_empty() {
-        return None;
-    }
-
-    Some(PendingReceiveResumeSummary {
-        resumable_file_count: plan.files.len(),
-        completed_file_count: plan.completed_file_count(),
-        partial_file_count: plan.partial_file_count(),
-        received_bytes: plan.total_received_bytes(),
-    })
-}
-
-fn pending_pairing_request_to_dto(request: &PendingPairingRequest) -> PendingPairingRequestDto {
-    PendingPairingRequestDto {
-        request_id: request.request_id.clone(),
-        device_id: request.device_id.clone(),
-        device_name: request.device_name.clone(),
-        platform: request.platform.clone(),
-        host: request.host.clone(),
-        port: request.port,
-        public_key: request.public_key.clone(),
-        public_key_fingerprint: request.public_key_fingerprint.clone(),
-        pairing_code: request.pairing_code.clone(),
-    }
-}
-
-fn transfer_status_to_dto(status: &TransferStatusState) -> TransferStatusDto {
-    let progress = if status.total_bytes == 0 {
-        0.0
-    } else {
-        (status.bytes_transferred as f32 / status.total_bytes as f32).clamp(0.0, 1.0)
-    };
-    TransferStatusDto {
-        direction: status.direction.clone(),
-        phase: status.phase.clone(),
-        root_name: status.root_name.clone(),
-        file_count: status.file_count,
-        file_index: status.file_index,
-        current_file: status.current_file.clone(),
-        bytes_transferred: status.bytes_transferred,
-        total_bytes: status.total_bytes,
-        progress,
-        message: status.message.clone(),
-        updated_at_ms: status.updated_at_ms,
-    }
-}
-
-fn transfer_to_dto(record: &TransferHistoryRecord) -> TransferDto {
-    let progress = if record.total_bytes == 0 {
-        0.0
-    } else {
-        (record.transferred_bytes as f32 / record.total_bytes as f32).clamp(0.0, 1.0)
-    };
-    TransferDto {
-        id: record.id.clone(),
-        root_name: record.root_name.clone(),
-        peer_device_id: record.peer_device_id.clone(),
-        peer_name: record.peer_name.clone(),
-        target_host: record.target_host.clone(),
-        source_paths: record.source_paths.clone(),
-        received_paths: record.received_paths.clone(),
-        direction: record.direction.clone(),
-        status: record.status.clone(),
-        file_count: record.file_count,
-        total_bytes: record.total_bytes,
-        transferred_bytes: record.transferred_bytes,
-        progress,
-        receive_dir: record.receive_dir.clone(),
-        error_message: record.error_message.clone(),
-        security_mode: record.security_mode.clone(),
-        created_at_ms: record.created_at_ms,
-        updated_at_ms: record.updated_at_ms,
-    }
 }
 
 fn wait_for_receive_decision(
@@ -5894,188 +4191,10 @@ fn current_transfer_progress(
         .unwrap_or((0, None, 0, 0))
 }
 
-fn endpoint_label(endpoint: &Endpoint) -> String {
-    format!("{}:{}", endpoint.host, endpoint.port)
-}
-
-fn endpoint_from_label(value: &str) -> Result<Endpoint, String> {
-    let (host, port) = value
-        .rsplit_once(':')
-        .ok_or_else(|| friendly_transfer_error(&format!("invalid endpoint label: {value}")))?;
-    let port = port
-        .parse::<u16>()
-        .map_err(|error| friendly_transfer_error(&format!("invalid endpoint port: {error}")))?;
-    if host.trim().is_empty() {
-        return Err(friendly_transfer_error("empty endpoint host"));
-    }
-    Ok(Endpoint::tcp(host.to_string(), port))
-}
-
-fn validate_endpoint_for_desktop_send(endpoint: &Endpoint) -> Result<(), String> {
-    if endpoint.transport.as_str() != "tcp" {
-        return Err(friendly_transfer_error(&format!(
-            "unsupported transport: requested {}",
-            endpoint.transport.as_str()
-        )));
-    }
-    if endpoint.port == 0 {
-        return Err("目标端口无效，请重新从附近设备发送，或重新复制连接码。".to_string());
-    }
-
-    let host = endpoint.host.trim();
-    if host.is_empty() {
-        return Err("目标地址缺少主机，请重新从附近设备发送，或重新复制连接码。".to_string());
-    }
-
-    let lower = host.to_lowercase();
-    if lower == "localhost" {
-        return Err(friendly_transfer_error("failed to connect to localhost"));
-    }
-
-    if let Ok(ip) = host.parse::<IpAddr>() {
-        if ip.is_loopback() {
-            return Err(friendly_transfer_error(&format!(
-                "failed to connect to {host}:{}",
-                endpoint.port
-            )));
-        }
-        if is_current_lan_ip(ip, &local_lan_ips()) {
-            return Err(
-                "目标地址是本机局域网地址，不能把文件发送给自己。请选择另一台设备或复制对方连接码。"
-                    .to_string(),
-            );
-        }
-        if ip.is_unspecified() {
-            return Err(
-                "目标地址是 0.0.0.0 或 ::，这只是监听地址，不能被另一台设备连接。请重新复制接收端连接码。"
-                    .to_string(),
-            );
-        }
-        if let IpAddr::V4(ipv4) = ip {
-            let octets = ipv4.octets();
-            if octets[0] == 198 && (octets[1] == 18 || octets[1] == 19) {
-                return Err(friendly_transfer_error(&format!(
-                    "failed to connect to {host}:{}",
-                    endpoint.port
-                )));
-            }
-            if octets[0] == 169 && octets[1] == 254 {
-                return Err(
-                    "目标地址是 169.254.x.x，这通常表示没有拿到可用局域网地址。请确认两台设备在同一网络，或重新打开接收端生成连接码。"
-                        .to_string(),
-                );
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn is_current_lan_ip(target: IpAddr, current_lan_ips: &[IpAddr]) -> bool {
-    current_lan_ips.contains(&target)
-}
-
-fn friendly_transfer_error(error: &str) -> String {
-    let lower = error.to_lowercase();
-
-    if lower.contains("receiver declined") || lower.contains("transfer declined by receiver") {
-        return "对方拒绝了这次传输".to_string();
-    }
-    if lower.contains("transfer cancelled") {
-        return "传输已取消".to_string();
-    }
-    if lower.contains("insufficient receive space") || lower.contains("disk full") {
-        return "接收目录所在磁盘空间不足。请清理空间，或在设置里选择另一个接收目录后重试。"
-            .to_string();
-    }
-
-    if lower.contains("unsupported connection code")
-        || lower.contains("connection code missing")
-        || lower.contains("invalid connection code")
-        || lower.contains("invalid percent encoding")
-        || lower.contains("connection field is not utf-8")
-        || lower.contains("connection ticket only supports")
-    {
-        return "连接码无效，请重新复制对方生成的连接码。".to_string();
-    }
-
-    if lower.contains("invalid endpoint label")
-        || lower.contains("invalid endpoint port")
-        || lower.contains("empty endpoint host")
-    {
-        return "历史记录里的目标地址无效，请重新从附近设备发送，或重新复制连接码。".to_string();
-    }
-
-    if lower.contains("transport is not available")
-        || lower.contains("unsupported transport")
-        || lower.contains("requested iroh")
-        || lower.contains("requested relay")
-        || lower.contains("requested quic")
-    {
-        return "当前版本还没有接入这个传输通道。请先使用局域网自动发现或连接码兜底。".to_string();
-    }
-
-    if lower.contains("198.18.") || lower.contains("198.19.") {
-        return "连接地址落在 198.18/198.19 测试网段，通常是代理、VPN 或虚拟网卡。请关闭相关网络工具，或改用真实局域网地址/连接码。".to_string();
-    }
-
-    if lower.contains("127.0.0.1") || lower.contains("localhost") {
-        return "连接地址指向了本机，另一台电脑无法访问。请重新打开接收端，复制新的连接码，或使用附近设备自动发现。".to_string();
-    }
-
-    if lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("由于连接方在一段时间后没有正确答复")
-        || lower.contains("连接尝试失败")
-    {
-        return "连接超时。常见原因是 Windows 防火墙拦截、两台设备不在同一网段、路由器隔离了有线/无线，或 VPN/代理影响了局域网连接。".to_string();
-    }
-
-    if lower.contains("connection refused")
-        || lower.contains("actively refused")
-        || lower.contains("connection reset")
-        || lower.contains("failed to connect")
-        || lower.contains("由于目标计算机积极拒绝")
-    {
-        return "无法连接对方电脑。请确认对方 NekoDrop 正在运行、收件已开启、防火墙允许访问，且两台设备网络互通。".to_string();
-    }
-
-    if lower.contains("network is unreachable")
-        || lower.contains("no route to host")
-        || lower.contains("host unreachable")
-        || lower.contains("无法访问目标主机")
-    {
-        return "当前网络无法到达对方设备。请确认两台设备在同一局域网，或使用连接码/后续 Relay 方案。".to_string();
-    }
-
-    if lower.contains("permission denied")
-        || lower.contains("access is denied")
-        || lower.contains("operation not permitted")
-        || lower.contains("权限")
-    {
-        return "系统权限阻止了这次操作。请检查接收目录权限、防火墙权限，或重新选择一个可写入的接收目录。".to_string();
-    }
-
-    if lower.contains("checksum")
-        || lower.contains("sha-256")
-        || lower.contains("sha256")
-        || lower.contains("does not match accepted offer")
-    {
-        return "文件校验失败，已拒绝把不一致的内容当作完成文件。请重新发送。".to_string();
-    }
-
-    if lower.contains("no such file") || lower.contains("not found") || lower.contains("路径不存在")
-    {
-        return "文件或目录不存在，请确认源文件没有被移动、删除，或重新选择文件。".to_string();
-    }
-
-    error.to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nekodrop_service::TransferPlanScanPhase;
+    use crate::commands::transfer_dtos::RECEIVE_FILE_PREVIEW_LIMIT;
     use nekolink_protocol::{
         BundleChecksums, BundleCompatibility, BundleFile, BundleManifest, BundlePermissionScope,
         BundlePermissions, BundleSecretsPolicy, BundleSender, BundleSummary, BundleType,
@@ -6083,49 +4202,6 @@ mod tests {
         BUNDLE_SCHEMA_V1, PROTOCOL_VERSION,
     };
     use std::collections::BTreeMap;
-
-    #[test]
-    fn friendly_transfer_error_explains_connection_failures() {
-        let refused = friendly_transfer_error(
-            "network error: failed to connect to 192.168.1.8:45821: Connection refused",
-        );
-        assert!(refused.contains("无法连接对方电脑"));
-
-        let timeout = friendly_transfer_error(
-            "network error: failed to connect to 192.168.1.8:45821: timed out",
-        );
-        assert!(timeout.contains("连接超时"));
-        assert!(timeout.contains("防火墙"));
-    }
-
-    #[test]
-    fn friendly_transfer_error_explains_bad_network_addresses() {
-        let benchmark =
-            friendly_transfer_error("network error: failed to connect to 198.18.0.1:45821");
-        assert!(benchmark.contains("198.18/198.19"));
-
-        let loopback = friendly_transfer_error("failed to connect to 127.0.0.1:45821");
-        assert!(loopback.contains("指向了本机"));
-    }
-
-    #[test]
-    fn friendly_transfer_error_explains_unsupported_transport_and_integrity_failures() {
-        let transport = friendly_transfer_error("iroh transport is not available in this build");
-        assert!(transport.contains("还没有接入这个传输通道"));
-
-        let checksum = friendly_transfer_error("incoming file does not match accepted offer");
-        assert!(checksum.contains("文件校验失败"));
-    }
-
-    #[test]
-    fn friendly_transfer_error_explains_insufficient_receive_space() {
-        let message = friendly_transfer_error(
-            "storage error: insufficient receive space: need 100 bytes, available 70 bytes",
-        );
-
-        assert!(message.contains("接收目录"));
-        assert!(message.contains("空间不足"));
-    }
 
     #[test]
     fn desktop_endpoint_preflight_rejects_unusable_addresses() {
@@ -6146,60 +4222,6 @@ mod tests {
         let link_local =
             validate_endpoint_for_desktop_send(&Endpoint::tcp("169.254.0.2", 45821)).unwrap_err();
         assert!(link_local.contains("169.254"));
-    }
-
-    #[test]
-    fn receive_port_diagnostics_reports_closed_receiver() {
-        let diagnostics = receive_port_diagnostics_from_session(None, vec![]);
-
-        assert_eq!(diagnostics.phase, "closed");
-        assert!(!diagnostics.listening);
-        assert_eq!(diagnostics.bind_addr, None);
-        assert_eq!(diagnostics.port, None);
-        assert!(diagnostics.message.contains("收件未开启"));
-    }
-
-    #[test]
-    fn receive_port_diagnostics_uses_lan_ip_for_unspecified_bind() {
-        let session = ActiveReceiveSession {
-            bind_addr: "0.0.0.0:45821".to_string(),
-            receive_dir: "/tmp/nekodrop".to_string(),
-            connection_code: "ticket".to_string(),
-            cancel: Arc::new(AtomicBool::new(false)),
-        };
-
-        let diagnostics = receive_port_diagnostics_from_session(
-            Some(&session),
-            vec![IpAddr::from([192, 168, 1, 20]), IpAddr::from([10, 0, 0, 8])],
-        );
-
-        assert_eq!(diagnostics.phase, "listening");
-        assert!(diagnostics.listening);
-        assert_eq!(diagnostics.bind_addr.as_deref(), Some("0.0.0.0:45821"));
-        assert_eq!(diagnostics.advertised_host.as_deref(), Some("192.168.1.20"));
-        assert_eq!(diagnostics.port, Some(45821));
-        assert!(diagnostics
-            .checks
-            .iter()
-            .any(|check| check.contains("防火墙")));
-    }
-
-    #[test]
-    fn receive_port_diagnostics_warns_when_no_lan_ip_is_available() {
-        let session = ActiveReceiveSession {
-            bind_addr: "0.0.0.0:45821".to_string(),
-            receive_dir: "/tmp/nekodrop".to_string(),
-            connection_code: "ticket".to_string(),
-            cancel: Arc::new(AtomicBool::new(false)),
-        };
-
-        let diagnostics = receive_port_diagnostics_from_session(Some(&session), vec![]);
-
-        assert_eq!(diagnostics.phase, "no_lan_ip");
-        assert!(diagnostics.listening);
-        assert_eq!(diagnostics.advertised_host, None);
-        assert_eq!(diagnostics.port, Some(45821));
-        assert!(diagnostics.message.contains("局域网地址"));
     }
 
     #[test]
@@ -6546,78 +4568,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_dialog_output_strips_utf8_bom_from_windows_stdout() {
-        let output = b"\xEF\xBB\xBFI:\\\xe6\x96\x87\xe4\xbb\xb6\\asmr\\z\\16\xe5\x88\x86\xe9\x92\x9f.m4a\r\n";
-
-        let paths = parse_dialog_output(output);
-
-        assert_eq!(paths, vec!["I:\\文件\\asmr\\z\\16分钟.m4a"]);
-    }
-
-    #[test]
-    fn windows_dialog_script_forces_utf8_stdout_for_chinese_paths() {
-        let script = windows_dialog_script(PathDialogKind::Files);
-
-        assert!(script.contains("[Console]::OutputEncoding"));
-        assert!(script.contains("UTF8Encoding"));
-        assert!(script.contains("$OutputEncoding"));
-    }
-
-    #[test]
-    fn windows_dialog_script_uses_bundle_source_prompt() {
-        let script = windows_dialog_script(PathDialogKind::BundleSourceFolder);
-
-        assert!(script.contains("选择资料包来源目录"));
-        assert!(!script.contains("选择接收目录"));
-    }
-
-    #[test]
     fn current_utc_timestamp_uses_utc_iso_8601_shape() {
         let timestamp = current_utc_timestamp();
 
         assert!(timestamp.contains('T'));
         assert!(timestamp.ends_with('Z'));
-    }
-
-    #[test]
-    fn manual_path_rejects_replacement_character_before_exists_check() {
-        let error = normalize_user_path(r"I:\�ļ�\asmr\z\����\16����.m4a").unwrap_err();
-
-        assert!(error.contains("路径编码已经损坏"));
-    }
-
-    #[test]
-    fn manual_path_rejects_windows_unsafe_components_before_exists_check() {
-        for path in [
-            r"C:\drop\CON.txt",
-            r"C:\drop\audio.m4a:Zone.Identifier",
-            r"C:\drop\trailing.",
-            r"C:\drop\trailing ",
-        ] {
-            let error = normalize_user_path(path).unwrap_err();
-
-            assert!(
-                error.contains("Windows 不安全路径"),
-                "unexpected error for {path}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn transfer_scan_progress_dto_uses_stable_wire_labels() {
-        let dto = transfer_scan_progress_to_dto(TransferPlanScanProgress {
-            phase: TransferPlanScanPhase::Hashing,
-            current_path: Some("drop/audio.m4a".to_string()),
-            files_found: 2,
-            directories_found: 1,
-            bytes_found: 4096,
-        });
-
-        assert_eq!(dto.phase, "hashing");
-        assert_eq!(dto.current_path.as_deref(), Some("drop/audio.m4a"));
-        assert_eq!(dto.files_found, 2);
-        assert_eq!(dto.directories_found, 1);
-        assert_eq!(dto.bytes_found, 4096);
     }
 
     #[test]
@@ -6681,70 +4636,6 @@ mod tests {
     }
 
     #[test]
-    fn receive_report_dto_limits_file_preview_for_large_folders() {
-        let report = TransferReceiveReport {
-            transfer_id: "transfer-a".to_string(),
-            root_name: "drop".to_string(),
-            security_mode: TransferSecurityMode::LegacyPlain,
-            sender_device_id: None,
-            sender_device_name: None,
-            sender_public_key_fingerprint: None,
-            bundle: None,
-            files: (0..100)
-                .map(|index| nekodrop_storage::ReceivedFile {
-                    path: PathBuf::from(format!("/tmp/drop/file-{index:03}.txt")),
-                    manifest_path: format!("drop/file-{index:03}.txt"),
-                    bytes_written: 1,
-                    sha256: "a".repeat(64),
-                    verified: true,
-                })
-                .collect(),
-        };
-
-        let dto = receive_report_to_dto(&report);
-
-        assert_eq!(dto.security_mode, "legacy_plain");
-        assert_eq!(dto.file_count, 100);
-        assert_eq!(dto.files.len(), RECEIVE_FILE_PREVIEW_LIMIT);
-        assert_eq!(dto.files[0].manifest_path, "drop/file-000.txt");
-    }
-
-    #[test]
-    fn receive_report_dto_includes_bundle_preview() {
-        let report = TransferReceiveReport {
-            transfer_id: "transfer-a".to_string(),
-            root_name: "bundle".to_string(),
-            security_mode: TransferSecurityMode::AuthenticatedEncryptedSession,
-            sender_device_id: None,
-            sender_device_name: None,
-            sender_public_key_fingerprint: None,
-            bundle: Some(ReceivedBundleReport {
-                bundle_id: "bundle_1234567890".to_string(),
-                bundle_type: nekolink_protocol::BundleType::Skill,
-                display_name: "voice_transcribe".to_string(),
-                source_app: "Generic Agent App".to_string(),
-                file_count: 2,
-                total_bytes: 28,
-                staging_path: PathBuf::from("/tmp/bundle_1234567890"),
-                import_allowed: true,
-            }),
-            files: Vec::new(),
-        };
-
-        let dto = receive_report_to_dto(&report);
-        let bundle = dto.bundle.expect("bundle preview should be exposed");
-
-        assert_eq!(bundle.bundle_id, "bundle_1234567890");
-        assert_eq!(bundle.bundle_type, "skill");
-        assert_eq!(bundle.display_name, "voice_transcribe");
-        assert_eq!(bundle.source_app, "Generic Agent App");
-        assert_eq!(bundle.file_count, 2);
-        assert_eq!(bundle.total_bytes, 28);
-        assert_eq!(bundle.staging_path, "/tmp/bundle_1234567890");
-        assert!(bundle.import_allowed);
-    }
-
-    #[test]
     fn transfer_history_dto_exposes_optional_security_mode() {
         let mut record = new_transfer_history_record(
             "receive-a".to_string(),
@@ -6804,15 +4695,49 @@ mod tests {
     fn staged_bundle_dto_marks_saved_status() {
         let dir = unique_bundle_temp_dir("desktop-bundle-list");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
         nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
 
-        let bundles = list_staged_bundle_dtos_at(&staging_root).unwrap();
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
 
         assert_eq!(bundles.len(), 1);
         assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
         assert_eq!(bundles[0].staging_status, "saved");
         assert!(bundles[0].can_import_now);
+        assert!(!bundles[0].import_conflict);
+        assert_eq!(
+            bundles[0].import_destination.as_deref(),
+            Some(
+                import_root
+                    .join("bundle_1234567890")
+                    .to_string_lossy()
+                    .as_ref()
+            )
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_bundle_dto_marks_import_destination_conflict() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-list-conflict");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
+
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
+
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
+        assert!(!bundles[0].can_import_now);
+        assert!(bundles[0].import_conflict);
+        assert_eq!(
+            bundles[0].import_blocking_reason.as_deref(),
+            Some("destination_exists")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -6880,6 +4805,7 @@ mod tests {
     fn prune_staged_bundle_dtos_at_removes_expired_bundles() {
         let dir = unique_bundle_temp_dir("desktop-bundle-prune");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let expired_root = create_desktop_test_bundle(&dir, "expired", "bundle_expired");
         let fresh_root = create_desktop_test_bundle(&dir, "fresh", "bundle_fresh");
         nekodrop_storage::stage_bundle_directory(&expired_root, &staging_root).unwrap();
@@ -6889,7 +4815,7 @@ mod tests {
         let pruned = prune_staged_bundle_dtos_at(&staging_root, cutoff).unwrap();
 
         assert_eq!(pruned, vec!["bundle_expired"]);
-        let remaining = list_staged_bundle_dtos_at(&staging_root).unwrap();
+        let remaining = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
         assert_eq!(remaining.len(), 1);
         assert_eq!(remaining[0].bundle_id, "bundle_fresh");
 
@@ -7119,6 +5045,7 @@ mod tests {
     fn local_bridge_authorized_client_can_pass_import_gate() {
         let dir = unique_bundle_temp_dir("local-bridge-authorized-import");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let authorizations = vec![local_bridge_authorization(
             "local-agent-app",
             &[LocalBridgePermissionScope::BundleImportRequest],
@@ -7145,6 +5072,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &authorizations,
             1_500,
         )
@@ -7162,6 +5090,7 @@ mod tests {
     fn local_bridge_expired_authorization_requires_confirmation_again() {
         let dir = unique_bundle_temp_dir("local-bridge-expired-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let authorizations = vec![local_bridge_authorization(
             "local-agent-app",
             &[LocalBridgePermissionScope::BundleImportRequest],
@@ -7188,6 +5117,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &authorizations,
             1_500,
         )
@@ -7291,6 +5221,7 @@ mod tests {
     fn local_bridge_runtime_stores_pending_authorization_request() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let request = serde_json::json!({
             "kind": "authorization.request",
@@ -7315,6 +5246,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_000,
@@ -7342,6 +5274,7 @@ mod tests {
     fn confirmed_runtime_authorization_allows_future_mutating_request() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-confirmed-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let auth_request = serde_json::json!({
             "kind": "authorization.request",
@@ -7380,6 +5313,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_000,
@@ -7396,6 +5330,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_600,
@@ -7416,6 +5351,7 @@ mod tests {
     fn authorized_local_bridge_bundle_send_is_queued_as_pending_action() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-send-action");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -7449,6 +5385,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -7498,6 +5435,7 @@ mod tests {
     fn authorized_local_bridge_bundle_import_is_queued_as_pending_action() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-import-action");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -7529,6 +5467,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -7556,6 +5495,7 @@ mod tests {
     fn unauthorized_local_bridge_bundle_mutation_is_not_queued() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-no-pending-action");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let import_request = serde_json::json!({
             "kind": "bundle.import",
@@ -7577,6 +5517,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8367,6 +6308,7 @@ mod tests {
         let runtime = LocalBridgeRuntimeState::default();
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-event");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         runtime
             .authorizations
             .lock()
@@ -8417,6 +6359,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8446,6 +6389,7 @@ mod tests {
     fn authorized_local_bridge_client_can_poll_action_updated_events_by_scope() {
         let dir = unique_bundle_temp_dir("local-bridge-action-updated-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime.authorizations.lock().unwrap().extend([
             local_bridge_authorization(
@@ -8519,6 +6463,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8545,6 +6490,7 @@ mod tests {
     fn authorized_local_bridge_client_can_poll_runtime_events() {
         let dir = unique_bundle_temp_dir("local-bridge-events-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8593,6 +6539,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8614,6 +6561,7 @@ mod tests {
     fn authorized_local_bridge_client_can_poll_action_results() {
         let dir = unique_bundle_temp_dir("local-bridge-action-results-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8666,6 +6614,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8694,6 +6643,7 @@ mod tests {
     fn local_bridge_action_results_are_scoped_to_client_and_permission() {
         let dir = unique_bundle_temp_dir("local-bridge-action-results-scope");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8778,6 +6728,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             2_500,
@@ -8796,6 +6747,7 @@ mod tests {
     fn local_bridge_event_poll_returns_only_events_after_cursor() {
         let dir = unique_bundle_temp_dir("local-bridge-events-after");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -8853,6 +6805,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8869,9 +6822,118 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_event_poll_returns_cursor_metadata_for_paging() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-cursor-page");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            ));
+        for (event_id, bytes_transferred) in [
+            ("bridge-event-1", 10_u64),
+            ("bridge-event-2", 20_u64),
+            ("bridge-event-3", 30_u64),
+        ] {
+            push_local_bridge_runtime_event(
+                &runtime,
+                nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                    nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                        event_id: event_id.to_string(),
+                        transfer_id: "transfer-1".to_string(),
+                        phase: nekolink_protocol::LocalBridgeTransferPhase::Sending,
+                        bytes_transferred,
+                        total_bytes: 100,
+                    },
+                ),
+            )
+            .unwrap();
+        }
+        let first_page_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-page-1",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 1
+            }
+        })
+        .to_string();
+
+        let first_page = handle_local_bridge_request_with_runtime_at(
+            &first_page_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+        let second_page_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-page-2",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": first_page.events_next_after_id,
+                "limit": 2
+            }
+        })
+        .to_string();
+        let second_page = handle_local_bridge_request_with_runtime_at(
+            &second_page_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_600,
+        )
+        .unwrap();
+
+        assert_eq!(first_page.events.len(), 1);
+        assert_eq!(first_page.events_last_id.as_deref(), Some("bridge-event-1"));
+        assert_eq!(
+            first_page.events_next_after_id.as_deref(),
+            Some("bridge-event-1")
+        );
+        assert!(first_page.events_has_more);
+        assert_eq!(second_page.events.len(), 2);
+        assert_eq!(
+            second_page.events[0]["payload"]["event_id"].as_str(),
+            Some("bridge-event-2")
+        );
+        assert_eq!(
+            second_page.events_last_id.as_deref(),
+            Some("bridge-event-3")
+        );
+        assert!(!second_page.events_has_more);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn local_bridge_event_poll_can_wait_for_new_events() {
         let dir = unique_bundle_temp_dir("local-bridge-events-long-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = Arc::new(LocalBridgeRuntimeState::default());
         runtime
             .authorizations
@@ -8921,6 +6983,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             true,
             1_500,
@@ -8942,6 +7005,7 @@ mod tests {
     fn local_bridge_event_poll_requires_authorized_client_scope() {
         let dir = unique_bundle_temp_dir("local-bridge-events-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         push_local_bridge_runtime_event(
             &runtime,
@@ -8980,6 +7044,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -8997,6 +7062,7 @@ mod tests {
     fn local_bridge_event_poll_timeout_does_not_delay_pending_auth() {
         let dir = unique_bundle_temp_dir("local-bridge-events-pending-auth-no-wait");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         let poll_request = serde_json::json!({
             "kind": "events.poll",
@@ -9020,6 +7086,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             true,
             1_500,
@@ -9101,6 +7168,7 @@ mod tests {
     fn local_bridge_event_poll_reads_events_from_producers() {
         let dir = unique_bundle_temp_dir("local-bridge-produced-events-poll");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .authorizations
@@ -9159,6 +7227,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_500,
@@ -9177,6 +7246,7 @@ mod tests {
     fn confirmed_runtime_authorization_is_saved_for_restart() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-persisted-auth");
         let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
         let authorizations_path = dir.join("local_bridge_authorizations.json");
         let runtime = LocalBridgeRuntimeState::default();
         let auth_request = serde_json::json!({
@@ -9202,6 +7272,7 @@ mod tests {
             &[],
             None,
             &staging_root,
+            &import_root,
             &runtime,
             false,
             1_000,
@@ -9812,390 +7883,4 @@ fn now_ms() -> u128 {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default()
-}
-
-fn string_paths_to_path_bufs(paths: Vec<String>) -> Result<Vec<PathBuf>, String> {
-    if paths.is_empty() {
-        return Err("请至少输入一个文件或文件夹路径".into());
-    }
-
-    paths
-        .into_iter()
-        .map(|path| normalize_user_path(&path))
-        .collect()
-}
-
-fn path_bufs_to_strings(paths: &[PathBuf]) -> Vec<String> {
-    paths
-        .iter()
-        .map(|path| path.display().to_string())
-        .collect()
-}
-
-fn parse_paths_text(paths_text: &str) -> Result<Vec<PathBuf>, String> {
-    let paths = paths_text
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(|line| line.trim_matches('"').trim_matches('\'').to_string())
-        .collect::<Vec<_>>();
-
-    string_paths_to_path_bufs(paths)
-}
-
-fn normalize_user_path(path: &str) -> Result<PathBuf, String> {
-    let path = strip_outer_path_quotes(path);
-    validate_user_path_text(path)?;
-    let expanded = expand_home_dir(path);
-    if !expanded.exists() {
-        return Err(format!("路径不存在：{}", expanded.display()));
-    }
-    Ok(expanded)
-}
-
-fn strip_outer_path_quotes(path: &str) -> &str {
-    let trimmed_start = path.trim_start();
-    let maybe_quoted = trimmed_start.trim_end();
-    if maybe_quoted.len() >= 2 {
-        let bytes = maybe_quoted.as_bytes();
-        let first = bytes[0];
-        let last = bytes[bytes.len() - 1];
-        if (first == b'"' && last == b'"') || (first == b'\'' && last == b'\'') {
-            return &maybe_quoted[1..maybe_quoted.len() - 1];
-        }
-    }
-    trimmed_start
-}
-
-fn validate_user_path_text(path: &str) -> Result<(), String> {
-    if path.contains('\u{fffd}') {
-        return Err(
-            "路径编码已经损坏，里面出现了 �。请重新用系统文件选择器选择文件，或从原始位置重新复制路径。"
-                .to_string(),
-        );
-    }
-
-    if let Some(reason) = windows_unsafe_user_path_reason(path) {
-        return Err(format!(
-            "Windows 不安全路径：{reason}。请重命名文件/文件夹后再发送，或重新选择正确路径。"
-        ));
-    }
-
-    Ok(())
-}
-
-fn windows_unsafe_user_path_reason(path: &str) -> Option<String> {
-    for (index, component) in path
-        .split(['/', '\\'])
-        .filter(|component| !component.is_empty())
-        .enumerate()
-    {
-        if index == 0 && is_windows_drive_prefix(component) {
-            continue;
-        }
-        if component.ends_with(' ') || component.ends_with('.') {
-            return Some(format!("路径片段不能以空格或点结尾：{component}"));
-        }
-        if component
-            .chars()
-            .any(|ch| matches!(ch, '<' | '>' | '"' | '|' | '?' | '*'))
-        {
-            return Some(format!("路径片段包含 Windows 非法字符：{component}"));
-        }
-        if component.contains(':') {
-            return Some(format!("路径片段包含 ADS 或非法冒号：{component}"));
-        }
-        if is_windows_reserved_user_path_component(component) {
-            return Some(format!("路径片段使用了 Windows 保留名称：{component}"));
-        }
-    }
-    None
-}
-
-fn is_windows_drive_prefix(component: &str) -> bool {
-    let bytes = component.as_bytes();
-    bytes.len() == 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':'
-}
-
-fn is_windows_reserved_user_path_component(component: &str) -> bool {
-    let stem = component.split('.').next().unwrap_or(component);
-    let upper = stem.to_ascii_uppercase();
-    matches!(
-        upper.as_str(),
-        "CON"
-            | "PRN"
-            | "AUX"
-            | "NUL"
-            | "COM1"
-            | "COM2"
-            | "COM3"
-            | "COM4"
-            | "COM5"
-            | "COM6"
-            | "COM7"
-            | "COM8"
-            | "COM9"
-            | "LPT1"
-            | "LPT2"
-            | "LPT3"
-            | "LPT4"
-            | "LPT5"
-            | "LPT6"
-            | "LPT7"
-            | "LPT8"
-            | "LPT9"
-    )
-}
-
-fn expand_home_dir(path: &str) -> PathBuf {
-    if path == "~" {
-        return home_dir().unwrap_or_else(|| PathBuf::from(path));
-    }
-
-    if let Some(rest) = path.strip_prefix("~/") {
-        if let Some(home) = home_dir() {
-            return home.join(rest);
-        }
-    }
-
-    PathBuf::from(path)
-}
-
-fn default_receive_dir() -> PathBuf {
-    home_dir()
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join("Downloads")
-        .join("NekoDrop")
-}
-
-fn home_dir() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
-
-fn bind_available_listener(bind_host: &str, requested_port: u16) -> Result<TcpListener, String> {
-    let mut last_error = None;
-
-    for offset in 0..20 {
-        let Some(port) = requested_port.checked_add(offset) else {
-            break;
-        };
-        match TcpListener::bind((bind_host, port)) {
-            Ok(listener) => return Ok(listener),
-            Err(error) => last_error = Some(format!("{bind_host}:{port}: {error}")),
-        }
-    }
-
-    Err(format!(
-        "无法监听端口，从 {requested_port} 起连续尝试失败：{}",
-        last_error.unwrap_or_else(|| "没有可用端口".to_string())
-    ))
-}
-
-#[derive(Debug, Clone, Copy)]
-enum PathDialogKind {
-    Files,
-    Folders,
-    SingleFolder,
-    BundleSourceFolder,
-}
-
-fn parse_dialog_output(output: &[u8]) -> Vec<String> {
-    String::from_utf8_lossy(output)
-        .lines()
-        .map(|line| line.trim_start_matches('\u{feff}').trim())
-        .filter(|line| !line.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-#[cfg(any(target_os = "windows", test))]
-fn windows_dialog_script(kind: PathDialogKind) -> String {
-    let picker_script = match kind {
-        PathDialogKind::Files => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.OpenFileDialog
-$dialog.Multiselect = $true
-$dialog.Title = '选择要发送的文件'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.FileNames -join "`n"
-}
-"#
-        }
-        PathDialogKind::Folders => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择要发送的文件夹'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.SelectedPath
-}
-"#
-        }
-        PathDialogKind::SingleFolder => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择接收目录'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.SelectedPath
-}
-"#
-        }
-        PathDialogKind::BundleSourceFolder => {
-            r#"
-Add-Type -AssemblyName System.Windows.Forms
-$dialog = New-Object System.Windows.Forms.FolderBrowserDialog
-$dialog.Description = '选择资料包来源目录'
-if ($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-  $dialog.SelectedPath
-}
-"#
-        }
-    };
-
-    format!(
-        r#"
-$utf8NoBom = New-Object System.Text.UTF8Encoding -ArgumentList $false
-[Console]::OutputEncoding = $utf8NoBom
-$OutputEncoding = $utf8NoBom
-{picker_script}
-"#
-    )
-}
-
-#[cfg(target_os = "macos")]
-fn choose_paths(kind: PathDialogKind) -> Result<Vec<String>, String> {
-    let script = match kind {
-        PathDialogKind::Files => {
-            r#"
-set pickedItems to choose file with prompt "选择要发送的文件" with multiple selections allowed
-set outputText to ""
-repeat with pickedItem in pickedItems
-  set outputText to outputText & POSIX path of pickedItem & linefeed
-end repeat
-return outputText
-"#
-        }
-        PathDialogKind::Folders => {
-            r#"
-set pickedItems to choose folder with prompt "选择要发送的文件夹" with multiple selections allowed
-set outputText to ""
-repeat with pickedItem in pickedItems
-  set outputText to outputText & POSIX path of pickedItem & linefeed
-end repeat
-return outputText
-"#
-        }
-        PathDialogKind::SingleFolder => {
-            r#"
-set pickedItem to choose folder with prompt "选择接收目录"
-return POSIX path of pickedItem
-"#
-        }
-        PathDialogKind::BundleSourceFolder => {
-            r#"
-set pickedItem to choose folder with prompt "选择资料包来源目录"
-return POSIX path of pickedItem
-"#
-        }
-    };
-
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .output()
-        .map_err(|error| format!("无法打开系统选择窗口：{error}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        if stderr.contains("User canceled") || stderr.contains("-128") {
-            return Ok(Vec::new());
-        }
-        return Err(format!("系统选择窗口失败：{}", stderr.trim()));
-    }
-
-    Ok(parse_dialog_output(&output.stdout))
-}
-
-#[cfg(target_os = "windows")]
-fn choose_paths(kind: PathDialogKind) -> Result<Vec<String>, String> {
-    let script = windows_dialog_script(kind);
-
-    let output = Command::new("powershell")
-        .args(["-NoProfile", "-STA", "-Command", &script])
-        .output()
-        .map_err(|error| format!("无法打开系统选择窗口：{error}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("系统选择窗口失败：{}", stderr.trim()));
-    }
-
-    Ok(parse_dialog_output(&output.stdout))
-}
-
-#[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-fn choose_paths(kind: PathDialogKind) -> Result<Vec<String>, String> {
-    let mut args = vec!["--file-selection".to_string()];
-    match kind {
-        PathDialogKind::Files => {
-            args.push("--multiple".to_string());
-            args.push("--separator=\n".to_string());
-            args.push("--title=选择要发送的文件".to_string());
-        }
-        PathDialogKind::Folders => {
-            args.push("--directory".to_string());
-            args.push("--multiple".to_string());
-            args.push("--separator=\n".to_string());
-            args.push("--title=选择要发送的文件夹".to_string());
-        }
-        PathDialogKind::SingleFolder => {
-            args.push("--directory".to_string());
-            args.push("--title=选择接收目录".to_string());
-        }
-        PathDialogKind::BundleSourceFolder => {
-            args.push("--directory".to_string());
-            args.push("--title=选择资料包来源目录".to_string());
-        }
-    }
-
-    let output = Command::new("zenity")
-        .args(args)
-        .output()
-        .map_err(|error| format!("无法打开系统选择窗口：{error}"))?;
-
-    if !output.status.success() {
-        return Ok(Vec::new());
-    }
-
-    Ok(parse_dialog_output(&output.stdout))
-}
-
-fn open_path_with_system(path: PathBuf) -> Result<(), String> {
-    #[cfg(target_os = "macos")]
-    let mut command = {
-        let mut command = Command::new("open");
-        command.arg(&path);
-        command
-    };
-
-    #[cfg(target_os = "windows")]
-    let mut command = {
-        let mut command = Command::new("explorer");
-        command.arg(&path);
-        command
-    };
-
-    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
-    let mut command = {
-        let mut command = Command::new("xdg-open");
-        command.arg(&path);
-        command
-    };
-
-    command
-        .spawn()
-        .map_err(|error| format!("无法打开 {}：{error}", path.display()))?;
-    Ok(())
 }

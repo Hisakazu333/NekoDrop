@@ -71,6 +71,9 @@ export interface LocalBridgeResponseDto {
   transfer_status: TransferStatusDto | null;
   action_results: LocalBridgePendingActionResultDto[];
   events: unknown[];
+  events_last_id: string | null;
+  events_next_after_id: string | null;
+  events_has_more: boolean;
 }
 
 export interface LocalBridgeAuthorizationDto {
@@ -277,6 +280,9 @@ export interface ReceivedBundleDto {
   staging_status: "saved" | "imported" | "deleted" | "import_failed" | "expired" | string;
   can_import_now: boolean;
   import_path: string | null;
+  import_destination: string | null;
+  import_conflict: boolean;
+  import_blocking_reason: "destination_exists" | "not_importable" | string | null;
 }
 
 export interface ManualBundleCreateDto {
