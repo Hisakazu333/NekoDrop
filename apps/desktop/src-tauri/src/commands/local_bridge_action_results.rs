@@ -1,0 +1,164 @@
+use nekolink_protocol::{BundleType, LocalBridgeActionLifecycleStatus};
+
+use crate::app_state::{
+    LocalBridgePendingAction, LocalBridgePendingActionResult, LocalBridgePendingImportBundleAction,
+    LocalBridgePendingSendBundleAction,
+};
+
+use super::bundle_helpers::{bundle_type_from_label, bundle_type_label};
+use super::dto::LocalBridgeBundleSendPreflightDto;
+
+pub(super) fn local_bridge_bundle_import_result(
+    status: &str,
+    action: &LocalBridgePendingImportBundleAction,
+    reason: Option<&str>,
+    message: &str,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    LocalBridgePendingActionResult {
+        request_id: action.request_id.clone(),
+        action_kind: "bundle.import".to_string(),
+        client_id: action.client.client_id.clone(),
+        client_display_name: action.client.display_name.clone(),
+        status: status.to_string(),
+        lifecycle_status: Some(
+            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
+        ),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        bundle_id: bundle_id.map(str::to_string),
+        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+        bundle_root: None,
+        target_device_id: None,
+        require_trusted_device: None,
+        requested_at_ms: action.requested_at_ms,
+        claimed_at_ms: now_ms,
+    }
+}
+
+pub(super) fn local_bridge_bundle_send_result_from_preflight(
+    status: &str,
+    preflight: &LocalBridgeBundleSendPreflightDto,
+    action: &LocalBridgePendingSendBundleAction,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    local_bridge_bundle_send_result(
+        status,
+        action,
+        preflight.bundle_id.as_deref(),
+        preflight
+            .bundle_type
+            .as_deref()
+            .and_then(bundle_type_from_label),
+        preflight.reason.as_deref(),
+        &preflight.message,
+        now_ms,
+    )
+}
+
+pub(super) fn local_bridge_bundle_send_result(
+    status: &str,
+    action: &LocalBridgePendingSendBundleAction,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    reason: Option<&str>,
+    message: &str,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    LocalBridgePendingActionResult {
+        request_id: action.request_id.clone(),
+        action_kind: "bundle.send".to_string(),
+        client_id: action.client.client_id.clone(),
+        client_display_name: action.client.display_name.clone(),
+        status: status.to_string(),
+        lifecycle_status: Some(
+            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
+        ),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        bundle_id: bundle_id.map(str::to_string),
+        bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+        bundle_root: Some(action.bundle_root.clone()),
+        target_device_id: action.target_device_id.clone(),
+        require_trusted_device: Some(action.require_trusted_device),
+        requested_at_ms: action.requested_at_ms,
+        claimed_at_ms: now_ms,
+    }
+}
+
+pub(super) fn local_bridge_action_lifecycle_result(
+    action: &LocalBridgePendingAction,
+    lifecycle_status: LocalBridgeActionLifecycleStatus,
+    reason: Option<&str>,
+    message: &str,
+    bundle_id: Option<&str>,
+    bundle_type: Option<BundleType>,
+    target_device_id: Option<&str>,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => LocalBridgePendingActionResult {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.send".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            lifecycle_status: Some(
+                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            ),
+            reason: reason.map(str::to_string),
+            message: message.to_string(),
+            bundle_id: bundle_id.map(str::to_string),
+            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+            bundle_root: Some(action.bundle_root.clone()),
+            target_device_id: target_device_id
+                .map(str::to_string)
+                .or_else(|| action.target_device_id.clone()),
+            require_trusted_device: Some(action.require_trusted_device),
+            requested_at_ms: action.requested_at_ms,
+            claimed_at_ms: now_ms,
+        },
+        LocalBridgePendingAction::ImportBundle(action) => LocalBridgePendingActionResult {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.import".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            lifecycle_status: Some(
+                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            ),
+            reason: reason.map(str::to_string),
+            message: message.to_string(),
+            bundle_id: bundle_id.map(str::to_string),
+            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+            bundle_root: None,
+            target_device_id: None,
+            require_trusted_device: None,
+            requested_at_ms: action.requested_at_ms,
+            claimed_at_ms: now_ms,
+        },
+    }
+}
+
+pub(super) fn local_bridge_lifecycle_status_from_result(
+    status: &str,
+    reason: Option<&str>,
+) -> &'static str {
+    if reason == Some("bundle_import_conflict") {
+        return LocalBridgeActionLifecycleStatus::Conflict.as_str();
+    }
+    match status {
+        "queued" => LocalBridgeActionLifecycleStatus::Queued.as_str(),
+        "running" => LocalBridgeActionLifecycleStatus::Running.as_str(),
+        "completed" => LocalBridgeActionLifecycleStatus::Succeeded.as_str(),
+        "cancelled" => LocalBridgeActionLifecycleStatus::Cancelled.as_str(),
+        "failed" | "failed_preflight" => LocalBridgeActionLifecycleStatus::Failed.as_str(),
+        _ => LocalBridgeActionLifecycleStatus::Failed.as_str(),
+    }
+}
+
+fn local_bridge_lifecycle_status_label(status: LocalBridgeActionLifecycleStatus) -> &'static str {
+    status.as_str()
+}
