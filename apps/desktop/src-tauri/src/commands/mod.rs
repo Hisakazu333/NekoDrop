@@ -22,12 +22,8 @@ use nekodrop_service::{
     TransferReceiveReport, TransferSecurityMode,
 };
 use nekodrop_storage::{
-    build_resume_plan_for_files, create_manual_bundle_directory,
-    delete_staged_bundle as delete_staged_bundle_storage, detect_bundle_directory,
-    import_staged_bundle as import_staged_bundle_storage,
-    list_staged_bundles as list_staged_bundles_storage, plan_staged_bundle_import,
-    prune_staged_bundles_older_than, ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan,
-    StagedBundle,
+    build_resume_plan_for_files, create_manual_bundle_directory, detect_bundle_directory,
+    ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan,
 };
 use nekolink_protocol::{
     BundleSender, BundleType, DeviceIdentity, LocalBridgeActionLifecycleStatus,
@@ -44,6 +40,7 @@ mod device_dtos;
 mod dto;
 mod path_dialog;
 mod receive_diagnostics;
+mod staged_bundles;
 mod transfer_dtos;
 mod transfer_feedback;
 mod transfer_targets;
@@ -62,6 +59,10 @@ use path_dialog::{
     open_path_with_system, PathDialogKind,
 };
 use receive_diagnostics::{receive_port_diagnostics_from_session, receive_session_to_dto};
+use staged_bundles::{
+    delete_staged_bundle_at, find_staged_bundle_dto_at, import_staged_bundle_at,
+    list_staged_bundle_dtos_at, prune_staged_bundle_dtos_at, validate_safe_bundle_id,
+};
 use transfer_dtos::{
     receive_report_to_dto, send_report_to_dto, source_plan_to_dto, transfer_scan_progress_to_dto,
     transfer_security_mode_label,
@@ -1905,118 +1906,6 @@ fn emit_transfer_scan_progress(app: &AppHandle, progress: TransferPlanScanProgre
         TRANSFER_SCAN_PROGRESS_EVENT,
         transfer_scan_progress_to_dto(progress),
     );
-}
-
-fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &std::path::Path) -> ReceivedBundleDto {
-    let manifest = &staged.detected.manifest;
-    let plan = plan_staged_bundle_import(&staged.staging_path, import_root).ok();
-    ReceivedBundleDto {
-        bundle_id: manifest.bundle_id.clone(),
-        bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
-        display_name: manifest.display_name.clone(),
-        source_app: manifest.source_app.clone(),
-        file_count: manifest.summary.file_count,
-        total_bytes: manifest.summary.total_bytes,
-        staging_path: staged.staging_path.display().to_string(),
-        import_allowed: staged.detected.import_policy
-            == nekodrop_storage::BundleImportPolicy::ImportAllowed,
-        staging_status: "saved".to_string(),
-        can_import_now: plan
-            .as_ref()
-            .map(|plan| plan.can_import_now)
-            .unwrap_or(false),
-        import_path: None,
-        import_destination: plan
-            .as_ref()
-            .map(|plan| plan.destination_path.display().to_string()),
-        import_conflict: plan
-            .as_ref()
-            .map(|plan| plan.destination_exists)
-            .unwrap_or(false),
-        import_blocking_reason: plan.and_then(|plan| plan.blocking_reason),
-    }
-}
-
-fn list_staged_bundle_dtos_at(
-    staging_root: &std::path::Path,
-    import_root: &std::path::Path,
-) -> Result<Vec<ReceivedBundleDto>, String> {
-    list_staged_bundles_storage(staging_root)
-        .map_err(|error| error.to_string())
-        .map(|bundles| {
-            bundles
-                .iter()
-                .map(|bundle| staged_bundle_to_dto(bundle, import_root))
-                .collect()
-        })
-}
-
-fn find_staged_bundle_dto_at(
-    staging_root: &std::path::Path,
-    import_root: &std::path::Path,
-    bundle_id: &str,
-) -> Result<Option<ReceivedBundleDto>, String> {
-    Ok(list_staged_bundle_dtos_at(staging_root, import_root)?
-        .into_iter()
-        .find(|bundle| bundle.bundle_id == bundle_id))
-}
-
-fn prune_staged_bundle_dtos_at(
-    staging_root: &std::path::Path,
-    cutoff: SystemTime,
-) -> Result<Vec<String>, String> {
-    prune_staged_bundles_older_than(staging_root, cutoff).map_err(|error| error.to_string())
-}
-
-fn delete_staged_bundle_at(
-    staging_root: &std::path::Path,
-    bundle_id: &str,
-) -> Result<bool, String> {
-    validate_safe_bundle_id(bundle_id)?;
-    delete_staged_bundle_storage(staging_root, bundle_id).map_err(|error| error.to_string())
-}
-
-fn import_staged_bundle_at(
-    staging_root: &std::path::Path,
-    import_root: &std::path::Path,
-    bundle_id: &str,
-) -> Result<ReceivedBundleDto, String> {
-    validate_safe_bundle_id(bundle_id)?;
-    let staged_path = staging_root.join(bundle_id);
-    let imported = import_staged_bundle_storage(&staged_path, import_root)
-        .map_err(|error| error.to_string())?;
-    let import_path = imported.destination_path.display().to_string();
-    Ok(ReceivedBundleDto {
-        bundle_id: imported.bundle_id,
-        bundle_type: bundle_type_label(imported.bundle_type).to_string(),
-        display_name: imported.display_name,
-        source_app: imported.source_app,
-        file_count: imported.file_count,
-        total_bytes: imported.total_bytes,
-        staging_path: staged_path.display().to_string(),
-        import_allowed: true,
-        staging_status: "imported".to_string(),
-        can_import_now: false,
-        import_path: Some(import_path.clone()),
-        import_destination: Some(import_path),
-        import_conflict: false,
-        import_blocking_reason: None,
-    })
-}
-
-fn validate_safe_bundle_id(bundle_id: &str) -> Result<(), String> {
-    let trimmed = bundle_id.trim();
-    if trimmed.is_empty()
-        || trimmed != bundle_id
-        || bundle_id.contains('/')
-        || bundle_id.contains('\\')
-        || bundle_id.contains("..")
-        || bundle_id.contains(':')
-        || bundle_id.contains('\0')
-    {
-        return Err(format!("bundle_id 不安全: {bundle_id}"));
-    }
-    Ok(())
 }
 
 fn handle_local_bridge_request_at(
