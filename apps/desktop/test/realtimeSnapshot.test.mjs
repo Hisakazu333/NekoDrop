@@ -6,6 +6,7 @@ const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8
 const tauriSource = readFileSync(new URL("../src/tauri.ts", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const commandsSource = readFileSync(new URL("../src-tauri/src/commands/mod.rs", import.meta.url), "utf8");
+const commandDtoSource = readFileSync(new URL("../src-tauri/src/commands/dto.rs", import.meta.url), "utf8");
 
 function functionBody(source, name) {
   const start = source.indexOf(`async function ${name}(`);
@@ -38,7 +39,7 @@ test("realtime refresh uses one desktop snapshot IPC instead of separate status 
 
 test("desktop realtime snapshot command is typed and registered", () => {
   assert.match(tauriSource, /"get_desktop_realtime_snapshot"/);
-  assert.match(commandsSource, /pub struct DesktopRealtimeSnapshotDto/);
+  assert.match(commandDtoSource, /pub struct DesktopRealtimeSnapshotDto/);
   assert.match(commandsSource, /pub fn get_desktop_realtime_snapshot/);
   assert.match(mainSource, /commands::get_desktop_realtime_snapshot/);
 });
