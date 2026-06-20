@@ -30,8 +30,7 @@ use nekodrop_storage::{
     StagedBundle,
 };
 use nekolink_protocol::{
-    BundlePermissionScope, BundlePermissions, BundleSecretsPolicy, BundleSender, BundleType,
-    BundleWriteMode, BundleWritePermission, DeviceIdentity, LocalBridgeActionLifecycleStatus,
+    BundleSender, BundleType, DeviceIdentity, LocalBridgeActionLifecycleStatus,
     LocalBridgeActionUpdatedEvent, LocalBridgeAuthorizationRequest,
     LocalBridgeBundleSendPreflightEvent, LocalBridgeBundleSendPreflightStatus,
     LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
@@ -40,6 +39,7 @@ use nekolink_protocol::{
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
 
+mod bundle_helpers;
 mod device_dtos;
 mod dto;
 mod path_dialog;
@@ -50,6 +50,10 @@ mod transfer_targets;
 mod user_paths;
 pub use dto::*;
 
+use bundle_helpers::{
+    bundle_type_from_label, bundle_type_label, manual_bundle_id, manual_bundle_permissions,
+    parse_bundle_type, sha256_hex,
+};
 use device_dtos::{
     device_identity_to_dto, device_to_dto, discovery_status_snapshot, trusted_device_to_dto,
 };
@@ -4205,31 +4209,6 @@ fn parse_local_bridge_permission_scope(value: &str) -> Result<LocalBridgePermiss
     }
 }
 
-fn bundle_type_label(bundle_type: nekolink_protocol::BundleType) -> &'static str {
-    match bundle_type {
-        nekolink_protocol::BundleType::Skill => "skill",
-        nekolink_protocol::BundleType::Session => "session",
-        nekolink_protocol::BundleType::Workspace => "workspace",
-        nekolink_protocol::BundleType::AgentProfile => "agent_profile",
-        nekolink_protocol::BundleType::ConfigSnapshot => "config_snapshot",
-    }
-}
-
-fn parse_bundle_type(value: &str) -> Result<BundleType, String> {
-    match value {
-        "skill" => Ok(BundleType::Skill),
-        "session" => Ok(BundleType::Session),
-        "workspace" => Ok(BundleType::Workspace),
-        "agent_profile" => Ok(BundleType::AgentProfile),
-        "config_snapshot" => Ok(BundleType::ConfigSnapshot),
-        _ => Err(format!("不支持的资料包类型：{value}")),
-    }
-}
-
-fn bundle_type_from_label(value: &str) -> Option<BundleType> {
-    parse_bundle_type(value).ok()
-}
-
 fn received_root_name(report: &TransferReceiveReport) -> String {
     if !report.root_name.trim().is_empty() {
         return report.root_name.clone();
@@ -4267,73 +4246,6 @@ fn current_utc_timestamp() -> String {
     OffsetDateTime::now_utc()
         .format(&Rfc3339)
         .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
-}
-
-fn manual_bundle_id(
-    display_name: &str,
-    bundle_type: &BundleType,
-    source_path: &std::path::Path,
-) -> String {
-    let mut slug = display_name
-        .trim()
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '-'
-            }
-        })
-        .collect::<String>();
-    slug = slug.trim_matches('-').to_string();
-    if slug.is_empty() {
-        slug = match bundle_type {
-            BundleType::Skill => "skill".to_string(),
-            BundleType::Session => "session".to_string(),
-            BundleType::Workspace => "workspace".to_string(),
-            BundleType::AgentProfile => "agent-profile".to_string(),
-            BundleType::ConfigSnapshot => "config-snapshot".to_string(),
-        };
-    }
-    let source_hash = sha256_hex(source_path.display().to_string().as_bytes());
-    format!("bundle_{slug}_{}", &source_hash[..8.min(source_hash.len())])
-}
-
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    hex::encode(hasher.finalize())
-}
-
-fn manual_bundle_permissions(bundle_type: &BundleType) -> BundlePermissions {
-    let requested_scopes = match bundle_type {
-        BundleType::Skill => vec![BundlePermissionScope::SkillInstall],
-        BundleType::Session => vec![BundlePermissionScope::SessionImport],
-        BundleType::Workspace => vec![BundlePermissionScope::WorkspaceImport],
-        BundleType::AgentProfile => vec![BundlePermissionScope::AgentProfileImport],
-        BundleType::ConfigSnapshot => vec![BundlePermissionScope::ConfigImport],
-    };
-
-    let target = match bundle_type {
-        BundleType::Skill => "bundle.skill",
-        BundleType::Session => "bundle.session",
-        BundleType::Workspace => "bundle.workspace",
-        BundleType::AgentProfile => "bundle.agent_profile",
-        BundleType::ConfigSnapshot => "bundle.config_snapshot",
-    };
-
-    BundlePermissions {
-        requested_scopes,
-        writes: vec![BundleWritePermission {
-            target: target.to_string(),
-            mode: BundleWriteMode::ManualImport,
-        }],
-        secrets: BundleSecretsPolicy {
-            contains_secrets: false,
-            redacted_fields: Vec::new(),
-        },
-    }
 }
 
 fn push_receive_failure_history(
