@@ -4,7 +4,8 @@ use nekodrop_core::Device;
 use nekodrop_network::{ConnectionTicket, Endpoint};
 use nekolink_protocol::{DeviceIdentity, SignedSessionIdentityBinding};
 
-use super::{friendly_transfer_error, ReceiveTrustContext};
+use super::transfer_feedback::friendly_transfer_error;
+use super::ReceiveTrustContext;
 use crate::app_state::AppState;
 use crate::network::local_lan_ips;
 use crate::transfer_history::TransferHistoryRecord;
