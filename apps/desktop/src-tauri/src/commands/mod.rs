@@ -22,8 +22,7 @@ use nekodrop_service::{
     TransferReceiveReport, TransferSecurityMode,
 };
 use nekodrop_storage::{
-    build_resume_plan_for_files, create_manual_bundle_directory, detect_bundle_directory,
-    ManualBundleCreateRequest, ResumeExpectedFile, ResumePlan,
+    create_manual_bundle_directory, detect_bundle_directory, ManualBundleCreateRequest,
 };
 use nekolink_protocol::{
     BundleSender, BundleType, DeviceIdentity, LocalBridgeActionLifecycleStatus,
@@ -64,8 +63,9 @@ use staged_bundles::{
     list_staged_bundle_dtos_at, prune_staged_bundle_dtos_at, validate_safe_bundle_id,
 };
 use transfer_dtos::{
+    pending_offer_to_dto, pending_pairing_request_to_dto, pending_resume_summary_from_offer,
     receive_report_to_dto, send_report_to_dto, source_plan_to_dto, transfer_scan_progress_to_dto,
-    transfer_security_mode_label,
+    transfer_security_mode_label, transfer_status_to_dto, transfer_to_dto,
 };
 use transfer_feedback::friendly_transfer_error;
 use transfer_targets::{
@@ -103,7 +103,6 @@ use crate::trusted_devices::{
 };
 
 const TRANSFER_SCAN_PROGRESS_EVENT: &str = "transfer_scan_progress";
-const RECEIVE_FILE_PREVIEW_LIMIT: usize = 20;
 const STAGED_BUNDLE_RETENTION_SECS: u64 = 14 * 24 * 60 * 60;
 const LOCAL_BRIDGE_EVENT_QUEUE_LIMIT: usize = 256;
 const LOCAL_BRIDGE_PENDING_ACTION_QUEUE_LIMIT: usize = 128;
@@ -4174,132 +4173,6 @@ fn push_receive_failure_history(
     let _ = push_transfer_history_record(transfer_history, record);
 }
 
-fn pending_offer_to_dto(offer: &PendingReceiveOffer) -> PendingReceiveOfferDto {
-    PendingReceiveOfferDto {
-        transfer_id: offer.transfer_id.clone(),
-        root_name: offer.root_name.clone(),
-        file_count: offer.file_count,
-        total_bytes: offer.total_bytes,
-        sender_device_id: offer.sender_device_id.clone(),
-        sender_device_name: offer.sender_device_name.clone(),
-        sender_public_key_fingerprint: offer.sender_public_key_fingerprint.clone(),
-        preview_file_count: offer.files.len().min(RECEIVE_FILE_PREVIEW_LIMIT),
-        files: offer
-            .files
-            .iter()
-            .take(RECEIVE_FILE_PREVIEW_LIMIT)
-            .map(|file| PendingReceiveFileDto {
-                manifest_path: file.manifest_path.clone(),
-                size: file.size,
-                sha256: file.sha256.clone(),
-            })
-            .collect(),
-        resume_summary: offer.resume_summary.map(|summary| ReceiveResumeSummaryDto {
-            resumable_file_count: summary.resumable_file_count,
-            completed_file_count: summary.completed_file_count,
-            partial_file_count: summary.partial_file_count,
-            received_bytes: summary.received_bytes,
-        }),
-    }
-}
-
-fn pending_resume_summary_from_offer(
-    receive_dir: &std::path::Path,
-    offer: &TransferOffer,
-) -> Option<PendingReceiveResumeSummary> {
-    let mut expected_files = Vec::with_capacity(offer.files.len());
-    for file in &offer.files {
-        expected_files.push(
-            ResumeExpectedFile::new(
-                file.manifest_path.clone(),
-                file.size,
-                Some(file.sha256.clone()),
-            )
-            .ok()?,
-        );
-    }
-
-    let plan =
-        build_resume_plan_for_files(receive_dir, &offer.transfer_id, &expected_files).ok()?;
-    pending_resume_summary_from_plan(&plan)
-}
-
-fn pending_resume_summary_from_plan(plan: &ResumePlan) -> Option<PendingReceiveResumeSummary> {
-    if plan.is_empty() {
-        return None;
-    }
-
-    Some(PendingReceiveResumeSummary {
-        resumable_file_count: plan.files.len(),
-        completed_file_count: plan.completed_file_count(),
-        partial_file_count: plan.partial_file_count(),
-        received_bytes: plan.total_received_bytes(),
-    })
-}
-
-fn pending_pairing_request_to_dto(request: &PendingPairingRequest) -> PendingPairingRequestDto {
-    PendingPairingRequestDto {
-        request_id: request.request_id.clone(),
-        device_id: request.device_id.clone(),
-        device_name: request.device_name.clone(),
-        platform: request.platform.clone(),
-        host: request.host.clone(),
-        port: request.port,
-        public_key: request.public_key.clone(),
-        public_key_fingerprint: request.public_key_fingerprint.clone(),
-        pairing_code: request.pairing_code.clone(),
-    }
-}
-
-fn transfer_status_to_dto(status: &TransferStatusState) -> TransferStatusDto {
-    let progress = if status.total_bytes == 0 {
-        0.0
-    } else {
-        (status.bytes_transferred as f32 / status.total_bytes as f32).clamp(0.0, 1.0)
-    };
-    TransferStatusDto {
-        direction: status.direction.clone(),
-        phase: status.phase.clone(),
-        root_name: status.root_name.clone(),
-        file_count: status.file_count,
-        file_index: status.file_index,
-        current_file: status.current_file.clone(),
-        bytes_transferred: status.bytes_transferred,
-        total_bytes: status.total_bytes,
-        progress,
-        message: status.message.clone(),
-        updated_at_ms: status.updated_at_ms,
-    }
-}
-
-fn transfer_to_dto(record: &TransferHistoryRecord) -> TransferDto {
-    let progress = if record.total_bytes == 0 {
-        0.0
-    } else {
-        (record.transferred_bytes as f32 / record.total_bytes as f32).clamp(0.0, 1.0)
-    };
-    TransferDto {
-        id: record.id.clone(),
-        root_name: record.root_name.clone(),
-        peer_device_id: record.peer_device_id.clone(),
-        peer_name: record.peer_name.clone(),
-        target_host: record.target_host.clone(),
-        source_paths: record.source_paths.clone(),
-        received_paths: record.received_paths.clone(),
-        direction: record.direction.clone(),
-        status: record.status.clone(),
-        file_count: record.file_count,
-        total_bytes: record.total_bytes,
-        transferred_bytes: record.transferred_bytes,
-        progress,
-        receive_dir: record.receive_dir.clone(),
-        error_message: record.error_message.clone(),
-        security_mode: record.security_mode.clone(),
-        created_at_ms: record.created_at_ms,
-        updated_at_ms: record.updated_at_ms,
-    }
-}
-
 fn wait_for_receive_decision(
     offer: &TransferOffer,
     pending_receive_offer: &Arc<Mutex<Option<PendingReceiveOffer>>>,
@@ -4879,6 +4752,7 @@ fn current_transfer_progress(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::commands::transfer_dtos::RECEIVE_FILE_PREVIEW_LIMIT;
     use nekolink_protocol::{
         BundleChecksums, BundleCompatibility, BundleFile, BundleManifest, BundlePermissionScope,
         BundlePermissions, BundleSecretsPolicy, BundleSender, BundleSummary, BundleType,
