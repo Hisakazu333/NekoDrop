@@ -46,6 +46,26 @@ export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
     : "已暂存，但缺少导入权限或包含敏感内容";
 }
 
+export function bundleImportPlanLine(bundle: ReceivedBundleDto) {
+  if (bundle.staging_status !== "saved" && bundle.staging_status !== "import_failed") return null;
+  if (bundle.import_conflict_count > 0) {
+    const conflicted = bundle.import_plan_files
+      .filter((file) => file.destination_exists)
+      .slice(0, 2)
+      .map((file) => file.manifest_path);
+    return conflicted.length > 0
+      ? `冲突：${conflicted.join("、")}${bundle.import_conflict_count > conflicted.length ? " 等" : ""}`
+      : `冲突文件 ${bundle.import_conflict_count} 个`;
+  }
+  if (bundle.can_import_now && bundle.import_plan_files.length > 0) {
+    return `将导入 ${bundle.import_plan_files.length} 个文件`;
+  }
+  if (bundle.import_destination && bundle.import_allowed) {
+    return `目标：${bundle.import_destination}`;
+  }
+  return null;
+}
+
 export function markBundleDeleted(bundle: ReceivedBundleDto): ReceivedBundleDto {
   return {
     ...bundle,

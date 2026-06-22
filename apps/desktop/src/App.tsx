@@ -28,6 +28,7 @@ import {
 } from "./securityState";
 import {
   bundleStatusLabel,
+  bundleImportPlanLine,
   bundleTypeLabel,
   markBundleDeleted,
   markBundleImportFailed,
@@ -2827,37 +2828,41 @@ function ReceivePanel({
         <section className="receive-section">
           <h2 className="receive-section-title">待处理资料</h2>
           <div className="bundle-list">
-            {visibleStagedBundles.map((bundle) => (
-              <div className="bundle-line" key={bundle.bundle_id}>
-                <div className="bundle-copy">
-                  <span>
-                    {bundle.display_name} · {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {formatBytes(bundle.total_bytes)}
-                  </span>
-                  <small>{receiveBundleImportHint(bundle)}</small>
-                </div>
-                <div className="bundle-actions">
-                  <strong>{bundleStatusLabel(bundle)}</strong>
-                  {bundle.can_import_now ? (
+            {visibleStagedBundles.map((bundle) => {
+              const importPlanLine = bundleImportPlanLine(bundle);
+              return (
+                <div className="bundle-line" key={bundle.bundle_id}>
+                  <div className="bundle-copy">
+                    <span>
+                      {bundle.display_name} · {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {formatBytes(bundle.total_bytes)}
+                    </span>
+                    <small>{receiveBundleImportHint(bundle)}</small>
+                    {importPlanLine ? <small>{importPlanLine}</small> : null}
+                  </div>
+                  <div className="bundle-actions">
+                    <strong>{bundleStatusLabel(bundle)}</strong>
+                    {bundle.can_import_now ? (
+                      <button
+                        className="primary-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(bundle)}
+                        type="button"
+                      >
+                        导入
+                      </button>
+                    ) : null}
                     <button
-                      className="primary-button"
-                      disabled={busy === "bundle-import"}
-                      onClick={() => onImportStagedBundle(bundle)}
+                      className="text-button"
+                      disabled={busy === "receive"}
+                      onClick={() => onDeleteStagedBundle(bundle)}
                       type="button"
                     >
-                      导入
+                      删除
                     </button>
-                  ) : null}
-                  <button
-                    className="text-button"
-                    disabled={busy === "receive"}
-                    onClick={() => onDeleteStagedBundle(bundle)}
-                    type="button"
-                  >
-                    删除
-                  </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       ) : null}
