@@ -2657,6 +2657,20 @@ input:focus {
   white-space: nowrap;
 }
 
+.console-copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.console-copy small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .console-empty {
   justify-content: flex-start;
   color: var(--text-3);
