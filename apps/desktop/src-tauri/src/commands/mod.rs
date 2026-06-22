@@ -3506,6 +3506,7 @@ fn local_bridge_pending_authorization_response(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 
@@ -4715,6 +4716,16 @@ mod tests {
                     .as_ref()
             )
         );
+        assert_eq!(bundles[0].import_conflict_count, 0);
+        assert_eq!(bundles[0].import_plan_files.len(), 2);
+        assert_eq!(
+            bundles[0].import_plan_files[0].manifest_path,
+            "files/manifest.json"
+        );
+        assert!(bundles[0]
+            .import_plan_files
+            .iter()
+            .all(|file| !file.destination_exists));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4738,6 +4749,46 @@ mod tests {
             bundles[0].import_blocking_reason.as_deref(),
             Some("destination_exists")
         );
+        assert_eq!(bundles[0].import_conflict_count, 0);
+        assert_eq!(bundles[0].import_plan_files.len(), 2);
+        assert!(bundles[0]
+            .import_plan_files
+            .iter()
+            .all(|file| !file.destination_exists));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_bundle_dto_includes_conflicting_import_files() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-list-file-conflict");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890").join("files")).unwrap();
+        fs::write(
+            import_root
+                .join("bundle_1234567890")
+                .join("files")
+                .join("content.bin"),
+            b"existing",
+        )
+        .unwrap();
+
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
+
+        assert_eq!(bundles.len(), 1);
+        assert!(!bundles[0].can_import_now);
+        assert!(bundles[0].import_conflict);
+        assert_eq!(bundles[0].import_conflict_count, 1);
+        assert_eq!(bundles[0].import_plan_files.len(), 2);
+        let conflicted = bundles[0]
+            .import_plan_files
+            .iter()
+            .find(|file| file.destination_exists)
+            .expect("one planned import file should conflict");
+        assert_eq!(conflicted.manifest_path, "files/content.bin");
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -6915,6 +6966,7 @@ mod tests {
             Some("bridge-event-1")
         );
         assert!(first_page.events_has_more);
+        assert_eq!(first_page.events_cursor_state, "ok");
         assert_eq!(second_page.events.len(), 2);
         assert_eq!(
             second_page.events[0]["payload"]["event_id"].as_str(),
@@ -6925,6 +6977,123 @@ mod tests {
             Some("bridge-event-3")
         );
         assert!(!second_page.events_has_more);
+        assert_eq!(second_page.events_cursor_state, "ok");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_reports_missing_cursor() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-missing-cursor");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            ));
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                    event_id: "bridge-event-current".to_string(),
+                    transfer_id: "transfer-1".to_string(),
+                    phase: nekolink_protocol::LocalBridgeTransferPhase::Sending,
+                    bytes_transferred: 10,
+                    total_bytes: 100,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-missing-cursor",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": "bridge-event-pruned",
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 0);
+        assert_eq!(response.events_cursor_state, "missing");
+        assert_eq!(response.events_last_id, None);
+        assert_eq!(response.events_next_after_id, None);
+        assert!(!response.events_has_more);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_reports_empty_cursor_state() {
+        let dir = unique_bundle_temp_dir("local-bridge-events-empty-cursor");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            ));
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-empty-cursor",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 0);
+        assert_eq!(response.events_cursor_state, "empty");
 
         fs::remove_dir_all(dir).unwrap();
     }

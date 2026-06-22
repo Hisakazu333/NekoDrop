@@ -75,6 +75,25 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth
 
 NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。
 
+如果只想看完整接入顺序，可以让脚本生成一组通用请求：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs workflow \
+  --mode roundtrip \
+  --bundle-root /absolute/path/to/exported-bundle \
+  --target-device-id neko-device-target \
+  --staged-bundle-id bundle_1234567890 \
+  --type session
+```
+
+输出顺序固定为：
+
+```text
+authorize -> send -> observe -> inspect -> import -> results
+```
+
+真实应用可以拆开执行这些步骤；不需要把自己的数据目录暴露给 NekoDrop。
+
 ## 发送
 
 ```json
@@ -189,14 +208,35 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 - `events_last_id`
 - `events_next_after_id`
 - `events_has_more`
+- `events_cursor_state`
 
 adapter 下一次请求可以把 `events_next_after_id` 放回 `after_event_id`。如果 `events_has_more=true`，应继续拉下一页，不要等下一轮定时器。
+
+`events_cursor_state` 有三个常见值：
+
+- `ok`：cursor 有效，可以继续使用 `events_next_after_id`。
+- `empty`：当前没有事件，保留原来的 cursor 或继续用 `null`。
+- `missing`：传入的 `after_event_id` 已经不在 NekoDrop 的事件队列里，通常是本地应用停太久或队列被裁剪。adapter 应丢弃旧 cursor，从 `after_event_id=null` 重新拉快照。
+
+脚本可以从一次 bridge response 中取下一次 cursor：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs cursor \
+  --response bridge-events-response.json
+```
 
 这只是本机短等待，不是公网长连接。
 
 ## 导入
 
 接收端 adapter 不直接从任意路径导入。它先请求 NekoDrop 导入 staged bundle 到本机导入区：
+
+导入前可以先读取 staged bundle 详情：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs request detail \
+  --staged-bundle-id bundle_1234567890
+```
 
 ```json
 {
@@ -223,6 +263,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 ```
 
 如果同名 bundle 已经存在，NekoDrop 不覆盖，会返回 `bundle_import_conflict`。adapter 需要让用户选择重命名、跳过或合并。
+
+这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
 
 ## 样例边界
 

@@ -194,6 +194,8 @@ Show clear transfer states from real wire modes:
 
 Avoid vague states such as "secure". Old history records may not have a recorded transfer mode; in that case the UI should show no security badge instead of guessing.
 
+Plain compatibility is only for ordinary manual file transfer. If a received directory looks like a NekoLink bundle, the legacy plain path keeps it as normal files and does not stage it for import. Bundle staging and local-bridge import are allowed only after an encrypted session path; sensitive upper-layer data such as session, skill, workspace, agent profile, and config snapshot must not rely on `legacy_plain`.
+
 ## Local Bridge
 
 The desktop local bridge is a loopback API for local apps. It is not a LAN API and must not be advertised to nearby devices.

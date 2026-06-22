@@ -126,6 +126,8 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         import_destination: None,
         import_conflict: false,
         import_blocking_reason: None,
+        import_plan_files: Vec::new(),
+        import_conflict_count: 0,
     }
 }
 

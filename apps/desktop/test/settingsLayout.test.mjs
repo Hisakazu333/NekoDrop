@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const localBridgeStateSource = readFileSync(new URL("../src/localBridgeState.ts", import.meta.url), "utf8");
 
 test("receive policy segment columns match the visible policy options", () => {
   const optionsBlock = appSource.match(/const RECEIVE_POLICY_OPTIONS[\s\S]+?\];/);
@@ -78,8 +79,11 @@ test("local integration settings expose a generic read-only bridge self check", 
   assert.match(appSource, /onRunLocalBridgeSelfCheck=\{runLocalBridgeSelfCheck\}/);
   assert.match(appSource, /<SettingsRow label="待授权">/);
   assert.match(appSource, /<SettingsRow label="执行结果">/);
-  assert.match(appSource, /localBridgeActionResultReasonLabel/);
-  assert.match(appSource, /bundle_import_conflict/);
+  assert.match(appSource, /localBridgePendingActionStateLine/);
+  assert.match(appSource, /localBridgeActionResultDetailLine/);
+  assert.match(appSource, /className="console-copy"/);
+  assert.match(localBridgeStateSource, /localBridgeActionResultReasonLabel/);
+  assert.match(localBridgeStateSource, /bundle_import_conflict/);
 });
 
 test("device overview uses discovery guidance when no nearby devices are online", () => {

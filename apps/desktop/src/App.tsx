@@ -28,6 +28,7 @@ import {
 } from "./securityState";
 import {
   bundleStatusLabel,
+  bundleImportPlanLine,
   bundleTypeLabel,
   markBundleDeleted,
   markBundleImportFailed,
@@ -57,6 +58,17 @@ import {
   shouldShowSendPageStatusLine,
   shouldShowTransferProgressMeter
 } from "./transferProgress";
+import {
+  localBridgeActionResultDetailLine,
+  localBridgeActionResultSummary,
+  localBridgePendingActionKindLabel,
+  localBridgePendingActionStateLine,
+  localBridgePendingActionSummary,
+  localBridgePendingActionTitle,
+  localBridgeRuntimeStatusLine,
+  localBridgeScopeLabel,
+  localBridgeStatusLabel
+} from "./localBridgeState";
 import type {
   AppSnapshot,
   DesktopRealtimeSnapshotDto,
@@ -2568,9 +2580,12 @@ function IntegrationSettings({
           {localBridgePendingActions.length > 0 ? (
             localBridgePendingActions.map((action) => (
               <div className="console-row" key={action.request_id}>
-                <span title={localBridgePendingActionTitle(action)}>
-                  {action.client_display_name} · {localBridgePendingActionSummary(action)}
-                </span>
+                <div className="console-copy">
+                  <span title={localBridgePendingActionTitle(action)}>
+                    {action.client_display_name} · {localBridgePendingActionSummary(action)}
+                  </span>
+                  <small>{localBridgePendingActionStateLine(action)}</small>
+                </div>
                 <div className="settings-inline-actions">
                   <button
                     className="text-button"
@@ -2593,9 +2608,12 @@ function IntegrationSettings({
           {localBridgeActionResults.length > 0 ? (
             localBridgeActionResults.slice(0, 5).map((result) => (
               <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
-                <span title={result.message}>
-                  {result.client_display_name} · {localBridgeActionResultSummary(result)}
-                </span>
+                <div className="console-copy">
+                  <span title={result.message}>
+                    {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                  </span>
+                  <small>{localBridgeActionResultDetailLine(result)}</small>
+                </div>
               </div>
             ))
           ) : (
@@ -2827,37 +2845,41 @@ function ReceivePanel({
         <section className="receive-section">
           <h2 className="receive-section-title">待处理资料</h2>
           <div className="bundle-list">
-            {visibleStagedBundles.map((bundle) => (
-              <div className="bundle-line" key={bundle.bundle_id}>
-                <div className="bundle-copy">
-                  <span>
-                    {bundle.display_name} · {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {formatBytes(bundle.total_bytes)}
-                  </span>
-                  <small>{receiveBundleImportHint(bundle)}</small>
-                </div>
-                <div className="bundle-actions">
-                  <strong>{bundleStatusLabel(bundle)}</strong>
-                  {bundle.can_import_now ? (
+            {visibleStagedBundles.map((bundle) => {
+              const importPlanLine = bundleImportPlanLine(bundle);
+              return (
+                <div className="bundle-line" key={bundle.bundle_id}>
+                  <div className="bundle-copy">
+                    <span>
+                      {bundle.display_name} · {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {formatBytes(bundle.total_bytes)}
+                    </span>
+                    <small>{receiveBundleImportHint(bundle)}</small>
+                    {importPlanLine ? <small>{importPlanLine}</small> : null}
+                  </div>
+                  <div className="bundle-actions">
+                    <strong>{bundleStatusLabel(bundle)}</strong>
+                    {bundle.can_import_now ? (
+                      <button
+                        className="primary-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(bundle)}
+                        type="button"
+                      >
+                        导入
+                      </button>
+                    ) : null}
                     <button
-                      className="primary-button"
-                      disabled={busy === "bundle-import"}
-                      onClick={() => onImportStagedBundle(bundle)}
+                      className="text-button"
+                      disabled={busy === "receive"}
+                      onClick={() => onDeleteStagedBundle(bundle)}
                       type="button"
                     >
-                      导入
+                      删除
                     </button>
-                  ) : null}
-                  <button
-                    className="text-button"
-                    disabled={busy === "receive"}
-                    onClick={() => onDeleteStagedBundle(bundle)}
-                    type="button"
-                  >
-                    删除
-                  </button>
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </section>
       ) : null}
@@ -3892,95 +3914,6 @@ function lastPathSegment(path: string) {
   const normalized = path.trim().replace(/\\/g, "/").replace(/\/+$/, "");
   if (!normalized) return "资料包";
   return normalized.split("/").pop() || "资料包";
-}
-
-function localBridgeStatusLabel(status: string) {
-  if (status === "ok") return "可读取";
-  if (status === "pending_auth") return "等待确认";
-  if (status === "unsupported") return "不支持";
-  return status;
-}
-
-function localBridgeRuntimeStatusLine(status: LocalBridgeRuntimeStatusDto | null) {
-  if (!status) return "读取中";
-  if (!status.active) {
-    return status.last_error ? `未监听 · ${status.last_error}` : "未监听";
-  }
-  const auth = status.pending_authorization_client
-    ? ` · 等待 ${status.pending_authorization_client}`
-    : status.authorization_count > 0
-      ? ` · 已授权 ${status.authorization_count}`
-      : "";
-  const actions = status.pending_action_count > 0 ? ` · 待执行 ${status.pending_action_count}` : "";
-  return `${status.bind_host}:${status.port}${status.request_path}${auth}${actions}`;
-}
-
-function localBridgeScopeLabel(scope: LocalBridgePermissionScope) {
-  if (scope === "device.read") return "设备";
-  if (scope === "transfer.status.read") return "传输";
-  if (scope === "bundle.read") return "资料包";
-  if (scope === "bundle.send") return "发送";
-  if (scope === "bundle.import.request") return "导入";
-  return scope;
-}
-
-function localBridgePendingActionKindLabel(actionKind: string) {
-  if (actionKind === "bundle.send") return "发送资料包";
-  if (actionKind === "bundle.import") return "导入资料包";
-  return actionKind;
-}
-
-function localBridgePendingActionSummary(action: LocalBridgePendingActionDto) {
-  if (action.action_kind === "bundle.send") {
-    const type = action.bundle_type ? bundleTypeLabel(action.bundle_type) : "资料包";
-    const target = action.target_device_id ? ` -> ${action.target_device_id}` : "";
-    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}${target}`;
-  }
-  if (action.action_kind === "bundle.import") {
-    const type = action.expected_bundle_type ? bundleTypeLabel(action.expected_bundle_type) : "资料包";
-    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}`;
-  }
-  return localBridgePendingActionKindLabel(action.action_kind);
-}
-
-function localBridgePendingActionTitle(action: LocalBridgePendingActionDto) {
-  const target = action.target_device_id ?? action.staged_bundle_id ?? action.request_id;
-  return `${action.client_display_name} · ${localBridgePendingActionKindLabel(action.action_kind)} · ${target}`;
-}
-
-function localBridgeActionResultSummary(result: LocalBridgePendingActionResultDto) {
-  const kind = localBridgePendingActionKindLabel(result.action_kind);
-  const status = localBridgeActionResultStatusLabel(result.lifecycle_status ?? result.status);
-  const target = result.bundle_id ?? result.target_device_id ?? result.request_id;
-  const reason = result.reason ? ` · ${localBridgeActionResultReasonLabel(result.reason)}` : "";
-  return `${kind} · ${status}${reason} · ${target}`;
-}
-
-function localBridgeActionResultStatusLabel(status: string) {
-  if (status === "queued") return "排队中";
-  if (status === "running") return "执行中";
-  if (status === "succeeded") return "完成";
-  if (status === "conflict") return "有冲突";
-  if (status === "cancelled") return "已取消";
-  if (status === "completed") return "完成";
-  if (status === "failed") return "失败";
-  if (status === "ready") return "可执行";
-  if (status === "failed_preflight") return "预检失败";
-  return status;
-}
-
-function localBridgeActionResultReasonLabel(reason: string) {
-  if (reason === "bundle_root_missing") return "来源不存在";
-  if (reason === "bundle_manifest_missing") return "缺少清单";
-  if (reason === "bundle_invalid") return "校验失败";
-  if (reason === "bundle_type_mismatch") return "类型不匹配";
-  if (reason === "trusted_target_required") return "需要可信设备";
-  if (reason === "trusted_target_missing") return "目标未配对";
-  if (reason === "target_device_required") return "缺少目标设备";
-  if (reason === "bundle_send_failed") return "发送失败";
-  if (reason === "bundle_import_failed") return "导入失败";
-  if (reason === "bundle_import_conflict") return "已存在同名导入";
-  return reason;
 }
 
 function receivePolicyLabel(value: ReceivePolicyMode) {
