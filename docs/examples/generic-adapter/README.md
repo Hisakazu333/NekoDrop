@@ -75,6 +75,25 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth
 
 NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。
 
+如果只想看完整接入顺序，可以让脚本生成一组通用请求：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs workflow \
+  --mode roundtrip \
+  --bundle-root /absolute/path/to/exported-bundle \
+  --target-device-id neko-device-target \
+  --staged-bundle-id bundle_1234567890 \
+  --type session
+```
+
+输出顺序固定为：
+
+```text
+authorize -> send -> observe -> inspect -> import -> results
+```
+
+真实应用可以拆开执行这些步骤；不需要把自己的数据目录暴露给 NekoDrop。
+
 ## 发送
 
 ```json
@@ -212,6 +231,13 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
 
 接收端 adapter 不直接从任意路径导入。它先请求 NekoDrop 导入 staged bundle 到本机导入区：
 
+导入前可以先读取 staged bundle 详情：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs request detail \
+  --staged-bundle-id bundle_1234567890
+```
+
 ```json
 {
   "kind": "bundle.import",
@@ -237,6 +263,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 ```
 
 如果同名 bundle 已经存在，NekoDrop 不覆盖，会返回 `bundle_import_conflict`。adapter 需要让用户选择重命名、跳过或合并。
+
+这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
 
 ## 样例边界
 

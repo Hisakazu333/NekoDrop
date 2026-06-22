@@ -100,6 +100,103 @@ test("generic adapter sample prints local bridge request envelopes", () => {
   assert.equal(request.payload.require_trusted_device, true);
 });
 
+test("generic adapter sample prints import and detail request envelopes", () => {
+  const detailStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "detail",
+      "--staged-bundle-id",
+      "bundle_received_1"
+    ],
+    { encoding: "utf8" }
+  );
+  const importStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "import",
+      "--staged-bundle-id",
+      "bundle_received_1",
+      "--type",
+      "session"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const detailRequest = JSON.parse(detailStdout);
+  const importRequest = JSON.parse(importStdout);
+
+  assert.equal(detailRequest.kind, "bundle.detail");
+  assert.equal(detailRequest.payload.client.client_id, "generic.adapter.sample");
+  assert.equal(detailRequest.payload.staged_bundle_id, "bundle_received_1");
+  assert.equal(importRequest.kind, "bundle.import");
+  assert.equal(importRequest.payload.staged_bundle_id, "bundle_received_1");
+  assert.equal(importRequest.payload.expected_bundle_type, "session");
+});
+
+test("generic adapter sample prints action result query envelopes", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "results",
+      "--after-claimed-at-ms",
+      "1234",
+      "--limit",
+      "5"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const request = JSON.parse(stdout);
+
+  assert.equal(request.kind, "actions.results");
+  assert.equal(request.payload.client.client_id, "generic.adapter.sample");
+  assert.equal(request.payload.after_claimed_at_ms, 1234);
+  assert.equal(request.payload.limit, 5);
+});
+
+test("generic adapter sample prints a generic roundtrip workflow", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "roundtrip",
+      "--bundle-root",
+      "/tmp/bundle_adapter_sample",
+      "--target-device-id",
+      "neko-device-target",
+      "--staged-bundle-id",
+      "bundle_received_1",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+
+  assert.equal(workflow.client.client_id, "generic.adapter.sample");
+  assert.deepEqual(workflow.steps.map((step) => step.step), [
+    "authorize",
+    "send",
+    "observe",
+    "inspect",
+    "import",
+    "results"
+  ]);
+  assert.equal(workflow.steps[1].request.kind, "bundle.send");
+  assert.equal(workflow.steps[3].request.kind, "bundle.detail");
+  assert.equal(workflow.steps[4].request.kind, "bundle.import");
+  assert.equal(workflow.steps[5].request.kind, "actions.results");
+});
+
 test("generic adapter sample derives the next event cursor", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-cursor-"));
   const responsePath = join(tempRoot, "events-response.json");

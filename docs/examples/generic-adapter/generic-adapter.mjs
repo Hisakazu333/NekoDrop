@@ -44,6 +44,10 @@ async function main() {
     printJson(buildRequest(kind, parseFlags(rest)));
     return;
   }
+  if (command === "workflow") {
+    printJson(buildWorkflow(parseFlags(args)));
+    return;
+  }
   if (command === "post") {
     const [kind, ...rest] = args;
     await postRequest(kind, parseFlags(rest));
@@ -190,6 +194,16 @@ function buildRequest(kind, flags) {
       }
     };
   }
+  if (kind === "detail") {
+    return {
+      kind: "bundle.detail",
+      payload: {
+        request_id: flags["request-id"] ?? `adapter-detail-${Date.now()}`,
+        client: CLIENT,
+        staged_bundle_id: requireFlag(flags, "staged-bundle-id")
+      }
+    };
+  }
   if (kind === "events") {
     return {
       kind: "events.poll",
@@ -208,14 +222,73 @@ function buildRequest(kind, flags) {
       payload: {
         request_id: flags["request-id"] ?? `adapter-results-${Date.now()}`,
         client: CLIENT,
-        after_claimed_at_ms: flags["after-claimed-at-ms"] === undefined
+        after_claimed_at_ms: flags["after-claimed-at-ms"] === undefined || flags["after-claimed-at-ms"] === null
           ? null
           : Number(flags["after-claimed-at-ms"]),
         limit: Number(flags.limit ?? 20)
       }
     };
   }
-  throw new Error("request kind must be auth, send, import, events, or results");
+  throw new Error("request kind must be auth, send, detail, import, events, or results");
+}
+
+function buildWorkflow(flags) {
+  const mode = flags.mode ?? "send";
+  const steps = [];
+  steps.push({
+    step: "authorize",
+    request: buildRequest("auth", {
+      scope: ["device.read", "bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
+      reason: flags.reason ?? "Send and import user-selected bundles"
+    })
+  });
+  if (mode === "send" || mode === "roundtrip") {
+    steps.push({
+      step: "send",
+      request: buildRequest("send", {
+        "bundle-root": requireFlag(flags, "bundle-root"),
+        "target-device-id": requireFlag(flags, "target-device-id"),
+        type: requireKnownType(requireFlag(flags, "type")),
+        "require-trusted-device": flags["require-trusted-device"]
+      })
+    });
+  }
+  steps.push({
+    step: "observe",
+    request: buildRequest("events", {
+      "after-event-id": flags["after-event-id"] ?? null,
+      limit: flags.limit ?? 20,
+      "timeout-ms": flags["timeout-ms"] ?? 15000
+    })
+  });
+  if (mode === "import" || mode === "roundtrip") {
+    steps.push({
+      step: "inspect",
+      request: buildRequest("detail", {
+        "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
+      })
+    });
+    steps.push({
+      step: "import",
+      request: buildRequest("import", {
+        "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
+        type: requireKnownType(requireFlag(flags, "type"))
+      })
+    });
+  }
+  steps.push({
+    step: "results",
+    request: buildRequest("results", {
+      "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
+      limit: flags.limit ?? 20
+    })
+  });
+
+  return {
+    client: CLIENT,
+    mode,
+    steps
+  };
 }
 
 async function postRequest(kind, flags) {
@@ -365,9 +438,11 @@ function usage() {
   node generic-adapter.mjs export --source DIR --output DIR --bundle-id ID --type session --name NAME
   node generic-adapter.mjs request auth
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
+  node generic-adapter.mjs request detail --staged-bundle-id ID
   node generic-adapter.mjs request import --staged-bundle-id ID --type session
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results
+  node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }
