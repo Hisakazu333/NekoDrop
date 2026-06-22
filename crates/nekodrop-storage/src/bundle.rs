@@ -60,6 +60,17 @@ pub struct BundleImportPlan {
     pub can_import_now: bool,
     pub destination_exists: bool,
     pub blocking_reason: Option<String>,
+    pub files: Vec<BundleImportPlanFile>,
+    pub conflict_count: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleImportPlanFile {
+    pub manifest_path: String,
+    pub size: u64,
+    pub sha256: String,
+    pub destination_path: PathBuf,
+    pub destination_exists: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -523,10 +534,28 @@ pub fn plan_staged_bundle_import(
     let destination_path = import_root.join(&detected.manifest.bundle_id);
     let import_allowed = detected.import_policy == BundleImportPolicy::ImportAllowed;
     let destination_exists = destination_path.exists();
+    let files: Vec<BundleImportPlanFile> = detected
+        .manifest
+        .files
+        .iter()
+        .map(|file| {
+            let destination_path = destination_path.join(&file.path);
+            BundleImportPlanFile {
+                manifest_path: file.path.clone(),
+                size: file.size,
+                sha256: file.sha256.clone(),
+                destination_exists: destination_path.exists(),
+                destination_path,
+            }
+        })
+        .collect();
+    let conflict_count = files.iter().filter(|file| file.destination_exists).count();
     let blocking_reason = if !import_allowed {
         Some("not_importable".to_string())
     } else if destination_exists {
         Some("destination_exists".to_string())
+    } else if conflict_count > 0 {
+        Some("destination_file_exists".to_string())
     } else {
         None
     };
@@ -540,9 +569,11 @@ pub fn plan_staged_bundle_import(
         file_count: detected.manifest.summary.file_count,
         total_bytes: detected.manifest.summary.total_bytes,
         import_allowed,
-        can_import_now: import_allowed && !destination_exists,
+        can_import_now: import_allowed && !destination_exists && conflict_count == 0,
         destination_exists,
         blocking_reason,
+        files,
+        conflict_count,
     })
 }
 
@@ -1214,6 +1245,17 @@ mod tests {
         assert!(plan.can_import_now);
         assert!(!plan.destination_exists);
         assert_eq!(plan.blocking_reason, None);
+        assert_eq!(plan.conflict_count, 0);
+        assert_eq!(plan.files.len(), 2);
+        assert_eq!(plan.files[0].manifest_path, "files/manifest.json");
+        assert_eq!(
+            plan.files[0].destination_path,
+            import_root
+                .join("bundle_1234567890")
+                .join("files")
+                .join("manifest.json")
+        );
+        assert!(!plan.files[0].destination_exists);
         assert!(!import_root.exists());
 
         fs::remove_dir_all(dir).unwrap();
@@ -1235,6 +1277,50 @@ mod tests {
         assert!(plan.destination_exists);
         assert_eq!(plan.blocking_reason.as_deref(), Some("destination_exists"));
         assert!(!import_root.join("bundle_1234567890.importing").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn plans_file_level_import_conflicts_without_overwriting() {
+        let dir = unique_temp_dir("bundle-import-plan-file-conflict");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890").join("files")).unwrap();
+        fs::write(
+            import_root
+                .join("bundle_1234567890")
+                .join("files")
+                .join("content.bin"),
+            b"existing",
+        )
+        .unwrap();
+
+        let plan = plan_staged_bundle_import(&staged.staging_path, &import_root).unwrap();
+
+        assert!(plan.import_allowed);
+        assert!(!plan.can_import_now);
+        assert!(plan.destination_exists);
+        assert_eq!(plan.conflict_count, 1);
+        assert_eq!(plan.blocking_reason.as_deref(), Some("destination_exists"));
+        let conflicted = plan
+            .files
+            .iter()
+            .find(|file| file.destination_exists)
+            .expect("one bundle payload file should conflict");
+        assert_eq!(conflicted.manifest_path, "files/content.bin");
+        assert_eq!(
+            fs::read(
+                import_root
+                    .join("bundle_1234567890")
+                    .join("files")
+                    .join("content.bin")
+            )
+            .unwrap(),
+            b"existing"
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }

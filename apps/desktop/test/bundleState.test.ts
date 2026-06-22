@@ -26,6 +26,8 @@ function bundle(overrides: Partial<ReceivedBundleDto> = {}): ReceivedBundleDto {
     import_destination: "/tmp/imports/bundle_123",
     import_conflict: false,
     import_blocking_reason: null,
+    import_plan_files: [],
+    import_conflict_count: 0,
     ...overrides
   };
 }
@@ -83,4 +85,15 @@ test("labels import conflicts before the user retries import", () => {
   assert.equal(bundleStatusLabel(conflicted), "已存在");
   assert.equal(receiveBundleImportHint(conflicted), "同名资料已存在，当前不会覆盖");
   assert.equal(markBundleImportFailed(conflicted).can_import_now, false);
+});
+
+test("labels import conflicts with conflicting file counts", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_blocking_reason: "destination_exists",
+    import_conflict_count: 2
+  });
+
+  assert.equal(receiveBundleImportHint(conflicted), "有 2 个目标文件已存在，当前不会覆盖");
 });

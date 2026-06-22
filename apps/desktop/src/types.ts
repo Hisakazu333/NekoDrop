@@ -282,7 +282,17 @@ export interface ReceivedBundleDto {
   import_path: string | null;
   import_destination: string | null;
   import_conflict: boolean;
-  import_blocking_reason: "destination_exists" | "not_importable" | string | null;
+  import_blocking_reason: "destination_exists" | "destination_file_exists" | "not_importable" | string | null;
+  import_plan_files: BundleImportPlanFileDto[];
+  import_conflict_count: number;
+}
+
+export interface BundleImportPlanFileDto {
+  manifest_path: string;
+  size: number;
+  sha256: string;
+  destination_path: string;
+  destination_exists: boolean;
 }
 
 export interface ManualBundleCreateDto {

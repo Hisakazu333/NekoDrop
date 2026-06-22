@@ -4715,6 +4715,16 @@ mod tests {
                     .as_ref()
             )
         );
+        assert_eq!(bundles[0].import_conflict_count, 0);
+        assert_eq!(bundles[0].import_plan_files.len(), 2);
+        assert_eq!(
+            bundles[0].import_plan_files[0].manifest_path,
+            "files/manifest.json"
+        );
+        assert!(bundles[0]
+            .import_plan_files
+            .iter()
+            .all(|file| !file.destination_exists));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4738,6 +4748,46 @@ mod tests {
             bundles[0].import_blocking_reason.as_deref(),
             Some("destination_exists")
         );
+        assert_eq!(bundles[0].import_conflict_count, 0);
+        assert_eq!(bundles[0].import_plan_files.len(), 2);
+        assert!(bundles[0]
+            .import_plan_files
+            .iter()
+            .all(|file| !file.destination_exists));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_bundle_dto_includes_conflicting_import_files() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-list-file-conflict");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890").join("files")).unwrap();
+        fs::write(
+            import_root
+                .join("bundle_1234567890")
+                .join("files")
+                .join("content.bin"),
+            b"existing",
+        )
+        .unwrap();
+
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
+
+        assert_eq!(bundles.len(), 1);
+        assert!(!bundles[0].can_import_now);
+        assert!(bundles[0].import_conflict);
+        assert_eq!(bundles[0].import_conflict_count, 1);
+        assert_eq!(bundles[0].import_plan_files.len(), 2);
+        let conflicted = bundles[0]
+            .import_plan_files
+            .iter()
+            .find(|file| file.destination_exists)
+            .expect("one planned import file should conflict");
+        assert_eq!(conflicted.manifest_path, "files/content.bin");
 
         fs::remove_dir_all(dir).unwrap();
     }
