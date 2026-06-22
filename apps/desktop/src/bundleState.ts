@@ -31,7 +31,13 @@ export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
   if (bundle.staging_status === "import_failed") return "导入没有完成，暂存仍可重试";
   if (bundle.staging_status === "expired") return "暂存已过期清理";
   if (bundle.import_conflict || bundle.import_blocking_reason === "destination_exists") {
+    if ((bundle.import_conflict_count ?? 0) > 0) {
+      return `有 ${bundle.import_conflict_count} 个目标文件已存在，当前不会覆盖`;
+    }
     return "同名资料已存在，当前不会覆盖";
+  }
+  if (bundle.import_blocking_reason === "destination_file_exists") {
+    return "目标位置已有同名文件，当前不会覆盖";
   }
   if (bundle.can_import_now) return "可导入，导入前仍需要确认";
   if (bundle.import_allowed) return "已暂存，等待本机应用申请导入";
@@ -52,7 +58,7 @@ export function markBundleImportFailed(bundle: ReceivedBundleDto): ReceivedBundl
   return {
     ...bundle,
     staging_status: "import_failed",
-    can_import_now: bundle.import_allowed && !bundle.import_conflict
+    can_import_now: bundle.import_allowed && !bundle.import_conflict && (bundle.import_conflict_count ?? 0) === 0
   };
 }
 

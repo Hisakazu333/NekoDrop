@@ -10,8 +10,9 @@ pub mod space;
 pub use bundle::{
     create_manual_bundle_directory, delete_staged_bundle, detect_bundle_directory,
     import_staged_bundle, list_staged_bundles, plan_staged_bundle_import,
-    prune_staged_bundles_older_than, stage_bundle_directory, BundleImportPlan, BundleImportPolicy,
-    DetectedBundle, ImportedBundle, ManualBundleCreateRequest, StagedBundle,
+    prune_staged_bundles_older_than, stage_bundle_directory, BundleImportPlan,
+    BundleImportPlanFile, BundleImportPolicy, DetectedBundle, ImportedBundle,
+    ManualBundleCreateRequest, StagedBundle,
 };
 pub use checksum::{sha256_file, verify_sha256_file, Checksum, ChecksumAlgorithm};
 pub use chunk::{ChunkPlan, ChunkRange};

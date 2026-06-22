@@ -163,6 +163,17 @@ pub struct ReceivedBundleDto {
     pub import_destination: Option<String>,
     pub import_conflict: bool,
     pub import_blocking_reason: Option<String>,
+    pub import_plan_files: Vec<BundleImportPlanFileDto>,
+    pub import_conflict_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct BundleImportPlanFileDto {
+    pub manifest_path: String,
+    pub size: u64,
+    pub sha256: String,
+    pub destination_path: String,
+    pub destination_exists: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -5,15 +5,23 @@ use nekodrop_storage::{
     delete_staged_bundle as delete_staged_bundle_storage,
     import_staged_bundle as import_staged_bundle_storage,
     list_staged_bundles as list_staged_bundles_storage, plan_staged_bundle_import,
-    prune_staged_bundles_older_than, BundleImportPolicy, StagedBundle,
+    prune_staged_bundles_older_than, BundleImportPlan, BundleImportPolicy, StagedBundle,
 };
 
 use super::bundle_helpers::bundle_type_label;
-use super::dto::ReceivedBundleDto;
+use super::dto::{BundleImportPlanFileDto, ReceivedBundleDto};
 
 fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &Path) -> ReceivedBundleDto {
     let manifest = &staged.detected.manifest;
     let plan = plan_staged_bundle_import(&staged.staging_path, import_root).ok();
+    let plan_files = plan
+        .as_ref()
+        .map(import_plan_files_to_dto)
+        .unwrap_or_default();
+    let conflict_count = plan
+        .as_ref()
+        .map(|plan| plan.conflict_count)
+        .unwrap_or_default();
     ReceivedBundleDto {
         bundle_id: manifest.bundle_id.clone(),
         bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
@@ -34,9 +42,11 @@ fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &Path) -> ReceivedBu
             .map(|plan| plan.destination_path.display().to_string()),
         import_conflict: plan
             .as_ref()
-            .map(|plan| plan.destination_exists)
+            .map(|plan| plan.destination_exists || plan.conflict_count > 0)
             .unwrap_or(false),
         import_blocking_reason: plan.and_then(|plan| plan.blocking_reason),
+        import_plan_files: plan_files,
+        import_conflict_count: conflict_count,
     }
 }
 
@@ -104,7 +114,22 @@ pub(super) fn import_staged_bundle_at(
         import_destination: Some(import_path),
         import_conflict: false,
         import_blocking_reason: None,
+        import_plan_files: Vec::new(),
+        import_conflict_count: 0,
     })
+}
+
+fn import_plan_files_to_dto(plan: &BundleImportPlan) -> Vec<BundleImportPlanFileDto> {
+    plan.files
+        .iter()
+        .map(|file| BundleImportPlanFileDto {
+            manifest_path: file.manifest_path.clone(),
+            size: file.size,
+            sha256: file.sha256.clone(),
+            destination_path: file.destination_path.display().to_string(),
+            destination_exists: file.destination_exists,
+        })
+        .collect()
 }
 
 pub(super) fn validate_safe_bundle_id(bundle_id: &str) -> Result<(), String> {
