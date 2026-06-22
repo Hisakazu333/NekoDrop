@@ -100,6 +100,50 @@ test("generic adapter sample prints local bridge request envelopes", () => {
   assert.equal(request.payload.require_trusted_device, true);
 });
 
+test("generic adapter sample derives the next event cursor", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-cursor-"));
+  const responsePath = join(tempRoot, "events-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    events_next_after_id: "bridge-event-42",
+    events_cursor_state: "ok"
+  }));
+
+  const stdout = execFileSync(
+    process.execPath,
+    [sampleCli, "cursor", "--response", responsePath],
+    { encoding: "utf8" }
+  );
+
+  const cursor = JSON.parse(stdout);
+  assert.equal(cursor.after_event_id, "bridge-event-42");
+  assert.equal(cursor.cursor_state, "ok");
+  assert.equal(cursor.reset_required, false);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample resets missing event cursors", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-cursor-missing-"));
+  const responsePath = join(tempRoot, "events-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    events_next_after_id: null,
+    events_cursor_state: "missing"
+  }));
+
+  const stdout = execFileSync(
+    process.execPath,
+    [sampleCli, "cursor", "--response", responsePath],
+    { encoding: "utf8" }
+  );
+
+  const cursor = JSON.parse(stdout);
+  assert.equal(cursor.after_event_id, null);
+  assert.equal(cursor.cursor_state, "missing");
+  assert.equal(cursor.reset_required, true);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
 }
