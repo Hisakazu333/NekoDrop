@@ -14,6 +14,7 @@ pub(super) struct LocalBridgeEventPage {
     pub(super) last_event_id: Option<String>,
     pub(super) next_after_event_id: Option<String>,
     pub(super) has_more: bool,
+    pub(super) cursor_state: &'static str,
 }
 
 pub(super) fn local_bridge_read_only_response(
@@ -47,6 +48,7 @@ pub(super) fn local_bridge_read_only_response(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 
@@ -78,6 +80,7 @@ pub(super) fn local_bridge_read_only_unsupported_response(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 
@@ -108,6 +111,7 @@ pub(super) fn local_bridge_pending_confirmation_response(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 
@@ -139,6 +143,7 @@ pub(super) fn local_bridge_authorized_runtime_pending_response(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 
@@ -170,6 +175,7 @@ pub(super) fn local_bridge_events_response(
         events_last_id: page.last_event_id,
         events_next_after_id: page.next_after_event_id,
         events_has_more: page.has_more,
+        events_cursor_state: page.cursor_state.to_string(),
     }
 }
 
@@ -201,6 +207,7 @@ pub(super) fn local_bridge_action_results_response(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 
@@ -241,6 +248,7 @@ pub(super) fn local_bridge_pending_authorization_response_from_pending(
         events_last_id: None,
         events_next_after_id: None,
         events_has_more: false,
+        events_cursor_state: "empty".to_string(),
     }
 }
 

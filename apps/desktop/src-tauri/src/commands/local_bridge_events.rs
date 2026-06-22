@@ -12,6 +12,7 @@ pub(super) fn local_bridge_events_after(
     can_import_bundles: bool,
 ) -> Result<LocalBridgeEventPage, String> {
     let mut after_cursor = after_event_id.is_none();
+    let mut cursor_found = after_event_id.is_none();
     let mut output = Vec::new();
     let mut last_event_id = None;
     let mut next_after_event_id = None;
@@ -19,6 +20,9 @@ pub(super) fn local_bridge_events_after(
     for event in events {
         if !after_cursor {
             after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
+            if after_cursor {
+                cursor_found = true;
+            }
             continue;
         }
         if !local_bridge_event_is_allowed(
@@ -39,11 +43,19 @@ pub(super) fn local_bridge_events_after(
         last_event_id = Some(event_id.clone());
         next_after_event_id = Some(event_id);
     }
+    let cursor_state = if events.is_empty() {
+        "empty"
+    } else if cursor_found {
+        "ok"
+    } else {
+        "missing"
+    };
     Ok(LocalBridgeEventPage {
         events: output,
         last_event_id,
         next_after_event_id,
         has_more,
+        cursor_state,
     })
 }
 

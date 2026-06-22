@@ -74,6 +74,7 @@ export interface LocalBridgeResponseDto {
   events_last_id: string | null;
   events_next_after_id: string | null;
   events_has_more: boolean;
+  events_cursor_state: "ok" | "missing" | "empty" | string;
 }
 
 export interface LocalBridgeAuthorizationDto {
