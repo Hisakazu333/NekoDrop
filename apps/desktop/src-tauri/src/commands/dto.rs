@@ -299,6 +299,7 @@ pub struct LocalBridgeResponseDto {
     pub events_last_id: Option<String>,
     pub events_next_after_id: Option<String>,
     pub events_has_more: bool,
+    pub events_cursor_state: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
