@@ -49,6 +49,10 @@ async function main() {
     await postRequest(kind, parseFlags(rest));
     return;
   }
+  if (command === "cursor") {
+    printJson(nextCursorFromResponse(parseFlags(args)));
+    return;
+  }
   usage();
   process.exit(command ? 1 : 0);
 }
@@ -230,6 +234,24 @@ async function postRequest(kind, flags) {
   console.log(text);
 }
 
+function nextCursorFromResponse(flags) {
+  const responsePath = requireFlag(flags, "response");
+  const response = JSON.parse(readFileSync(responsePath, "utf8"));
+  const cursorState = response.events_cursor_state ?? "ok";
+  if (cursorState === "missing") {
+    return {
+      after_event_id: null,
+      cursor_state: cursorState,
+      reset_required: true
+    };
+  }
+  return {
+    after_event_id: response.events_next_after_id ?? null,
+    cursor_state: cursorState,
+    reset_required: false
+  };
+}
+
 function listFiles(root) {
   const files = [];
   for (const name of readdirSync(root).sort()) {
@@ -346,5 +368,6 @@ function usage() {
   node generic-adapter.mjs request import --staged-bundle-id ID --type session
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results
+  node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }

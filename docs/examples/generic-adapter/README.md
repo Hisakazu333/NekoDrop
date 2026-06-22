@@ -189,8 +189,22 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 - `events_last_id`
 - `events_next_after_id`
 - `events_has_more`
+- `events_cursor_state`
 
 adapter 下一次请求可以把 `events_next_after_id` 放回 `after_event_id`。如果 `events_has_more=true`，应继续拉下一页，不要等下一轮定时器。
+
+`events_cursor_state` 有三个常见值：
+
+- `ok`：cursor 有效，可以继续使用 `events_next_after_id`。
+- `empty`：当前没有事件，保留原来的 cursor 或继续用 `null`。
+- `missing`：传入的 `after_event_id` 已经不在 NekoDrop 的事件队列里，通常是本地应用停太久或队列被裁剪。adapter 应丢弃旧 cursor，从 `after_event_id=null` 重新拉快照。
+
+脚本可以从一次 bridge response 中取下一次 cursor：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs cursor \
+  --response bridge-events-response.json
+```
 
 这只是本机短等待，不是公网长连接。
 
