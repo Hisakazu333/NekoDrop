@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  bundleImportPlanLine,
   bundleStatusLabel,
   markBundleDeleted,
   markBundleImportFailed,
@@ -96,4 +97,66 @@ test("labels import conflicts with conflicting file counts", () => {
   });
 
   assert.equal(receiveBundleImportHint(conflicted), "有 2 个目标文件已存在，当前不会覆盖");
+});
+
+test("summarizes import plan file counts for importable bundles", () => {
+  const importable = bundle({
+    import_plan_files: [
+      {
+        manifest_path: "sessions/main.json",
+        destination_path: "/tmp/imports/sessions/main.json",
+        size: 12,
+        sha256: "a".repeat(64),
+        destination_exists: false
+      },
+      {
+        manifest_path: "workspace/state.json",
+        destination_path: "/tmp/imports/workspace/state.json",
+        size: 30,
+        sha256: "b".repeat(64),
+        destination_exists: false
+      }
+    ]
+  });
+
+  assert.equal(bundleImportPlanLine(importable), "将导入 2 个文件");
+});
+
+test("summarizes concrete import plan conflicts before import", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_blocking_reason: "destination_exists",
+    import_conflict_count: 3,
+    import_plan_files: [
+      {
+        manifest_path: "sessions/main.json",
+        destination_path: "/tmp/imports/sessions/main.json",
+        size: 12,
+        sha256: "a".repeat(64),
+        destination_exists: true
+      },
+      {
+        manifest_path: "workspace/state.json",
+        destination_path: "/tmp/imports/workspace/state.json",
+        size: 30,
+        sha256: "b".repeat(64),
+        destination_exists: true
+      },
+      {
+        manifest_path: "skills/code.json",
+        destination_path: "/tmp/imports/skills/code.json",
+        size: 9,
+        sha256: "c".repeat(64),
+        destination_exists: true
+      }
+    ]
+  });
+
+  assert.equal(bundleImportPlanLine(conflicted), "冲突：sessions/main.json、workspace/state.json 等");
+});
+
+test("does not show import plan lines for closed staged bundle states", () => {
+  assert.equal(bundleImportPlanLine(bundle({ staging_status: "imported" })), null);
+  assert.equal(bundleImportPlanLine(bundle({ staging_status: "deleted" })), null);
 });
