@@ -142,7 +142,9 @@ export interface LocalBridgePendingActionResultDto {
   conflict_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
   skipped_file_count: number;
   import_receipt_path: string | null;
+  has_import_receipt: boolean;
   rollback_file_count: number;
+  can_request_rollback: boolean;
   rolled_back_file_count: number;
   requested_at_ms: number;
   claimed_at_ms: number;

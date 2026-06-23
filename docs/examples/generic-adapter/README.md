@@ -207,11 +207,12 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 
 - `conflict_strategy`
 - `skipped_file_count`
-- `import_receipt_path`
+- `has_import_receipt`
 - `rollback_file_count`
-- `can_rollback_now`
-- `rollback_blocking_reason`
+- `can_request_rollback`
 - `rolled_back_file_count`
+
+普通 bridge response 不返回 NekoDrop 本机 `import_receipt_path`。adapter 应用 `has_import_receipt` 和 `can_request_rollback` 判断是否可以请求 `bundle.rollback`，不要依赖本机私有路径。
 
 常见 `reason`：
 
@@ -275,7 +276,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
 
 - `action.updated` 里的 `request_id` 是最稳定的关联键。
 - `queued` / `running` 只表示 NekoDrop 已接手动作，不代表业务完成。
-- `succeeded` 后再读 `actions.results`，拿 `import_receipt_path`、`rollback_file_count`、`rolled_back_file_count`。
+- `succeeded` 后再读 `actions.results`，拿 `has_import_receipt`、`can_request_rollback`、`rollback_file_count`、`rolled_back_file_count`。
 - `conflict` 时先读 `bundle.detail`，让用户选 `rename` 或 `skip_conflicts`，不要自动覆盖。
 - cursor 丢失时从 `after_event_id=null` 重新拉快照，再用本机保存的 request_id 去对齐结果。
 

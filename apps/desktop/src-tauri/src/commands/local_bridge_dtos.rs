@@ -35,7 +35,15 @@ pub(super) fn local_bridge_pending_action_result_to_dto(
         import_receipt_path: include_sensitive_paths
             .then(|| result.import_receipt_path.clone())
             .flatten(),
+        has_import_receipt: result.import_receipt_path.is_some(),
         rollback_file_count: result.rollback_file_count,
+        can_request_rollback: result.action_kind == "bundle.import"
+            && result.import_receipt_path.is_some()
+            && result.rollback_file_count > 0
+            && result
+                .lifecycle_status
+                .as_deref()
+                .is_some_and(|status| status == "succeeded"),
         rolled_back_file_count: result.rolled_back_file_count,
         requested_at_ms: result.requested_at_ms,
         claimed_at_ms: result.claimed_at_ms,
