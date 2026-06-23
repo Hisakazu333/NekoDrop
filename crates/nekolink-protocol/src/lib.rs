@@ -1933,6 +1933,8 @@ pub enum LocalBridgeRequest {
     BundleDetail(LocalBridgeBundleDetailRequest),
     #[serde(rename = "bundle.import")]
     ImportBundle(LocalBridgeImportBundleRequest),
+    #[serde(rename = "bundle.rollback")]
+    RollbackBundleImport(LocalBridgeRollbackBundleImportRequest),
     #[serde(rename = "authorization.request")]
     AuthorizationRequest(LocalBridgeAuthorizationRequest),
     #[serde(rename = "transfer.status")]
@@ -1982,6 +1984,13 @@ pub struct LocalBridgeImportBundleRequest {
     pub expected_bundle_type: Option<BundleType>,
     #[serde(default)]
     pub conflict_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeRollbackBundleImportRequest {
+    pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
+    pub bundle_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2146,6 +2155,7 @@ impl LocalBridgeRequest {
             Self::SendBundle(request) => request.validate(),
             Self::BundleDetail(request) => request.validate(),
             Self::ImportBundle(request) => request.validate(),
+            Self::RollbackBundleImport(request) => request.validate(),
             Self::AuthorizationRequest(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
             Self::PollEvents(request) => request.validate(),
@@ -2192,6 +2202,14 @@ impl LocalBridgeImportBundleRequest {
             }
         }
         Ok(())
+    }
+}
+
+impl LocalBridgeRollbackBundleImportRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
+        validate_staged_bundle_id(&self.bundle_id)
     }
 }
 

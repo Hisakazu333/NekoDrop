@@ -2,7 +2,7 @@ use nekolink_protocol::{BundleType, LocalBridgeActionLifecycleStatus};
 
 use crate::app_state::{
     LocalBridgePendingAction, LocalBridgePendingActionResult, LocalBridgePendingImportBundleAction,
-    LocalBridgePendingSendBundleAction,
+    LocalBridgePendingRollbackBundleImportAction, LocalBridgePendingSendBundleAction,
 };
 
 use super::bundle_helpers::{bundle_type_from_label, bundle_type_label};
@@ -16,6 +16,8 @@ pub(super) fn local_bridge_bundle_import_result(
     bundle_id: Option<&str>,
     bundle_type: Option<BundleType>,
     skipped_file_count: usize,
+    import_receipt_path: Option<&str>,
+    rollback_file_count: usize,
     now_ms: u128,
 ) -> LocalBridgePendingActionResult {
     LocalBridgePendingActionResult {
@@ -36,6 +38,43 @@ pub(super) fn local_bridge_bundle_import_result(
         require_trusted_device: None,
         conflict_strategy: Some(action.conflict_strategy.clone()),
         skipped_file_count,
+        import_receipt_path: import_receipt_path.map(str::to_string),
+        rollback_file_count,
+        rolled_back_file_count: 0,
+        requested_at_ms: action.requested_at_ms,
+        claimed_at_ms: now_ms,
+    }
+}
+
+pub(super) fn local_bridge_bundle_rollback_result(
+    status: &str,
+    action: &LocalBridgePendingRollbackBundleImportAction,
+    reason: Option<&str>,
+    message: &str,
+    rolled_back_file_count: usize,
+    now_ms: u128,
+) -> LocalBridgePendingActionResult {
+    LocalBridgePendingActionResult {
+        request_id: action.request_id.clone(),
+        action_kind: "bundle.rollback".to_string(),
+        client_id: action.client.client_id.clone(),
+        client_display_name: action.client.display_name.clone(),
+        status: status.to_string(),
+        lifecycle_status: Some(
+            local_bridge_lifecycle_status_from_result(status, reason).to_string(),
+        ),
+        reason: reason.map(str::to_string),
+        message: message.to_string(),
+        bundle_id: Some(action.bundle_id.clone()),
+        bundle_type: None,
+        bundle_root: None,
+        target_device_id: None,
+        require_trusted_device: None,
+        conflict_strategy: None,
+        skipped_file_count: 0,
+        import_receipt_path: None,
+        rollback_file_count: 0,
+        rolled_back_file_count,
         requested_at_ms: action.requested_at_ms,
         claimed_at_ms: now_ms,
     }
@@ -88,6 +127,9 @@ pub(super) fn local_bridge_bundle_send_result(
         require_trusted_device: Some(action.require_trusted_device),
         conflict_strategy: None,
         skipped_file_count: 0,
+        import_receipt_path: None,
+        rollback_file_count: 0,
+        rolled_back_file_count: 0,
         requested_at_ms: action.requested_at_ms,
         claimed_at_ms: now_ms,
     }
@@ -124,6 +166,9 @@ pub(super) fn local_bridge_action_lifecycle_result(
             require_trusted_device: Some(action.require_trusted_device),
             conflict_strategy: None,
             skipped_file_count: 0,
+            import_receipt_path: None,
+            rollback_file_count: 0,
+            rolled_back_file_count: 0,
             requested_at_ms: action.requested_at_ms,
             claimed_at_ms: now_ms,
         },
@@ -145,6 +190,33 @@ pub(super) fn local_bridge_action_lifecycle_result(
             require_trusted_device: None,
             conflict_strategy: Some(action.conflict_strategy.clone()),
             skipped_file_count: 0,
+            import_receipt_path: None,
+            rollback_file_count: 0,
+            rolled_back_file_count: 0,
+            requested_at_ms: action.requested_at_ms,
+            claimed_at_ms: now_ms,
+        },
+        LocalBridgePendingAction::RollbackBundleImport(action) => LocalBridgePendingActionResult {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.rollback".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            lifecycle_status: Some(
+                local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
+            ),
+            reason: reason.map(str::to_string),
+            message: message.to_string(),
+            bundle_id: Some(action.bundle_id.clone()),
+            bundle_type: bundle_type.map(bundle_type_label).map(str::to_string),
+            bundle_root: None,
+            target_device_id: None,
+            require_trusted_device: None,
+            conflict_strategy: None,
+            skipped_file_count: 0,
+            import_receipt_path: None,
+            rollback_file_count: 0,
+            rolled_back_file_count: 0,
             requested_at_ms: action.requested_at_ms,
             claimed_at_ms: now_ms,
         },

@@ -174,6 +174,7 @@ pub struct ReceivedBundleDto {
     pub rollback_file_count: usize,
     pub can_rollback_now: bool,
     pub rollback_blocking_reason: Option<String>,
+    pub rolled_back_file_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -208,6 +209,11 @@ pub struct ManualBundleCreateRequestDto {
 pub struct ImportStagedBundleRequestDto {
     pub bundle_id: String,
     pub conflict_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct RollbackImportedBundleRequestDto {
+    pub bundle_id: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -402,6 +408,9 @@ pub struct LocalBridgePendingActionResultDto {
     pub require_trusted_device: Option<bool>,
     pub conflict_strategy: Option<String>,
     pub skipped_file_count: usize,
+    pub import_receipt_path: Option<String>,
+    pub rollback_file_count: usize,
+    pub rolled_back_file_count: usize,
     pub requested_at_ms: u128,
     pub claimed_at_ms: u128,
 }

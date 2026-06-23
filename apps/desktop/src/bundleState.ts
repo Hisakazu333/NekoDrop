@@ -15,6 +15,7 @@ export function receiveBundleStatusLabel(report: ReceiveReportDto) {
 
 export function bundleStatusLabel(bundle: ReceivedBundleDto) {
   if (bundle.staging_status === "imported") return "已导入";
+  if (bundle.staging_status === "rolled_back") return "已撤回";
   if (bundle.staging_status === "deleted") return "已删除";
   if (bundle.staging_status === "import_failed") return "导入失败";
   if (bundle.staging_status === "expired") return "已过期";
@@ -30,11 +31,16 @@ export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
     const receipt = bundle.import_receipt_path
       ? bundle.can_rollback_now
         ? ` · 可撤回 ${bundle.rollback_file_count} 个`
-        : " · 已记录结果"
+        : ` · ${bundleRollbackBlockingLabel(bundle.rollback_blocking_reason)}`
       : "";
     return bundle.import_path
       ? `已导入到 ${bundle.import_path}${skipped}${strategy}${receipt}`
       : `已导入${skipped}${strategy}${receipt}`;
+  }
+  if (bundle.staging_status === "rolled_back") {
+    return bundle.rolled_back_file_count > 0
+      ? `已撤回 ${bundle.rolled_back_file_count} 个导入文件`
+      : "导入已撤回或不可再次撤回";
   }
   if (bundle.staging_status === "deleted") return "暂存已删除，历史记录保留";
   if (bundle.staging_status === "import_failed") return "导入没有完成，暂存仍可重试";
@@ -60,6 +66,13 @@ export function bundleImportStrategyLabel(strategy: string) {
   if (strategy === "rename") return "重命名";
   if (strategy === "skip_conflicts") return "跳过冲突";
   return strategy;
+}
+
+export function bundleRollbackBlockingLabel(reason: string | null) {
+  if (reason === "destination_missing") return "目标已不存在";
+  if (reason === "imported_file_missing") return "部分文件不在原位";
+  if (reason === "already_rolled_back") return "已撤回";
+  return "不可撤回";
 }
 
 export function bundleCanUseImportStrategy(bundle: ReceivedBundleDto, strategy: string) {

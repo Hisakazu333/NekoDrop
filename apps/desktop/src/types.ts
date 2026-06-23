@@ -127,7 +127,7 @@ export interface LocalBridgePendingActionTakeDto {
 
 export interface LocalBridgePendingActionResultDto {
   request_id: string;
-  action_kind: "bundle.send" | "bundle.import" | string;
+  action_kind: "bundle.send" | "bundle.import" | "bundle.rollback" | string;
   client_id: string;
   client_display_name: string;
   status: string;
@@ -141,6 +141,9 @@ export interface LocalBridgePendingActionResultDto {
   require_trusted_device: boolean | null;
   conflict_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
   skipped_file_count: number;
+  import_receipt_path: string | null;
+  rollback_file_count: number;
+  rolled_back_file_count: number;
   requested_at_ms: number;
   claimed_at_ms: number;
 }
@@ -281,7 +284,7 @@ export interface ReceivedBundleDto {
   total_bytes: number;
   staging_path: string;
   import_allowed: boolean;
-  staging_status: "saved" | "imported" | "deleted" | "import_failed" | "expired" | string;
+  staging_status: "saved" | "imported" | "rolled_back" | "deleted" | "import_failed" | "expired" | string;
   can_import_now: boolean;
   import_path: string | null;
   import_destination: string | null;
@@ -298,6 +301,7 @@ export interface ReceivedBundleDto {
   rollback_file_count: number;
   can_rollback_now: boolean;
   rollback_blocking_reason: "destination_missing" | "imported_file_missing" | string | null;
+  rolled_back_file_count: number;
 }
 
 export interface BundleImportPlanFileDto {

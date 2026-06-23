@@ -175,6 +175,10 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 - `conflict_strategy`
 - `skipped_file_count`
 - `import_receipt_path`
+- `rollback_file_count`
+- `can_rollback_now`
+- `rollback_blocking_reason`
+- `rolled_back_file_count`
 
 常见 `reason`：
 
@@ -183,6 +187,9 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 - `bundle_type_mismatch`
 - `trusted_target_missing`
 - `bundle_send_failed`
+- `bundle_import_receipt_missing`
+- `bundle_rollback_blocked`
+- `bundle_rollback_failed`
 - `bundle_import_conflict`
 - `bundle_import_failed`
 
@@ -280,7 +287,31 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 
 这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
 
-导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径。NekoDrop 可以用它生成回滚计划，判断本次导入的文件是否还在原位；真正删除或写回上层应用目录仍要走后续确认流程。
+导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径。NekoDrop 可以用它生成回滚计划，也可以执行保守撤回：只删除本次 import receipt 记录的导入文件，`skip_conflicts` 跳过的既有文件不会被删除。
+
+生成撤回请求：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs request rollback \
+  --bundle-id bundle_1234567890
+```
+
+```json
+{
+  "kind": "bundle.rollback",
+  "payload": {
+    "request_id": "adapter-rollback-001",
+    "client": {
+      "client_id": "generic.adapter.sample",
+      "display_name": "Generic Adapter Sample",
+      "app_kind": "generic"
+    },
+    "bundle_id": "bundle_1234567890"
+  }
+}
+```
+
+撤回只作用于 NekoDrop 本机导入区，不会撤销上层应用已经落库或合并的数据。真实 adapter 如果把 bundle 写进自己的应用目录，需要自己记录导入结果并做回滚。
 
 ## 样例边界
 

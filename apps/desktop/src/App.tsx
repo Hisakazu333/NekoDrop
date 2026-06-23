@@ -962,6 +962,30 @@ export function App() {
     }
   }
 
+  async function rollbackCurrentBundle(bundle: ReceivedBundleDto) {
+    setBusy("bundle-import");
+    setError(null);
+    try {
+      const rolledBack = await invokeCommand<ReceivedBundleDto>("rollback_imported_bundle", {
+        request: {
+          bundle_id: bundle.bundle_id
+        }
+      });
+      setStagedBundles((current) =>
+        current.map((item) => item.bundle_id === bundle.bundle_id ? rolledBack : item)
+      );
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: rolledBack };
+      });
+      setToast(`已撤回：${rolledBack.display_name}`);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function runLocalBridgeSelfCheck() {
     setBusy("open");
     setError(null);
@@ -1818,6 +1842,7 @@ export function App() {
                   onStopReceive={stopReceive}
                   onDeleteStagedBundle={deleteCurrentStagedBundle}
                   onImportStagedBundle={importCurrentStagedBundle}
+                  onRollbackBundle={rollbackCurrentBundle}
                 />
               ) : null}
 
@@ -2769,6 +2794,7 @@ function ReceivePanel({
   onOpenPath,
   onDeleteStagedBundle,
   onImportStagedBundle,
+  onRollbackBundle,
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
@@ -2785,6 +2811,7 @@ function ReceivePanel({
   onOpenPath: (path: string) => void;
   onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
   onImportStagedBundle: (bundle: ReceivedBundleDto, conflictStrategy?: string) => void;
+  onRollbackBundle: (bundle: ReceivedBundleDto) => void;
   onRespondReceiveOffer: (accept: boolean) => void;
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
@@ -2811,7 +2838,9 @@ function ReceivePanel({
     : null;
   const receiveSecuritySummary = receiveReport ? receiveSecuritySummaryLine(receiveReport) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
-  const visibleStagedBundles = stagedBundles.filter((bundle) => bundle.staging_status !== "imported");
+  const visibleStagedBundles = stagedBundles.filter(
+    (bundle) => bundle.staging_status !== "deleted" && bundle.staging_status !== "expired"
+  );
 
   return (
     <section className="receive-page">
@@ -2907,6 +2936,16 @@ function ReceivePanel({
                         type="button"
                       >
                         跳过冲突
+                      </button>
+                    ) : null}
+                    {bundle.staging_status === "imported" && bundle.can_rollback_now ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onRollbackBundle(bundle)}
+                        type="button"
+                      >
+                        撤回
                       </button>
                     ) : null}
                     <button
@@ -3017,6 +3056,16 @@ function ReceivePanel({
                         type="button"
                       >
                         跳过冲突
+                      </button>
+                    ) : null}
+                    {receivedBundle.staging_status === "imported" && receivedBundle.can_rollback_now ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onRollbackBundle(receivedBundle)}
+                        type="button"
+                      >
+                        撤回
                       </button>
                     ) : null}
                     <button

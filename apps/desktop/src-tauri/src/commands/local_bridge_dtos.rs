@@ -32,6 +32,11 @@ pub(super) fn local_bridge_pending_action_result_to_dto(
         require_trusted_device: result.require_trusted_device,
         conflict_strategy: result.conflict_strategy.clone(),
         skipped_file_count: result.skipped_file_count,
+        import_receipt_path: include_sensitive_paths
+            .then(|| result.import_receipt_path.clone())
+            .flatten(),
+        rollback_file_count: result.rollback_file_count,
+        rolled_back_file_count: result.rolled_back_file_count,
         requested_at_ms: result.requested_at_ms,
         claimed_at_ms: result.claimed_at_ms,
     }
@@ -69,6 +74,20 @@ pub(super) fn local_bridge_pending_action_to_dto(
                 .map(bundle_type_label)
                 .map(str::to_string),
             conflict_strategy: Some(action.conflict_strategy.clone()),
+            require_trusted_device: None,
+            requested_at_ms: action.requested_at_ms,
+            bundle_root: None,
+        },
+        LocalBridgePendingAction::RollbackBundleImport(action) => LocalBridgePendingActionDto {
+            request_id: action.request_id.clone(),
+            action_kind: "bundle.rollback".to_string(),
+            client_id: action.client.client_id.clone(),
+            client_display_name: action.client.display_name.clone(),
+            bundle_type: None,
+            target_device_id: None,
+            staged_bundle_id: Some(action.bundle_id.clone()),
+            expected_bundle_type: None,
+            conflict_strategy: None,
             require_trusted_device: None,
             requested_at_ms: action.requested_at_ms,
             bundle_root: None,

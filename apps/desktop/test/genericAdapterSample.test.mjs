@@ -163,6 +163,26 @@ test("generic adapter sample prints action result query envelopes", () => {
   assert.equal(request.payload.limit, 5);
 });
 
+test("generic adapter sample prints rollback request envelopes", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "rollback",
+      "--bundle-id",
+      "bundle_received_1"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const request = JSON.parse(stdout);
+
+  assert.equal(request.kind, "bundle.rollback");
+  assert.equal(request.payload.client.client_id, "generic.adapter.sample");
+  assert.equal(request.payload.bundle_id, "bundle_received_1");
+});
+
 test("generic adapter sample prints a generic roundtrip workflow", () => {
   const stdout = execFileSync(
     process.execPath,
@@ -194,13 +214,15 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
     "observe",
     "inspect",
     "import",
+    "inspect_after_import",
     "results"
   ]);
   assert.equal(workflow.steps[1].request.kind, "bundle.send");
   assert.equal(workflow.steps[3].request.kind, "bundle.detail");
   assert.equal(workflow.steps[4].request.kind, "bundle.import");
   assert.equal(workflow.steps[4].request.payload.conflict_strategy, "skip_conflicts");
-  assert.equal(workflow.steps[5].request.kind, "actions.results");
+  assert.equal(workflow.steps[5].request.kind, "bundle.detail");
+  assert.equal(workflow.steps[6].request.kind, "actions.results");
 });
 
 test("generic adapter sample derives the next event cursor", () => {

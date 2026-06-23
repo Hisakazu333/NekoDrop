@@ -105,6 +105,14 @@ pub struct BundleImportRollbackPlanFile {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RolledBackBundleImport {
+    pub bundle_id: String,
+    pub destination_path: PathBuf,
+    pub removed_file_count: usize,
+    pub removed_manifest_paths: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleImportPlan {
     pub bundle_id: String,
     pub bundle_type: BundleType,
@@ -801,6 +809,61 @@ pub fn plan_bundle_import_rollback(
     })
 }
 
+pub fn rollback_bundle_import(
+    receipt: &BundleImportReceipt,
+) -> NekoDropResult<RolledBackBundleImport> {
+    let plan = plan_bundle_import_rollback(receipt)?;
+    if !plan.can_rollback_now {
+        return Err(NekoDropError::Storage(format!(
+            "bundle import rollback is blocked: {}",
+            plan.blocking_reason
+                .as_deref()
+                .unwrap_or("rollback_blocked")
+        )));
+    }
+
+    let mut removed_manifest_paths = Vec::new();
+    for file in &plan.files {
+        let metadata = fs::symlink_metadata(&file.destination_path).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to read bundle import rollback file {}: {error}",
+                file.destination_path.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(NekoDropError::Storage(format!(
+                "bundle import rollback refuses symlink: {}",
+                file.destination_path.display()
+            )));
+        }
+        if !metadata.is_file() {
+            return Err(NekoDropError::Storage(format!(
+                "bundle import rollback target is not a file: {}",
+                file.destination_path.display()
+            )));
+        }
+    }
+
+    for file in &plan.files {
+        fs::remove_file(&file.destination_path).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to remove bundle import file {}: {error}",
+                file.destination_path.display()
+            ))
+        })?;
+        removed_manifest_paths.push(file.manifest_path.clone());
+    }
+
+    remove_empty_import_directories(&plan.destination_path, &plan.destination_path);
+
+    Ok(RolledBackBundleImport {
+        bundle_id: plan.bundle_id,
+        destination_path: plan.destination_path,
+        removed_file_count: removed_manifest_paths.len(),
+        removed_manifest_paths,
+    })
+}
+
 fn write_bundle_import_receipt(
     import_root: &Path,
     bundle_id: &str,
@@ -850,6 +913,24 @@ fn validate_bundle_import_receipt(receipt: &BundleImportReceipt) -> NekoDropResu
 
 fn bundle_import_receipts_root(import_root: &Path) -> PathBuf {
     import_root.join(BUNDLE_IMPORT_RECEIPTS_DIR)
+}
+
+fn remove_empty_import_directories(root: &Path, current: &Path) -> bool {
+    let Ok(entries) = fs::read_dir(current) else {
+        return false;
+    };
+    let child_dirs = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| path.is_dir())
+        .collect::<Vec<_>>();
+    for child in child_dirs {
+        remove_empty_import_directories(root, &child);
+    }
+    if current == root {
+        return fs::remove_dir(current).is_ok();
+    }
+    fs::remove_dir(current).is_ok()
 }
 
 fn unique_bundle_import_destination(
@@ -1782,6 +1863,66 @@ mod tests {
             .files
             .iter()
             .any(|file| file.manifest_path == "files/content.bin" && !file.exists));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rollback_bundle_import_removes_only_imported_files() {
+        let dir = unique_temp_dir("bundle-import-rollback-execute");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
+        fs::write(
+            import_root.join("bundle_1234567890").join("content.bin"),
+            b"existing",
+        )
+        .unwrap();
+        let imported = import_staged_bundle_with_strategy(
+            &staged.staging_path,
+            &import_root,
+            BundleImportConflictStrategy::SkipConflicts,
+        )
+        .unwrap();
+
+        let rolled_back = rollback_bundle_import(&imported.import_receipt).unwrap();
+
+        assert_eq!(rolled_back.bundle_id, "bundle_1234567890");
+        assert_eq!(rolled_back.removed_file_count, 1);
+        assert_eq!(
+            rolled_back.removed_manifest_paths,
+            vec!["files/manifest.json"]
+        );
+        assert!(!imported.destination_path.join("manifest.json").exists());
+        assert_eq!(
+            fs::read(imported.destination_path.join("content.bin")).unwrap(),
+            b"existing"
+        );
+        assert!(
+            !plan_bundle_import_rollback(&imported.import_receipt)
+                .unwrap()
+                .can_rollback_now
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rollback_bundle_import_blocks_when_plan_is_not_safe() {
+        let dir = unique_temp_dir("bundle-import-rollback-blocked");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+        let imported = import_staged_bundle(&staged.staging_path, &import_root).unwrap();
+        fs::remove_file(imported.destination_path.join("content.bin")).unwrap();
+
+        let error = rollback_bundle_import(&imported.import_receipt).unwrap_err();
+
+        assert!(error.to_string().contains("imported_file_missing"));
+        assert!(imported.destination_path.join("manifest.json").exists());
 
         fs::remove_dir_all(dir).unwrap();
     }
