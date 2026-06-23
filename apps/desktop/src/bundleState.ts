@@ -28,8 +28,8 @@ export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
   if (bundle.staging_status === "imported") {
     const skipped = bundle.import_skipped_file_count > 0 ? `，跳过 ${bundle.import_skipped_file_count} 个冲突` : "";
     const strategy = bundle.imported_with_strategy ? ` · ${bundleImportStrategyLabel(bundle.imported_with_strategy)}` : "";
-    const receipt = bundle.import_receipt_path
-      ? bundle.can_rollback_now
+    const receipt = bundle.has_import_receipt
+      ? bundle.can_request_rollback
         ? ` · 可撤回 ${bundle.rollback_file_count} 个`
         : ` · ${bundleRollbackBlockingLabel(bundle.rollback_blocking_reason)}`
       : "";

@@ -4897,6 +4897,8 @@ mod tests {
         assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
         assert_eq!(bundles[0].staging_status, "saved");
         assert!(bundles[0].can_import_now);
+        assert!(!bundles[0].has_import_receipt);
+        assert!(!bundles[0].can_request_rollback);
         assert!(!bundles[0].import_conflict);
         assert_eq!(
             bundles[0].import_destination.as_deref(),
@@ -4995,6 +4997,8 @@ mod tests {
         assert_eq!(imported.bundle_id, "bundle_1234567890");
         assert_eq!(imported.staging_status, "imported");
         assert!(!imported.can_import_now);
+        assert!(imported.has_import_receipt);
+        assert!(imported.can_request_rollback);
         assert_eq!(
             imported.import_path.as_deref(),
             Some(
@@ -5027,6 +5031,8 @@ mod tests {
         assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
         assert_eq!(bundles[0].staging_status, "imported");
         assert!(bundles[0].can_rollback_now);
+        assert!(bundles[0].has_import_receipt);
+        assert!(bundles[0].can_request_rollback);
         assert_eq!(bundles[0].rollback_file_count, 2);
         assert!(bundles[0].import_receipt_path.is_none());
 
@@ -5213,6 +5219,8 @@ mod tests {
         assert!(response.staged_bundles[0].staging_path.is_empty());
         assert!(response.staged_bundles[0].import_destination.is_none());
         assert!(response.staged_bundles[0].import_receipt_path.is_none());
+        assert!(!response.staged_bundles[0].has_import_receipt);
+        assert!(!response.staged_bundles[0].can_request_rollback);
         assert!(response.staged_bundles[0]
             .import_plan_files
             .iter()
@@ -5261,8 +5269,10 @@ mod tests {
         assert!(bundle.import_path.is_none());
         assert!(bundle.import_destination.is_none());
         assert!(bundle.import_receipt_path.is_none());
+        assert!(bundle.has_import_receipt);
         assert_eq!(bundle.rollback_file_count, 2);
         assert!(bundle.can_rollback_now);
+        assert!(bundle.can_request_rollback);
         assert!(bundle.rollback_blocking_reason.is_none());
         assert_eq!(bundle.rolled_back_file_count, 0);
 
@@ -5308,8 +5318,10 @@ mod tests {
         assert!(bundle.import_path.is_none());
         assert!(bundle.import_destination.is_none());
         assert!(bundle.import_receipt_path.is_none());
+        assert!(bundle.has_import_receipt);
         assert_eq!(bundle.rollback_file_count, 2);
         assert!(!bundle.can_rollback_now);
+        assert!(!bundle.can_request_rollback);
         assert_eq!(
             bundle.rollback_blocking_reason.as_deref(),
             Some("destination_missing")
