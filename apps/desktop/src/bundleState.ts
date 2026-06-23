@@ -27,7 +27,11 @@ export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
   if (bundle.staging_status === "imported") {
     const skipped = bundle.import_skipped_file_count > 0 ? `，跳过 ${bundle.import_skipped_file_count} 个冲突` : "";
     const strategy = bundle.imported_with_strategy ? ` · ${bundleImportStrategyLabel(bundle.imported_with_strategy)}` : "";
-    const receipt = bundle.import_receipt_path ? " · 已记录结果" : "";
+    const receipt = bundle.import_receipt_path
+      ? bundle.can_rollback_now
+        ? ` · 可撤回 ${bundle.rollback_file_count} 个`
+        : " · 已记录结果"
+      : "";
     return bundle.import_path
       ? `已导入到 ${bundle.import_path}${skipped}${strategy}${receipt}`
       : `已导入${skipped}${strategy}${receipt}`;

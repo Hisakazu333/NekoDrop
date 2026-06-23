@@ -37,6 +37,9 @@ function bundle(overrides: Partial<ReceivedBundleDto> = {}): ReceivedBundleDto {
     import_receipt_path: null,
     imported_manifest_paths: [],
     skipped_manifest_paths: [],
+    rollback_file_count: 0,
+    can_rollback_now: false,
+    rollback_blocking_reason: null,
     ...overrides
   };
 }
@@ -126,10 +129,12 @@ test("summarizes renamed imports and skipped conflict counts", () => {
     import_path: "/tmp/imports/bundle_123-2",
     imported_with_strategy: "skip_conflicts",
     import_skipped_file_count: 2,
-    import_receipt_path: "/tmp/imports/.nekodrop_import_receipts/bundle_123-1.json"
+    import_receipt_path: "/tmp/imports/.nekodrop_import_receipts/bundle_123-1.json",
+    rollback_file_count: 1,
+    can_rollback_now: true
   });
 
-  assert.equal(receiveBundleImportHint(imported), "已导入到 /tmp/imports/bundle_123-2，跳过 2 个冲突 · 跳过冲突 · 已记录结果");
+  assert.equal(receiveBundleImportHint(imported), "已导入到 /tmp/imports/bundle_123-2，跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
 });
 
 test("summarizes import plan file counts for importable bundles", () => {

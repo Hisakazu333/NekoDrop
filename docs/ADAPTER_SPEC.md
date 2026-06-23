@@ -87,7 +87,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 - `rename`：导入到新的目标目录
 - `skip_conflicts`：已有文件不覆盖，只补缺失文件
 
-导入结果会带回 `conflict_strategy`、`skipped_file_count` 和本机 import receipt 位置。receipt 记录目标目录、实际导入和跳过的 payload 路径。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
+导入结果会带回 `conflict_strategy`、`skipped_file_count` 和本机 import receipt 位置。receipt 记录目标目录、实际导入和跳过的 payload 路径。NekoDrop 可以基于 receipt 生成回滚计划，判断本次导入的文件是否仍在原位；真正删除或写回上层应用目录仍由后续确认流程处理。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
 
 adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。结果按 `client_id` 和授权 scope 过滤。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 

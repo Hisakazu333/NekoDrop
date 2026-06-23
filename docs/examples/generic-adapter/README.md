@@ -280,7 +280,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 
 这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
 
-导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径，方便 adapter 后续做导入确认、回滚或冲突处理。
+导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径。NekoDrop 可以用它生成回滚计划，判断本次导入的文件是否还在原位；真正删除或写回上层应用目录仍要走后续确认流程。
 
 ## 样例边界
 

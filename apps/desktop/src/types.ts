@@ -295,6 +295,9 @@ export interface ReceivedBundleDto {
   import_receipt_path: string | null;
   imported_manifest_paths: string[];
   skipped_manifest_paths: string[];
+  rollback_file_count: number;
+  can_rollback_now: boolean;
+  rollback_blocking_reason: "destination_missing" | "imported_file_missing" | string | null;
 }
 
 export interface BundleImportPlanFileDto {
