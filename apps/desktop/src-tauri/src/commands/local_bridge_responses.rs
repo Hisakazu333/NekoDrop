@@ -3,8 +3,8 @@ use nekolink_protocol::LocalBridgeClientIdentity;
 use crate::app_state::PendingLocalBridgeAuthorization;
 
 use super::dto::{
-    LocalBridgePendingActionResultDto, LocalBridgeResponseDto, ReceivedBundleDto,
-    TransferStatusDto, TrustedDeviceDto,
+    BundleImportPlanFileDto, LocalBridgePendingActionResultDto, LocalBridgeResponseDto,
+    ReceivedBundleDto, TransferStatusDto, TrustedDeviceDto,
 };
 use super::local_bridge_permission_scope_label;
 
@@ -41,7 +41,10 @@ pub(super) fn local_bridge_read_only_response(
         authorization_code: None,
         authorization_expires_at_ms: None,
         devices,
-        staged_bundles,
+        staged_bundles: staged_bundles
+            .into_iter()
+            .map(sanitize_local_bridge_bundle)
+            .collect(),
         transfer_status,
         action_results: Vec::new(),
         events: Vec::new(),
@@ -50,6 +53,26 @@ pub(super) fn local_bridge_read_only_response(
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
     }
+}
+
+fn sanitize_local_bridge_bundle(mut bundle: ReceivedBundleDto) -> ReceivedBundleDto {
+    bundle.staging_path.clear();
+    bundle.import_path = None;
+    bundle.import_destination = None;
+    bundle.import_receipt_path = None;
+    bundle.import_plan_files = bundle
+        .import_plan_files
+        .into_iter()
+        .map(sanitize_local_bridge_import_plan_file)
+        .collect();
+    bundle
+}
+
+fn sanitize_local_bridge_import_plan_file(
+    mut file: BundleImportPlanFileDto,
+) -> BundleImportPlanFileDto {
+    file.destination_path.clear();
+    file
 }
 
 pub(super) fn local_bridge_read_only_unsupported_response(
