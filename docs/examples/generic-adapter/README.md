@@ -174,6 +174,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 
 - `conflict_strategy`
 - `skipped_file_count`
+- `import_receipt_path`
 
 常见 `reason`：
 
@@ -278,6 +279,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 如果同名 bundle 已经存在，adapter 应先让用户选择策略，不要静默覆盖。
 
 这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
+
+导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径，方便 adapter 后续做导入确认、回滚或冲突处理。
 
 ## 样例边界
 

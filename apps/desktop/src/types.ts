@@ -292,6 +292,9 @@ export interface ReceivedBundleDto {
   import_conflict_strategies: Array<"reject" | "rename" | "skip_conflicts" | string>;
   imported_with_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
   import_skipped_file_count: number;
+  import_receipt_path: string | null;
+  imported_manifest_paths: string[];
+  skipped_manifest_paths: string[];
 }
 
 export interface BundleImportPlanFileDto {

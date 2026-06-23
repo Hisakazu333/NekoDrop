@@ -168,6 +168,9 @@ pub struct ReceivedBundleDto {
     pub import_conflict_strategies: Vec<String>,
     pub imported_with_strategy: Option<String>,
     pub import_skipped_file_count: usize,
+    pub import_receipt_path: Option<String>,
+    pub imported_manifest_paths: Vec<String>,
+    pub skipped_manifest_paths: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

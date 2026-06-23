@@ -131,6 +131,9 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         import_conflict_strategies: Vec::new(),
         imported_with_strategy: None,
         import_skipped_file_count: 0,
+        import_receipt_path: None,
+        imported_manifest_paths: Vec::new(),
+        skipped_manifest_paths: Vec::new(),
     }
 }
 
