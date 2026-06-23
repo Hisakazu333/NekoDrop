@@ -44,6 +44,7 @@ type CommandName =
   | "prune_staged_bundles"
   | "delete_staged_bundle"
   | "import_staged_bundle"
+  | "rollback_imported_bundle"
   | "get_local_bridge_runtime_status"
   | "list_local_bridge_authorizations"
   | "revoke_local_bridge_authorization"

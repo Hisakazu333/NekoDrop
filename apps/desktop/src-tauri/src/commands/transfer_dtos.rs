@@ -137,6 +137,7 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         rollback_file_count: 0,
         can_rollback_now: false,
         rollback_blocking_reason: None,
+        rolled_back_file_count: 0,
     }
 }
 

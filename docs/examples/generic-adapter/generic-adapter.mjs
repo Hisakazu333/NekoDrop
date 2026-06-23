@@ -205,6 +205,16 @@ function buildRequest(kind, flags) {
       }
     };
   }
+  if (kind === "rollback") {
+    return {
+      kind: "bundle.rollback",
+      payload: {
+        request_id: flags["request-id"] ?? `adapter-rollback-${Date.now()}`,
+        client: CLIENT,
+        bundle_id: requireFlag(flags, "bundle-id")
+      }
+    };
+  }
   if (kind === "events") {
     return {
       kind: "events.poll",
@@ -230,7 +240,7 @@ function buildRequest(kind, flags) {
       }
     };
   }
-  throw new Error("request kind must be auth, send, detail, import, events, or results");
+  throw new Error("request kind must be auth, send, detail, import, rollback, events, or results");
 }
 
 function buildWorkflow(flags) {
@@ -275,6 +285,26 @@ function buildWorkflow(flags) {
         "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
         type: requireKnownType(requireFlag(flags, "type")),
         "conflict-strategy": flags["conflict-strategy"] ?? "reject"
+      })
+    });
+    steps.push({
+      step: "inspect_after_import",
+      request: buildRequest("detail", {
+        "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
+      })
+    });
+  }
+  if (mode === "rollback") {
+    steps.push({
+      step: "inspect_before_rollback",
+      request: buildRequest("detail", {
+        "staged-bundle-id": requireFlag(flags, "bundle-id")
+      })
+    });
+    steps.push({
+      step: "rollback",
+      request: buildRequest("rollback", {
+        "bundle-id": requireFlag(flags, "bundle-id")
       })
     });
   }
@@ -447,9 +477,11 @@ function usage() {
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
   node generic-adapter.mjs request detail --staged-bundle-id ID
   node generic-adapter.mjs request import --staged-bundle-id ID --type session --conflict-strategy reject
+  node generic-adapter.mjs request rollback --bundle-id ID
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
+  node generic-adapter.mjs workflow --mode rollback --bundle-id ID
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }
