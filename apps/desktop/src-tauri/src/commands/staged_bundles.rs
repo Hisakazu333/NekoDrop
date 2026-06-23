@@ -4,9 +4,9 @@ use std::time::SystemTime;
 use nekodrop_storage::{
     delete_staged_bundle as delete_staged_bundle_storage,
     import_staged_bundle as import_staged_bundle_storage, import_staged_bundle_with_strategy,
-    list_staged_bundles as list_staged_bundles_storage, plan_staged_bundle_import,
-    prune_staged_bundles_older_than, BundleImportConflictStrategy, BundleImportPlan,
-    BundleImportPolicy, StagedBundle,
+    list_staged_bundles as list_staged_bundles_storage, plan_bundle_import_rollback,
+    plan_staged_bundle_import, prune_staged_bundles_older_than, BundleImportConflictStrategy,
+    BundleImportPlan, BundleImportPolicy, StagedBundle,
 };
 
 use super::bundle_helpers::bundle_type_label;
@@ -55,6 +55,9 @@ fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &Path) -> ReceivedBu
         import_receipt_path: None,
         imported_manifest_paths: Vec::new(),
         skipped_manifest_paths: Vec::new(),
+        rollback_file_count: 0,
+        can_rollback_now: false,
+        rollback_blocking_reason: None,
     }
 }
 
@@ -125,6 +128,8 @@ pub(super) fn import_staged_bundle_with_strategy_at(
     }
     .map_err(|error| error.to_string())?;
     let import_path = imported.destination_path.display().to_string();
+    let rollback_plan =
+        plan_bundle_import_rollback(&imported.import_receipt).map_err(|error| error.to_string())?;
     Ok(ReceivedBundleDto {
         bundle_id: imported.bundle_id,
         bundle_type: bundle_type_label(imported.bundle_type).to_string(),
@@ -150,6 +155,9 @@ pub(super) fn import_staged_bundle_with_strategy_at(
         import_receipt_path: Some(imported.import_receipt_path.display().to_string()),
         imported_manifest_paths: imported.imported_manifest_paths,
         skipped_manifest_paths: imported.skipped_manifest_paths,
+        rollback_file_count: rollback_plan.files.len(),
+        can_rollback_now: rollback_plan.can_rollback_now,
+        rollback_blocking_reason: rollback_plan.blocking_reason,
     })
 }
 

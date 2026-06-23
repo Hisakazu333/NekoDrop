@@ -134,6 +134,9 @@ fn received_bundle_to_dto(bundle: &ReceivedBundleReport) -> ReceivedBundleDto {
         import_receipt_path: None,
         imported_manifest_paths: Vec::new(),
         skipped_manifest_paths: Vec::new(),
+        rollback_file_count: 0,
+        can_rollback_now: false,
+        rollback_blocking_reason: None,
     }
 }
 

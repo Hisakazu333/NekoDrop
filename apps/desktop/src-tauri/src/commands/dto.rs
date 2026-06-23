@@ -171,6 +171,9 @@ pub struct ReceivedBundleDto {
     pub import_receipt_path: Option<String>,
     pub imported_manifest_paths: Vec<String>,
     pub skipped_manifest_paths: Vec<String>,
+    pub rollback_file_count: usize,
+    pub can_rollback_now: bool,
+    pub rollback_blocking_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

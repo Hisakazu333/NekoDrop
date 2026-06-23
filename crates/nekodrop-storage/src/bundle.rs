@@ -89,6 +89,22 @@ pub struct BundleImportReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleImportRollbackPlan {
+    pub bundle_id: String,
+    pub destination_path: PathBuf,
+    pub can_rollback_now: bool,
+    pub blocking_reason: Option<String>,
+    pub files: Vec<BundleImportRollbackPlanFile>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BundleImportRollbackPlanFile {
+    pub manifest_path: String,
+    pub destination_path: PathBuf,
+    pub exists: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BundleImportPlan {
     pub bundle_id: String,
     pub bundle_type: BundleType,
@@ -750,6 +766,41 @@ pub fn list_bundle_import_receipts(import_root: &Path) -> NekoDropResult<Vec<Bun
     Ok(receipts)
 }
 
+pub fn plan_bundle_import_rollback(
+    receipt: &BundleImportReceipt,
+) -> NekoDropResult<BundleImportRollbackPlan> {
+    validate_bundle_import_receipt(receipt)?;
+    let destination_path = PathBuf::from(&receipt.destination_path);
+    let files = receipt
+        .imported_manifest_paths
+        .iter()
+        .map(|manifest_path| {
+            let destination_path = import_payload_destination(&destination_path, manifest_path)?;
+            Ok(BundleImportRollbackPlanFile {
+                manifest_path: manifest_path.clone(),
+                exists: destination_path.exists(),
+                destination_path,
+            })
+        })
+        .collect::<NekoDropResult<Vec<_>>>()?;
+    let missing_count = files.iter().filter(|file| !file.exists).count();
+    let blocking_reason = if !destination_path.exists() {
+        Some("destination_missing".to_string())
+    } else if missing_count > 0 {
+        Some("imported_file_missing".to_string())
+    } else {
+        None
+    };
+
+    Ok(BundleImportRollbackPlan {
+        bundle_id: receipt.bundle_id.clone(),
+        destination_path,
+        can_rollback_now: blocking_reason.is_none(),
+        blocking_reason,
+        files,
+    })
+}
+
 fn write_bundle_import_receipt(
     import_root: &Path,
     bundle_id: &str,
@@ -770,14 +821,31 @@ fn write_bundle_import_receipt(
 
 fn read_bundle_import_receipt(path: &Path) -> NekoDropResult<BundleImportReceipt> {
     let receipt: BundleImportReceipt = read_json_file(path)?;
+    validate_bundle_import_receipt(&receipt)?;
+    Ok(receipt)
+}
+
+fn validate_bundle_import_receipt(receipt: &BundleImportReceipt) -> NekoDropResult<()> {
     if receipt.schema != BUNDLE_IMPORT_RECEIPT_SCHEMA_V1 {
         return Err(NekoDropError::Storage(format!(
-            "unsupported bundle import receipt schema in {}: {}",
-            path.display(),
+            "unsupported bundle import receipt schema: {}",
             receipt.schema
         )));
     }
-    Ok(receipt)
+    validate_bundle_id_for_staging(&receipt.bundle_id)?;
+    if receipt.destination_path.trim().is_empty() {
+        return Err(NekoDropError::Storage(
+            "bundle import receipt destination_path is required".into(),
+        ));
+    }
+    for manifest_path in receipt
+        .imported_manifest_paths
+        .iter()
+        .chain(receipt.skipped_manifest_paths.iter())
+    {
+        let _ = import_payload_destination(Path::new("."), manifest_path)?;
+    }
+    Ok(())
 }
 
 fn bundle_import_receipts_root(import_root: &Path) -> PathBuf {
@@ -1478,6 +1546,20 @@ mod tests {
         assert!(imported.import_receipt.skipped_manifest_paths.is_empty());
         let receipts = list_bundle_import_receipts(&import_root).unwrap();
         assert_eq!(receipts, vec![imported.import_receipt.clone()]);
+        let rollback = plan_bundle_import_rollback(&imported.import_receipt).unwrap();
+        assert!(rollback.can_rollback_now);
+        assert_eq!(rollback.blocking_reason, None);
+        assert_eq!(
+            rollback.destination_path,
+            import_root.join("bundle_1234567890")
+        );
+        assert_eq!(rollback.files.len(), 2);
+        assert!(rollback.files.iter().all(|file| file.exists));
+        assert!(rollback
+            .files
+            .iter()
+            .any(|file| file.manifest_path == "files/content.bin"
+                && file.destination_path == imported.destination_path.join("content.bin")));
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1667,6 +1749,39 @@ mod tests {
             receipts[0].skipped_manifest_paths,
             vec!["files/content.bin"]
         );
+        let rollback = plan_bundle_import_rollback(&receipts[0]).unwrap();
+        assert!(rollback.can_rollback_now);
+        assert_eq!(rollback.files.len(), 1);
+        assert_eq!(rollback.files[0].manifest_path, "files/manifest.json");
+        assert_eq!(
+            rollback.files[0].destination_path,
+            imported.destination_path.join("manifest.json")
+        );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn rollback_plan_blocks_when_imported_file_is_missing() {
+        let dir = unique_temp_dir("bundle-import-rollback-plan-missing");
+        let source = create_valid_bundle(&dir, false);
+        let staging_root = dir.join("staging");
+        let import_root = dir.join("imports");
+        let staged = stage_bundle_directory(&source, &staging_root).unwrap();
+        let imported = import_staged_bundle(&staged.staging_path, &import_root).unwrap();
+        fs::remove_file(imported.destination_path.join("content.bin")).unwrap();
+
+        let rollback = plan_bundle_import_rollback(&imported.import_receipt).unwrap();
+
+        assert!(!rollback.can_rollback_now);
+        assert_eq!(
+            rollback.blocking_reason.as_deref(),
+            Some("imported_file_missing")
+        );
+        assert!(rollback
+            .files
+            .iter()
+            .any(|file| file.manifest_path == "files/content.bin" && !file.exists));
 
         fs::remove_dir_all(dir).unwrap();
     }
