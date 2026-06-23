@@ -81,7 +81,8 @@ use path_dialog::{
 use receive_diagnostics::{receive_port_diagnostics_from_session, receive_session_to_dto};
 use staged_bundles::{
     delete_staged_bundle_at, find_staged_bundle_dto_at, import_staged_bundle_at,
-    list_staged_bundle_dtos_at, prune_staged_bundle_dtos_at, validate_safe_bundle_id,
+    import_staged_bundle_with_strategy_at, list_staged_bundle_dtos_at,
+    parse_import_conflict_strategy, prune_staged_bundle_dtos_at, validate_safe_bundle_id,
 };
 use transfer_dtos::{
     pending_offer_to_dto, pending_pairing_request_to_dto, pending_resume_summary_from_offer,
@@ -389,10 +390,13 @@ pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn import_staged_bundle(bundle_id: String) -> Result<ReceivedBundleDto, String> {
+pub fn import_staged_bundle(
+    request: ImportStagedBundleRequestDto,
+) -> Result<ReceivedBundleDto, String> {
     let staging_root = bundle_staging_root()?;
     let import_root = bundle_import_root()?;
-    import_staged_bundle_at(&staging_root, &import_root, &bundle_id)
+    let strategy = parse_import_conflict_strategy(request.conflict_strategy.as_deref())?;
+    import_staged_bundle_with_strategy_at(&staging_root, &import_root, &request.bundle_id, strategy)
 }
 
 #[tauri::command]
@@ -2408,6 +2412,7 @@ fn execute_local_bridge_bundle_import_action(
                 "local bridge staged bundle does not contain bundle.json",
                 None,
                 None,
+                0,
                 now_ms,
             ));
         }
@@ -2419,6 +2424,7 @@ fn execute_local_bridge_bundle_import_action(
                 &format!("local bridge staged bundle validation failed: {error}"),
                 None,
                 None,
+                0,
                 now_ms,
             ));
         }
@@ -2435,12 +2441,20 @@ fn execute_local_bridge_bundle_import_action(
                 "local bridge expected bundle_type does not match the staged bundle manifest",
                 Some(bundle_id.as_str()),
                 Some(bundle_type),
+                0,
                 now_ms,
             ));
         }
     }
 
-    match import_staged_bundle_at(staging_root, import_root, &action.staged_bundle_id) {
+    let conflict_strategy =
+        parse_import_conflict_strategy(Some(action.conflict_strategy.as_str()))?;
+    match import_staged_bundle_with_strategy_at(
+        staging_root,
+        import_root,
+        &action.staged_bundle_id,
+        conflict_strategy,
+    ) {
         Ok(imported) => Ok(local_bridge_bundle_import_result(
             "completed",
             &action,
@@ -2448,6 +2462,7 @@ fn execute_local_bridge_bundle_import_action(
             "local bridge staged bundle was imported",
             Some(imported.bundle_id.as_str()),
             bundle_type_from_label(&imported.bundle_type).or(Some(bundle_type)),
+            imported.import_skipped_file_count,
             now_ms,
         )),
         Err(error) => {
@@ -2459,6 +2474,7 @@ fn execute_local_bridge_bundle_import_action(
                 &format!("local bridge staged bundle import failed: {error}"),
                 Some(bundle_id.as_str()),
                 Some(bundle_type),
+                0,
                 now_ms,
             ))
         }
@@ -2629,6 +2645,8 @@ fn push_local_bridge_pending_action_result(
         bundle_root: result.bundle_root.clone(),
         target_device_id: result.target_device_id.clone(),
         require_trusted_device: result.require_trusted_device,
+        conflict_strategy: None,
+        skipped_file_count: 0,
         requested_at_ms,
         claimed_at_ms,
     };
@@ -2836,6 +2854,10 @@ fn local_bridge_pending_import_action_from_request(
         client,
         staged_bundle_id: request.staged_bundle_id.clone(),
         expected_bundle_type: request.expected_bundle_type,
+        conflict_strategy: request
+            .conflict_strategy
+            .clone()
+            .unwrap_or_else(|| "reject".to_string()),
         requested_at_ms: now_ms,
     })
 }
@@ -4766,12 +4788,9 @@ mod tests {
         let import_root = dir.join("bundle_imports");
         let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
         nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
-        fs::create_dir_all(import_root.join("bundle_1234567890").join("files")).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
         fs::write(
-            import_root
-                .join("bundle_1234567890")
-                .join("files")
-                .join("content.bin"),
+            import_root.join("bundle_1234567890").join("content.bin"),
             b"existing",
         )
         .unwrap();
@@ -5607,6 +5626,7 @@ mod tests {
                 },
                 staged_bundle_id: "bundle_1234567890".to_string(),
                 expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
                 requested_at_ms: 1_600,
             }),
         ]);
@@ -5655,6 +5675,7 @@ mod tests {
                 },
                 staged_bundle_id: "bundle_1234567890".to_string(),
                 expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
                 requested_at_ms: 1_600,
             }),
         ]);
@@ -5713,6 +5734,7 @@ mod tests {
                 },
                 staged_bundle_id: "bundle_1234567890".to_string(),
                 expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
                 requested_at_ms: 1_600,
             }),
         ]);
@@ -5762,6 +5784,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(BundleType::Skill),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ));
@@ -5835,6 +5858,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(BundleType::Workspace),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ));
@@ -5885,6 +5909,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(BundleType::Skill),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ));
@@ -6642,6 +6667,8 @@ mod tests {
                 bundle_root: None,
                 target_device_id: None,
                 require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
             });
@@ -6721,6 +6748,8 @@ mod tests {
                 bundle_root: None,
                 target_device_id: None,
                 require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
             },
@@ -6738,6 +6767,8 @@ mod tests {
                 bundle_root: Some("/tmp/private/bundle".to_string()),
                 target_device_id: Some("device-a".to_string()),
                 require_trusted_device: Some(true),
+                conflict_strategy: None,
+                skipped_file_count: 0,
                 requested_at_ms: 1_600,
                 claimed_at_ms: 2_100,
             },
@@ -6755,6 +6786,8 @@ mod tests {
                 bundle_root: None,
                 target_device_id: None,
                 require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
                 requested_at_ms: 1_700,
                 claimed_at_ms: 2_200,
             },

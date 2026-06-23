@@ -30,6 +30,8 @@ pub(super) fn local_bridge_pending_action_result_to_dto(
             .flatten(),
         target_device_id: result.target_device_id.clone(),
         require_trusted_device: result.require_trusted_device,
+        conflict_strategy: result.conflict_strategy.clone(),
+        skipped_file_count: result.skipped_file_count,
         requested_at_ms: result.requested_at_ms,
         claimed_at_ms: result.claimed_at_ms,
     }
@@ -49,6 +51,7 @@ pub(super) fn local_bridge_pending_action_to_dto(
             target_device_id: action.target_device_id.clone(),
             staged_bundle_id: None,
             expected_bundle_type: None,
+            conflict_strategy: None,
             require_trusted_device: Some(action.require_trusted_device),
             requested_at_ms: action.requested_at_ms,
             bundle_root: include_sensitive_paths.then(|| action.bundle_root.clone()),
@@ -65,6 +68,7 @@ pub(super) fn local_bridge_pending_action_to_dto(
                 .expected_bundle_type
                 .map(bundle_type_label)
                 .map(str::to_string),
+            conflict_strategy: Some(action.conflict_strategy.clone()),
             require_trusted_device: None,
             requested_at_ms: action.requested_at_ms,
             bundle_root: None,

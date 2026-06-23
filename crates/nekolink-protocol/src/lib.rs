@@ -1980,6 +1980,8 @@ pub struct LocalBridgeImportBundleRequest {
     pub client: Option<LocalBridgeClientIdentity>,
     pub staged_bundle_id: String,
     pub expected_bundle_type: Option<BundleType>,
+    #[serde(default)]
+    pub conflict_strategy: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2180,7 +2182,16 @@ impl LocalBridgeImportBundleRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
-        validate_staged_bundle_id(&self.staged_bundle_id)
+        validate_staged_bundle_id(&self.staged_bundle_id)?;
+        if let Some(strategy) = self.conflict_strategy.as_deref() {
+            if !matches!(strategy, "reject" | "rename" | "skip_conflicts") {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "bundle import conflict_strategy must be reject, rename, or skip_conflicts",
+                ));
+            }
+        }
+        Ok(())
     }
 }
 

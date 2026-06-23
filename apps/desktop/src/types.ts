@@ -105,6 +105,7 @@ export interface LocalBridgePendingActionDto {
   target_device_id: string | null;
   staged_bundle_id: string | null;
   expected_bundle_type: string | null;
+  conflict_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
   require_trusted_device: boolean | null;
   requested_at_ms: number;
   bundle_root: string | null;
@@ -138,6 +139,8 @@ export interface LocalBridgePendingActionResultDto {
   bundle_root: string | null;
   target_device_id: string | null;
   require_trusted_device: boolean | null;
+  conflict_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
+  skipped_file_count: number;
   requested_at_ms: number;
   claimed_at_ms: number;
 }
@@ -286,6 +289,9 @@ export interface ReceivedBundleDto {
   import_blocking_reason: "destination_exists" | "destination_file_exists" | "not_importable" | string | null;
   import_plan_files: BundleImportPlanFileDto[];
   import_conflict_count: number;
+  import_conflict_strategies: Array<"reject" | "rename" | "skip_conflicts" | string>;
+  imported_with_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
+  import_skipped_file_count: number;
 }
 
 export interface BundleImportPlanFileDto {

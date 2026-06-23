@@ -3,9 +3,10 @@ use std::time::SystemTime;
 
 use nekodrop_storage::{
     delete_staged_bundle as delete_staged_bundle_storage,
-    import_staged_bundle as import_staged_bundle_storage,
+    import_staged_bundle as import_staged_bundle_storage, import_staged_bundle_with_strategy,
     list_staged_bundles as list_staged_bundles_storage, plan_staged_bundle_import,
-    prune_staged_bundles_older_than, BundleImportPlan, BundleImportPolicy, StagedBundle,
+    prune_staged_bundles_older_than, BundleImportConflictStrategy, BundleImportPlan,
+    BundleImportPolicy, StagedBundle,
 };
 
 use super::bundle_helpers::bundle_type_label;
@@ -22,6 +23,7 @@ fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &Path) -> ReceivedBu
         .as_ref()
         .map(|plan| plan.conflict_count)
         .unwrap_or_default();
+    let strategies = import_conflict_strategies(plan.as_ref());
     ReceivedBundleDto {
         bundle_id: manifest.bundle_id.clone(),
         bundle_type: bundle_type_label(manifest.bundle_type).to_string(),
@@ -47,6 +49,9 @@ fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &Path) -> ReceivedBu
         import_blocking_reason: plan.and_then(|plan| plan.blocking_reason),
         import_plan_files: plan_files,
         import_conflict_count: conflict_count,
+        import_conflict_strategies: strategies,
+        imported_with_strategy: None,
+        import_skipped_file_count: 0,
     }
 }
 
@@ -94,10 +99,28 @@ pub(super) fn import_staged_bundle_at(
     import_root: &Path,
     bundle_id: &str,
 ) -> Result<ReceivedBundleDto, String> {
+    import_staged_bundle_with_strategy_at(
+        staging_root,
+        import_root,
+        bundle_id,
+        BundleImportConflictStrategy::Reject,
+    )
+}
+
+pub(super) fn import_staged_bundle_with_strategy_at(
+    staging_root: &Path,
+    import_root: &Path,
+    bundle_id: &str,
+    conflict_strategy: BundleImportConflictStrategy,
+) -> Result<ReceivedBundleDto, String> {
     validate_safe_bundle_id(bundle_id)?;
     let staged_path = staging_root.join(bundle_id);
-    let imported = import_staged_bundle_storage(&staged_path, import_root)
-        .map_err(|error| error.to_string())?;
+    let imported = if conflict_strategy == BundleImportConflictStrategy::Reject {
+        import_staged_bundle_storage(&staged_path, import_root)
+    } else {
+        import_staged_bundle_with_strategy(&staged_path, import_root, conflict_strategy)
+    }
+    .map_err(|error| error.to_string())?;
     let import_path = imported.destination_path.display().to_string();
     Ok(ReceivedBundleDto {
         bundle_id: imported.bundle_id,
@@ -116,6 +139,11 @@ pub(super) fn import_staged_bundle_at(
         import_blocking_reason: None,
         import_plan_files: Vec::new(),
         import_conflict_count: 0,
+        import_conflict_strategies: Vec::new(),
+        imported_with_strategy: Some(
+            import_conflict_strategy_label(imported.conflict_strategy).to_string(),
+        ),
+        import_skipped_file_count: imported.skipped_file_count,
     })
 }
 
@@ -130,6 +158,44 @@ fn import_plan_files_to_dto(plan: &BundleImportPlan) -> Vec<BundleImportPlanFile
             destination_exists: file.destination_exists,
         })
         .collect()
+}
+
+pub(super) fn parse_import_conflict_strategy(
+    value: Option<&str>,
+) -> Result<BundleImportConflictStrategy, String> {
+    match value.unwrap_or("reject") {
+        "reject" => Ok(BundleImportConflictStrategy::Reject),
+        "rename" => Ok(BundleImportConflictStrategy::Rename),
+        "skip_conflicts" => Ok(BundleImportConflictStrategy::SkipConflicts),
+        other => Err(format!("不支持的资料包导入策略：{other}")),
+    }
+}
+
+pub(super) fn import_conflict_strategy_label(
+    strategy: BundleImportConflictStrategy,
+) -> &'static str {
+    match strategy {
+        BundleImportConflictStrategy::Reject => "reject",
+        BundleImportConflictStrategy::Rename => "rename",
+        BundleImportConflictStrategy::SkipConflicts => "skip_conflicts",
+    }
+}
+
+fn import_conflict_strategies(plan: Option<&BundleImportPlan>) -> Vec<String> {
+    let Some(plan) = plan else {
+        return Vec::new();
+    };
+    if !plan.import_allowed {
+        return Vec::new();
+    }
+    if !plan.destination_exists && plan.conflict_count == 0 {
+        return vec!["reject".to_string()];
+    }
+    vec![
+        "reject".to_string(),
+        "rename".to_string(),
+        "skip_conflicts".to_string(),
+    ]
 }
 
 pub(super) fn validate_safe_bundle_id(bundle_id: &str) -> Result<(), String> {

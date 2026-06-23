@@ -15,6 +15,7 @@ pub(super) fn local_bridge_bundle_import_result(
     message: &str,
     bundle_id: Option<&str>,
     bundle_type: Option<BundleType>,
+    skipped_file_count: usize,
     now_ms: u128,
 ) -> LocalBridgePendingActionResult {
     LocalBridgePendingActionResult {
@@ -33,6 +34,8 @@ pub(super) fn local_bridge_bundle_import_result(
         bundle_root: None,
         target_device_id: None,
         require_trusted_device: None,
+        conflict_strategy: Some(action.conflict_strategy.clone()),
+        skipped_file_count,
         requested_at_ms: action.requested_at_ms,
         claimed_at_ms: now_ms,
     }
@@ -83,6 +86,8 @@ pub(super) fn local_bridge_bundle_send_result(
         bundle_root: Some(action.bundle_root.clone()),
         target_device_id: action.target_device_id.clone(),
         require_trusted_device: Some(action.require_trusted_device),
+        conflict_strategy: None,
+        skipped_file_count: 0,
         requested_at_ms: action.requested_at_ms,
         claimed_at_ms: now_ms,
     }
@@ -117,6 +122,8 @@ pub(super) fn local_bridge_action_lifecycle_result(
                 .map(str::to_string)
                 .or_else(|| action.target_device_id.clone()),
             require_trusted_device: Some(action.require_trusted_device),
+            conflict_strategy: None,
+            skipped_file_count: 0,
             requested_at_ms: action.requested_at_ms,
             claimed_at_ms: now_ms,
         },
@@ -136,6 +143,8 @@ pub(super) fn local_bridge_action_lifecycle_result(
             bundle_root: None,
             target_device_id: None,
             require_trusted_device: None,
+            conflict_strategy: Some(action.conflict_strategy.clone()),
+            skipped_file_count: 0,
             requested_at_ms: action.requested_at_ms,
             claimed_at_ms: now_ms,
         },

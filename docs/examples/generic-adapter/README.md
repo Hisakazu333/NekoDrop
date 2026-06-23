@@ -170,6 +170,11 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 
 旧字段 `status` 仍会保留给兼容代码。新 adapter 应优先读 `lifecycle_status`。
 
+导入结果还会带：
+
+- `conflict_strategy`
+- `skipped_file_count`
+
 常见 `reason`：
 
 - `bundle_root_missing`
@@ -249,7 +254,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs request detail \
       "app_kind": "agent"
     },
     "staged_bundle_id": "bundle_1234567890",
-    "expected_bundle_type": "session"
+    "expected_bundle_type": "session",
+    "conflict_strategy": "reject"
   }
 }
 ```
@@ -259,10 +265,17 @@ node docs/examples/generic-adapter/generic-adapter.mjs request detail \
 ```bash
 node docs/examples/generic-adapter/generic-adapter.mjs request import \
   --staged-bundle-id bundle_1234567890 \
-  --type session
+  --type session \
+  --conflict-strategy reject
 ```
 
-如果同名 bundle 已经存在，NekoDrop 不覆盖，会返回 `bundle_import_conflict`。adapter 需要让用户选择重命名、跳过或合并。
+`conflict_strategy` 支持：
+
+- `reject`：默认，不覆盖，冲突时返回 `bundle_import_conflict`
+- `rename`：导入到新的目标目录
+- `skip_conflicts`：已有文件不覆盖，只补缺失文件
+
+如果同名 bundle 已经存在，adapter 应先让用户选择策略，不要静默覆盖。
 
 这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
 

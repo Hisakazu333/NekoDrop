@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  buildDeviceCapabilitySummary,
   buildNearbyDeviceViewModel,
   buildTrustedDeviceViewModel,
   selectedTrustedTargetCopy
@@ -76,4 +77,25 @@ test("describes selected offline trusted devices as historical-address targets",
     targetLabel: "Win11",
     subtitle: "使用上次地址 · 192.168.1.20:45821"
   });
+});
+
+test("summarizes device capabilities without claiming future agent or transport support", () => {
+  assert.deepEqual(buildDeviceCapabilitySummary({
+    trusted: true,
+    online: true,
+    hasPublicKey: true
+  }), [
+    { label: "文件", state: "ready" },
+    { label: "可信", state: "ready" },
+    { label: "加密", state: "ready" },
+    { label: "资料包", state: "ready" },
+    { label: "Agent", state: "off" },
+    { label: "跨网络", state: "off" }
+  ]);
+
+  assert.deepEqual(buildDeviceCapabilitySummary({
+    trusted: false,
+    online: true,
+    hasPublicKey: true
+  }).map((item) => item.state), ["ready", "locked", "locked", "locked", "off", "off"]);
 });

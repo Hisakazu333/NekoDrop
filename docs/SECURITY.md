@@ -147,11 +147,17 @@ Incoming dialog must show:
 
 ## Overwrite Policy
 
-Default:
+Ordinary file receive:
 
 - do not overwrite existing files silently
 - if a name exists, create a unique name such as `file (1).ext`
-- later versions can offer overwrite/skip/rename options
+
+Bundle import:
+
+- default strategy is `reject`
+- `rename` imports into a new destination directory
+- `skip_conflicts` keeps existing files and imports missing files
+- no path silently overwrites an existing imported bundle file
 
 ## Integrity
 

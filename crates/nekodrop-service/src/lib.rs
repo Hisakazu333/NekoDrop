@@ -623,7 +623,7 @@ where
         frame => accept_plain_incoming_frame_with_cancel(
             stream,
             receive_dir,
-            Some(bundle_staging_root),
+            None,
             frame,
             decide,
             handle_pairing,
@@ -1676,6 +1676,53 @@ mod tests {
 
         send_paths(&endpoint, &[source_root]).unwrap();
         let receive_report = receiver.join().unwrap().unwrap();
+
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::LegacyPlain
+        );
+        assert_eq!(receive_report.bundle, None);
+        assert!(receive_dir.join("bundle").join("bundle.json").is_file());
+        assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_control_plain_fallback_keeps_bundle_as_plain_files_only() {
+        let dir = unique_temp_dir("service-encrypted-control-plain-bundle-not-staged");
+        let source_root = create_valid_bundle_source(&dir);
+        let receive_dir = dir.join("receive");
+        let staging_root = dir.join("staging");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let staging_root = staging_root.clone();
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &staging_root,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        send_paths(&endpoint, &[source_root]).unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
 
         assert_eq!(
             receive_report.security_mode,
