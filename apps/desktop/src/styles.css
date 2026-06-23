@@ -2143,6 +2143,27 @@ button:disabled {
   font-size: 12px;
 }
 
+.capability-summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.capability-token {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.capability-token.is-ready {
+  color: var(--text-1);
+}
+
+.capability-token.is-off {
+  color: var(--text-4);
+}
+
 .device-detail-actions {
   display: flex;
   flex-wrap: wrap;

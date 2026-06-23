@@ -1,4 +1,4 @@
-import { bundleTypeLabel } from "./bundleState.ts";
+import { bundleImportStrategyLabel, bundleTypeLabel } from "./bundleState.ts";
 import type {
   LocalBridgePendingActionDto,
   LocalBridgePendingActionResultDto,
@@ -50,7 +50,8 @@ export function localBridgePendingActionSummary(action: LocalBridgePendingAction
   }
   if (action.action_kind === "bundle.import") {
     const type = action.expected_bundle_type ? bundleTypeLabel(action.expected_bundle_type) : "资料包";
-    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}`;
+    const strategy = action.conflict_strategy ? ` · ${bundleImportStrategyLabel(action.conflict_strategy)}` : "";
+    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}${strategy}`;
   }
   return localBridgePendingActionKindLabel(action.action_kind);
 }
@@ -86,6 +87,9 @@ export function localBridgeActionResultDetailLine(result: LocalBridgePendingActi
   const reason = result.reason ? localBridgeActionResultReasonLabel(result.reason) : null;
   if (status === "queued") return "排队中";
   if (status === "running") return "执行中";
+  if ((status === "succeeded" || status === "completed") && result.skipped_file_count > 0) {
+    return `已完成 · 跳过 ${result.skipped_file_count} 个冲突`;
+  }
   if (status === "succeeded" || status === "completed") return "已完成";
   if (status === "conflict") return reason ? `冲突：${reason}` : "冲突";
   if (status === "cancelled") return reason ? `已取消：${reason}` : "已取消";

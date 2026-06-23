@@ -165,6 +165,9 @@ pub struct ReceivedBundleDto {
     pub import_blocking_reason: Option<String>,
     pub import_plan_files: Vec<BundleImportPlanFileDto>,
     pub import_conflict_count: usize,
+    pub import_conflict_strategies: Vec<String>,
+    pub imported_with_strategy: Option<String>,
+    pub import_skipped_file_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -193,6 +196,12 @@ pub struct ManualBundleCreateRequestDto {
     pub bundle_type: String,
     pub display_name: String,
     pub source_app: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct ImportStagedBundleRequestDto {
+    pub bundle_id: String,
+    pub conflict_strategy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -347,6 +356,7 @@ pub struct LocalBridgePendingActionDto {
     pub target_device_id: Option<String>,
     pub staged_bundle_id: Option<String>,
     pub expected_bundle_type: Option<String>,
+    pub conflict_strategy: Option<String>,
     pub require_trusted_device: Option<bool>,
     pub requested_at_ms: u128,
     pub bundle_root: Option<String>,
@@ -384,6 +394,8 @@ pub struct LocalBridgePendingActionResultDto {
     pub bundle_root: Option<String>,
     pub target_device_id: Option<String>,
     pub require_trusted_device: Option<bool>,
+    pub conflict_strategy: Option<String>,
+    pub skipped_file_count: usize,
     pub requested_at_ms: u128,
     pub claimed_at_ms: u128,
 }

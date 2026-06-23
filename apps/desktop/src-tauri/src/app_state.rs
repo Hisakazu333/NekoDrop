@@ -154,6 +154,8 @@ pub struct LocalBridgePendingActionResult {
     pub bundle_root: Option<String>,
     pub target_device_id: Option<String>,
     pub require_trusted_device: Option<bool>,
+    pub conflict_strategy: Option<String>,
+    pub skipped_file_count: usize,
     pub requested_at_ms: u128,
     pub claimed_at_ms: u128,
 }
@@ -175,6 +177,7 @@ pub struct LocalBridgePendingImportBundleAction {
     pub client: LocalBridgeClientIdentity,
     pub staged_bundle_id: String,
     pub expected_bundle_type: Option<BundleType>,
+    pub conflict_strategy: String,
     pub requested_at_ms: u128,
 }
 

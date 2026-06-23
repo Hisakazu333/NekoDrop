@@ -25,25 +25,38 @@ export function bundleStatusLabel(bundle: ReceivedBundleDto) {
 
 export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
   if (bundle.staging_status === "imported") {
-    return bundle.import_path ? `已导入到 ${bundle.import_path}` : "已导入";
+    const skipped = bundle.import_skipped_file_count > 0 ? `，跳过 ${bundle.import_skipped_file_count} 个冲突` : "";
+    const strategy = bundle.imported_with_strategy ? ` · ${bundleImportStrategyLabel(bundle.imported_with_strategy)}` : "";
+    return bundle.import_path ? `已导入到 ${bundle.import_path}${skipped}${strategy}` : `已导入${skipped}${strategy}`;
   }
   if (bundle.staging_status === "deleted") return "暂存已删除，历史记录保留";
   if (bundle.staging_status === "import_failed") return "导入没有完成，暂存仍可重试";
   if (bundle.staging_status === "expired") return "暂存已过期清理";
   if (bundle.import_conflict || bundle.import_blocking_reason === "destination_exists") {
     if ((bundle.import_conflict_count ?? 0) > 0) {
-      return `有 ${bundle.import_conflict_count} 个目标文件已存在，当前不会覆盖`;
+      return `有 ${bundle.import_conflict_count} 个目标文件已存在，可重命名或跳过冲突`;
     }
-    return "同名资料已存在，当前不会覆盖";
+    return "同名资料已存在，可重命名导入";
   }
   if (bundle.import_blocking_reason === "destination_file_exists") {
-    return "目标位置已有同名文件，当前不会覆盖";
+    return "目标位置已有同名文件，可重命名或跳过冲突";
   }
   if (bundle.can_import_now) return "可导入，导入前仍需要确认";
   if (bundle.import_allowed) return "已暂存，等待本机应用申请导入";
   return bundle.import_blocking_reason === "not_importable"
     ? "已暂存，只能保存，不能直接导入"
     : "已暂存，但缺少导入权限或包含敏感内容";
+}
+
+export function bundleImportStrategyLabel(strategy: string) {
+  if (strategy === "reject") return "不覆盖";
+  if (strategy === "rename") return "重命名";
+  if (strategy === "skip_conflicts") return "跳过冲突";
+  return strategy;
+}
+
+export function bundleCanUseImportStrategy(bundle: ReceivedBundleDto, strategy: string) {
+  return bundle.import_conflict_strategies.includes(strategy);
 }
 
 export function bundleImportPlanLine(bundle: ReceivedBundleDto) {

@@ -190,7 +190,8 @@ function buildRequest(kind, flags) {
         request_id: flags["request-id"] ?? `adapter-import-${Date.now()}`,
         client: CLIENT,
         staged_bundle_id: requireFlag(flags, "staged-bundle-id"),
-        expected_bundle_type: requireKnownType(requireFlag(flags, "type"))
+        expected_bundle_type: requireKnownType(requireFlag(flags, "type")),
+        conflict_strategy: requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
       }
     };
   }
@@ -272,7 +273,8 @@ function buildWorkflow(flags) {
       step: "import",
       request: buildRequest("import", {
         "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
-        type: requireKnownType(requireFlag(flags, "type"))
+        type: requireKnownType(requireFlag(flags, "type")),
+        "conflict-strategy": flags["conflict-strategy"] ?? "reject"
       })
     });
   }
@@ -406,6 +408,11 @@ function requireKnownType(type) {
   return type;
 }
 
+function requireConflictStrategy(strategy) {
+  if (["reject", "rename", "skip_conflicts"].includes(strategy)) return strategy;
+  throw new Error("--conflict-strategy must be reject, rename, or skip_conflicts");
+}
+
 function assertSafeBundleId(bundleId) {
   if (!/^[A-Za-z0-9._-]+$/.test(bundleId) || bundleId.includes("..")) {
     throw new Error(`unsafe bundle id: ${bundleId}`);
@@ -439,10 +446,10 @@ function usage() {
   node generic-adapter.mjs request auth
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
   node generic-adapter.mjs request detail --staged-bundle-id ID
-  node generic-adapter.mjs request import --staged-bundle-id ID --type session
+  node generic-adapter.mjs request import --staged-bundle-id ID --type session --conflict-strategy reject
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results
-  node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace
+  node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }

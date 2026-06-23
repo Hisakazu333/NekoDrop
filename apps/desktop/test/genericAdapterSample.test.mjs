@@ -121,7 +121,9 @@ test("generic adapter sample prints import and detail request envelopes", () => 
       "--staged-bundle-id",
       "bundle_received_1",
       "--type",
-      "session"
+      "session",
+      "--conflict-strategy",
+      "rename"
     ],
     { encoding: "utf8" }
   );
@@ -135,6 +137,7 @@ test("generic adapter sample prints import and detail request envelopes", () => 
   assert.equal(importRequest.kind, "bundle.import");
   assert.equal(importRequest.payload.staged_bundle_id, "bundle_received_1");
   assert.equal(importRequest.payload.expected_bundle_type, "session");
+  assert.equal(importRequest.payload.conflict_strategy, "rename");
 });
 
 test("generic adapter sample prints action result query envelopes", () => {
@@ -175,7 +178,9 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
       "--staged-bundle-id",
       "bundle_received_1",
       "--type",
-      "workspace"
+      "workspace",
+      "--conflict-strategy",
+      "skip_conflicts"
     ],
     { encoding: "utf8" }
   );
@@ -194,6 +199,7 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
   assert.equal(workflow.steps[1].request.kind, "bundle.send");
   assert.equal(workflow.steps[3].request.kind, "bundle.detail");
   assert.equal(workflow.steps[4].request.kind, "bundle.import");
+  assert.equal(workflow.steps[4].request.payload.conflict_strategy, "skip_conflicts");
   assert.equal(workflow.steps[5].request.kind, "actions.results");
 });
 
