@@ -5107,6 +5107,8 @@ mod tests {
         assert_eq!(response.devices[0].device_id, "device-a");
         assert_eq!(response.staged_bundles.len(), 1);
         assert_eq!(response.staged_bundles[0].bundle_id, "bundle_1234567890");
+        assert!(response.staged_bundles[0].staging_path.is_empty());
+        assert!(response.staged_bundles[0].import_destination.is_none());
         assert!(response.transfer_status.is_none());
 
         fs::remove_dir_all(dir).unwrap();
@@ -5208,7 +5210,111 @@ mod tests {
         assert_eq!(response.security_state, "read_only");
         assert_eq!(response.staged_bundles.len(), 1);
         assert_eq!(response.staged_bundles[0].bundle_id, "bundle_1234567890");
+        assert!(response.staged_bundles[0].staging_path.is_empty());
+        assert!(response.staged_bundles[0].import_destination.is_none());
+        assert!(response.staged_bundles[0].import_receipt_path.is_none());
+        assert!(response.staged_bundles[0]
+            .import_plan_files
+            .iter()
+            .all(|file| file.destination_path.is_empty()));
         assert!(!response.requires_user_confirmation);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_detail_returns_imported_status_without_local_paths() {
+        let dir = unique_bundle_temp_dir("local-bridge-bundle-detail-imported");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        let request = serde_json::json!({
+            "kind": "bundle.detail",
+            "payload": {
+                "request_id": "bridge-request-detail-imported",
+                "staged_bundle_id": "bundle_1234567890"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &[],
+            2_000,
+        )
+        .unwrap();
+
+        assert_eq!(response.request_id, "bridge-request-detail-imported");
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.security_state, "read_only");
+        assert_eq!(response.staged_bundles.len(), 1);
+        let bundle = &response.staged_bundles[0];
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.staging_status, "imported");
+        assert!(bundle.staging_path.is_empty());
+        assert!(bundle.import_path.is_none());
+        assert!(bundle.import_destination.is_none());
+        assert!(bundle.import_receipt_path.is_none());
+        assert_eq!(bundle.rollback_file_count, 2);
+        assert!(bundle.can_rollback_now);
+        assert!(bundle.rollback_blocking_reason.is_none());
+        assert_eq!(bundle.rolled_back_file_count, 0);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_detail_returns_rolled_back_status_without_local_paths() {
+        let dir = unique_bundle_temp_dir("local-bridge-bundle-detail-rolled-back");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        rollback_imported_bundle_at(&import_root, "bundle_1234567890").unwrap();
+        let request = serde_json::json!({
+            "kind": "bundle.detail",
+            "payload": {
+                "request_id": "bridge-request-detail-rolled-back",
+                "staged_bundle_id": "bundle_1234567890"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &[],
+            2_000,
+        )
+        .unwrap();
+
+        assert_eq!(response.request_id, "bridge-request-detail-rolled-back");
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.staged_bundles.len(), 1);
+        let bundle = &response.staged_bundles[0];
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.staging_status, "rolled_back");
+        assert!(bundle.staging_path.is_empty());
+        assert!(bundle.import_path.is_none());
+        assert!(bundle.import_destination.is_none());
+        assert!(bundle.import_receipt_path.is_none());
+        assert_eq!(bundle.rollback_file_count, 2);
+        assert!(!bundle.can_rollback_now);
+        assert_eq!(
+            bundle.rollback_blocking_reason.as_deref(),
+            Some("destination_missing")
+        );
+        assert_eq!(bundle.rolled_back_file_count, 2);
 
         fs::remove_dir_all(dir).unwrap();
     }
