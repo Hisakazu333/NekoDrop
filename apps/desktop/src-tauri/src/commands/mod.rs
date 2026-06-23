@@ -2560,16 +2560,19 @@ fn execute_local_bridge_bundle_rollback_action(
             "completed",
             &action,
             None,
+            None,
             "local bridge bundle import was rolled back",
             rolled_back.rolled_back_file_count,
             now_ms,
         )),
         Err(error) => {
             let reason = local_bridge_bundle_rollback_failure_reason(&error);
+            let rollback_blocking_reason = local_bridge_bundle_rollback_blocking_reason(&error);
             Ok(local_bridge_bundle_rollback_result(
                 "failed",
                 &action,
                 Some(reason),
+                rollback_blocking_reason,
                 &format!("local bridge bundle rollback failed: {error}"),
                 0,
                 now_ms,
@@ -2596,6 +2599,19 @@ fn local_bridge_bundle_rollback_failure_reason(error: &str) -> &'static str {
         return "bundle_rollback_blocked";
     }
     "bundle_rollback_failed"
+}
+
+fn local_bridge_bundle_rollback_blocking_reason(error: &str) -> Option<&'static str> {
+    if error.contains("destination_missing") {
+        return Some("destination_missing");
+    }
+    if error.contains("imported_file_missing") {
+        return Some("imported_file_missing");
+    }
+    if error.contains("already_rolled_back") {
+        return Some("already_rolled_back");
+    }
+    None
 }
 
 fn preflight_local_bridge_bundle_send_action(
@@ -2771,6 +2787,7 @@ fn push_local_bridge_pending_action_result(
         skipped_file_count: 0,
         import_receipt_path: None,
         rollback_file_count: 0,
+        rollback_blocking_reason: None,
         rolled_back_file_count: 0,
         requested_at_ms,
         claimed_at_ms,
@@ -6235,7 +6252,47 @@ mod tests {
         assert_eq!(result.lifecycle_status.as_deref(), Some("succeeded"));
         assert_eq!(result.bundle_id.as_deref(), Some("bundle_1234567890"));
         assert_eq!(result.rolled_back_file_count, 2);
+        assert!(result.rollback_blocking_reason.is_none());
         assert!(!std::path::Path::new(imported.import_path.as_deref().unwrap()).exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_rollback_execution_records_blocking_reason() {
+        let dir = unique_bundle_temp_dir("local-bridge-rollback-blocked");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let imported =
+            import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        fs::remove_file(
+            std::path::Path::new(imported.import_path.as_deref().unwrap()).join("content.bin"),
+        )
+        .unwrap();
+        let action = LocalBridgePendingRollbackBundleImportAction {
+            request_id: "bridge-rollback-blocked-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            },
+            bundle_id: "bundle_1234567890".to_string(),
+            requested_at_ms: 1_500,
+        };
+        let result =
+            execute_local_bridge_bundle_rollback_action(action, &import_root, 2_000).unwrap();
+
+        assert_eq!(result.request_id, "bridge-rollback-blocked-1");
+        assert_eq!(result.action_kind, "bundle.rollback");
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.lifecycle_status.as_deref(), Some("failed"));
+        assert_eq!(result.reason.as_deref(), Some("bundle_rollback_blocked"));
+        assert_eq!(
+            result.rollback_blocking_reason.as_deref(),
+            Some("imported_file_missing")
+        );
+        assert_eq!(result.rolled_back_file_count, 0);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -7130,6 +7187,7 @@ mod tests {
                 skipped_file_count: 0,
                 import_receipt_path: Some("/tmp/private/receipt.json".to_string()),
                 rollback_file_count: 2,
+                rollback_blocking_reason: None,
                 rolled_back_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
@@ -7218,6 +7276,7 @@ mod tests {
                 skipped_file_count: 0,
                 import_receipt_path: None,
                 rollback_file_count: 0,
+                rollback_blocking_reason: None,
                 rolled_back_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
@@ -7240,6 +7299,7 @@ mod tests {
                 skipped_file_count: 0,
                 import_receipt_path: None,
                 rollback_file_count: 0,
+                rollback_blocking_reason: None,
                 rolled_back_file_count: 0,
                 requested_at_ms: 1_600,
                 claimed_at_ms: 2_100,
@@ -7262,6 +7322,7 @@ mod tests {
                 skipped_file_count: 0,
                 import_receipt_path: None,
                 rollback_file_count: 0,
+                rollback_blocking_reason: None,
                 rolled_back_file_count: 0,
                 requested_at_ms: 1_700,
                 claimed_at_ms: 2_200,
@@ -7284,6 +7345,7 @@ mod tests {
                 skipped_file_count: 0,
                 import_receipt_path: None,
                 rollback_file_count: 0,
+                rollback_blocking_reason: None,
                 rolled_back_file_count: 2,
                 requested_at_ms: 1_800,
                 claimed_at_ms: 2_300,

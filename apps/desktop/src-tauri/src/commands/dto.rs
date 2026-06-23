@@ -414,6 +414,7 @@ pub struct LocalBridgePendingActionResultDto {
     pub has_import_receipt: bool,
     pub rollback_file_count: usize,
     pub can_request_rollback: bool,
+    pub rollback_blocking_reason: Option<String>,
     pub rolled_back_file_count: usize,
     pub requested_at_ms: u128,
     pub claimed_at_ms: u128,

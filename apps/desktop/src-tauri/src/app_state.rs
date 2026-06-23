@@ -159,6 +159,7 @@ pub struct LocalBridgePendingActionResult {
     pub skipped_file_count: usize,
     pub import_receipt_path: Option<String>,
     pub rollback_file_count: usize,
+    pub rollback_blocking_reason: Option<String>,
     pub rolled_back_file_count: usize,
     pub requested_at_ms: u128,
     pub claimed_at_ms: u128,

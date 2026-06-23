@@ -44,6 +44,7 @@ pub(super) fn local_bridge_pending_action_result_to_dto(
                 .lifecycle_status
                 .as_deref()
                 .is_some_and(|status| status == "succeeded"),
+        rollback_blocking_reason: result.rollback_blocking_reason.clone(),
         rolled_back_file_count: result.rolled_back_file_count,
         requested_at_ms: result.requested_at_ms,
         claimed_at_ms: result.claimed_at_ms,

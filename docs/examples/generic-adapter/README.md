@@ -210,6 +210,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 - `has_import_receipt`
 - `rollback_file_count`
 - `can_request_rollback`
+- `rollback_blocking_reason`
 - `rolled_back_file_count`
 
 普通 bridge response 不返回 NekoDrop 本机 `import_receipt_path`。adapter 应用 `has_import_receipt` 和 `can_request_rollback` 判断是否可以请求 `bundle.rollback`，不要依赖本机私有路径。
@@ -226,6 +227,14 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results
 - `bundle_rollback_failed`
 - `bundle_import_conflict`
 - `bundle_import_failed`
+
+当 `reason` 是 `bundle_rollback_blocked` 时，`rollback_blocking_reason` 会说明阻断类型。当前可能值：
+
+- `destination_missing`
+- `imported_file_missing`
+- `already_rolled_back`
+
+这些值只用于决定下一步提示，不包含本机路径。
 
 ## 等待事件
 
