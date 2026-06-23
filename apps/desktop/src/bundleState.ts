@@ -27,7 +27,10 @@ export function receiveBundleImportHint(bundle: ReceivedBundleDto) {
   if (bundle.staging_status === "imported") {
     const skipped = bundle.import_skipped_file_count > 0 ? `，跳过 ${bundle.import_skipped_file_count} 个冲突` : "";
     const strategy = bundle.imported_with_strategy ? ` · ${bundleImportStrategyLabel(bundle.imported_with_strategy)}` : "";
-    return bundle.import_path ? `已导入到 ${bundle.import_path}${skipped}${strategy}` : `已导入${skipped}${strategy}`;
+    const receipt = bundle.import_receipt_path ? " · 已记录结果" : "";
+    return bundle.import_path
+      ? `已导入到 ${bundle.import_path}${skipped}${strategy}${receipt}`
+      : `已导入${skipped}${strategy}${receipt}`;
   }
   if (bundle.staging_status === "deleted") return "暂存已删除，历史记录保留";
   if (bundle.staging_status === "import_failed") return "导入没有完成，暂存仍可重试";

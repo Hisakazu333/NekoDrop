@@ -52,6 +52,9 @@ fn staged_bundle_to_dto(staged: &StagedBundle, import_root: &Path) -> ReceivedBu
         import_conflict_strategies: strategies,
         imported_with_strategy: None,
         import_skipped_file_count: 0,
+        import_receipt_path: None,
+        imported_manifest_paths: Vec::new(),
+        skipped_manifest_paths: Vec::new(),
     }
 }
 
@@ -144,6 +147,9 @@ pub(super) fn import_staged_bundle_with_strategy_at(
             import_conflict_strategy_label(imported.conflict_strategy).to_string(),
         ),
         import_skipped_file_count: imported.skipped_file_count,
+        import_receipt_path: Some(imported.import_receipt_path.display().to_string()),
+        imported_manifest_paths: imported.imported_manifest_paths,
+        skipped_manifest_paths: imported.skipped_manifest_paths,
     })
 }
 
@@ -174,11 +180,7 @@ pub(super) fn parse_import_conflict_strategy(
 pub(super) fn import_conflict_strategy_label(
     strategy: BundleImportConflictStrategy,
 ) -> &'static str {
-    match strategy {
-        BundleImportConflictStrategy::Reject => "reject",
-        BundleImportConflictStrategy::Rename => "rename",
-        BundleImportConflictStrategy::SkipConflicts => "skip_conflicts",
-    }
+    strategy.as_str()
 }
 
 fn import_conflict_strategies(plan: Option<&BundleImportPlan>) -> Vec<String> {

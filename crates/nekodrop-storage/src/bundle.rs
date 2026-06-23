@@ -11,9 +11,13 @@ use nekolink_protocol::{
     BundleSender, BundleSummary, BundleType, Capability, ProtocolError, BUNDLE_CHECKSUM_SHA256,
     BUNDLE_SCHEMA_V1,
 };
+use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
 use crate::checksum::sha256_file;
+
+pub const BUNDLE_IMPORT_RECEIPT_SCHEMA_V1: &str = "nekodrop.bundle.import_receipt.v1";
+const BUNDLE_IMPORT_RECEIPTS_DIR: &str = ".nekodrop_import_receipts";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BundleImportPolicy {
@@ -47,6 +51,10 @@ pub struct ImportedBundle {
     pub total_bytes: u64,
     pub conflict_strategy: BundleImportConflictStrategy,
     pub skipped_file_count: usize,
+    pub imported_manifest_paths: Vec<String>,
+    pub skipped_manifest_paths: Vec<String>,
+    pub import_receipt_path: PathBuf,
+    pub import_receipt: BundleImportReceipt,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -54,6 +62,30 @@ pub enum BundleImportConflictStrategy {
     Reject,
     Rename,
     SkipConflicts,
+}
+
+impl BundleImportConflictStrategy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BundleImportConflictStrategy::Reject => "reject",
+            BundleImportConflictStrategy::Rename => "rename",
+            BundleImportConflictStrategy::SkipConflicts => "skip_conflicts",
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BundleImportReceipt {
+    pub schema: String,
+    pub bundle_id: String,
+    pub bundle_type: BundleType,
+    pub display_name: String,
+    pub source_app: String,
+    pub destination_path: String,
+    pub conflict_strategy: String,
+    pub imported_manifest_paths: Vec<String>,
+    pub skipped_manifest_paths: Vec<String>,
+    pub imported_at_ms: u128,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -539,15 +571,18 @@ pub fn import_staged_bundle_with_strategy(
         temp_path.clone()
     };
 
-    let mut skipped_file_count = 0usize;
+    let mut imported_manifest_paths = Vec::new();
+    let mut skipped_manifest_paths = Vec::new();
     let copy_result = detected.manifest.files.iter().try_for_each(|file| {
         if conflict_strategy == BundleImportConflictStrategy::SkipConflicts
             && import_payload_destination(&write_root, &file.path)?.exists()
         {
-            skipped_file_count += 1;
+            skipped_manifest_paths.push(file.path.clone());
             return Ok(());
         }
-        copy_import_payload_file(staged_bundle_root, &write_root, &file.path)
+        copy_import_payload_file(staged_bundle_root, &write_root, &file.path)?;
+        imported_manifest_paths.push(file.path.clone());
+        Ok(())
     });
     if let Err(error) = copy_result {
         if conflict_strategy != BundleImportConflictStrategy::SkipConflicts {
@@ -566,6 +601,26 @@ pub fn import_staged_bundle_with_strategy(
         })?;
     }
 
+    let imported_at_ms = unique_suffix();
+    let import_receipt = BundleImportReceipt {
+        schema: BUNDLE_IMPORT_RECEIPT_SCHEMA_V1.to_string(),
+        bundle_id: plan.bundle_id.clone(),
+        bundle_type: plan.bundle_type,
+        display_name: plan.display_name.clone(),
+        source_app: plan.source_app.clone(),
+        destination_path: destination_path.display().to_string(),
+        conflict_strategy: conflict_strategy.as_str().to_string(),
+        imported_manifest_paths: imported_manifest_paths.clone(),
+        skipped_manifest_paths: skipped_manifest_paths.clone(),
+        imported_at_ms,
+    };
+    let import_receipt_path = write_bundle_import_receipt(
+        import_root,
+        &plan.bundle_id,
+        imported_at_ms,
+        &import_receipt,
+    )?;
+
     Ok(ImportedBundle {
         bundle_id: plan.bundle_id,
         bundle_type: plan.bundle_type,
@@ -575,7 +630,11 @@ pub fn import_staged_bundle_with_strategy(
         file_count: plan.file_count,
         total_bytes: plan.total_bytes,
         conflict_strategy,
-        skipped_file_count,
+        skipped_file_count: skipped_manifest_paths.len(),
+        imported_manifest_paths,
+        skipped_manifest_paths,
+        import_receipt_path,
+        import_receipt,
     })
 }
 
@@ -635,6 +694,94 @@ pub fn plan_staged_bundle_import(
         files,
         conflict_count,
     })
+}
+
+pub fn list_bundle_import_receipts(import_root: &Path) -> NekoDropResult<Vec<BundleImportReceipt>> {
+    let receipts_root = bundle_import_receipts_root(import_root);
+    if !receipts_root.exists() {
+        return Ok(Vec::new());
+    }
+    let metadata = fs::symlink_metadata(&receipts_root).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to read bundle import receipts root {}: {error}",
+            receipts_root.display()
+        ))
+    })?;
+    if !metadata.is_dir() {
+        return Err(NekoDropError::Storage(format!(
+            "bundle import receipts root is not a directory: {}",
+            receipts_root.display()
+        )));
+    }
+
+    let mut receipts = Vec::new();
+    for entry in fs::read_dir(&receipts_root).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to read bundle import receipts root {}: {error}",
+            receipts_root.display()
+        ))
+    })? {
+        let entry = entry.map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to read bundle import receipt entry: {error}"
+            ))
+        })?;
+        let path = entry.path();
+        if entry
+            .file_type()
+            .map_err(|error| {
+                NekoDropError::Storage(format!(
+                    "failed to read bundle import receipt file type {}: {error}",
+                    path.display()
+                ))
+            })?
+            .is_file()
+            && path.extension().and_then(|extension| extension.to_str()) == Some("json")
+        {
+            receipts.push(read_bundle_import_receipt(&path)?);
+        }
+    }
+    receipts.sort_by(|left, right| {
+        right
+            .imported_at_ms
+            .cmp(&left.imported_at_ms)
+            .then_with(|| left.bundle_id.cmp(&right.bundle_id))
+    });
+    Ok(receipts)
+}
+
+fn write_bundle_import_receipt(
+    import_root: &Path,
+    bundle_id: &str,
+    imported_at_ms: u128,
+    receipt: &BundleImportReceipt,
+) -> NekoDropResult<PathBuf> {
+    let receipts_root = bundle_import_receipts_root(import_root);
+    fs::create_dir_all(&receipts_root).map_err(|error| {
+        NekoDropError::Storage(format!(
+            "failed to create bundle import receipts root {}: {error}",
+            receipts_root.display()
+        ))
+    })?;
+    let path = receipts_root.join(format!("{bundle_id}-{imported_at_ms}.json"));
+    write_json_file(&path, receipt)?;
+    Ok(path)
+}
+
+fn read_bundle_import_receipt(path: &Path) -> NekoDropResult<BundleImportReceipt> {
+    let receipt: BundleImportReceipt = read_json_file(path)?;
+    if receipt.schema != BUNDLE_IMPORT_RECEIPT_SCHEMA_V1 {
+        return Err(NekoDropError::Storage(format!(
+            "unsupported bundle import receipt schema in {}: {}",
+            path.display(),
+            receipt.schema
+        )));
+    }
+    Ok(receipt)
+}
+
+fn bundle_import_receipts_root(import_root: &Path) -> PathBuf {
+    import_root.join(BUNDLE_IMPORT_RECEIPTS_DIR)
 }
 
 fn unique_bundle_import_destination(
@@ -1313,6 +1460,24 @@ mod tests {
             fs::read(imported.destination_path.join("content.bin")).unwrap(),
             b"hello bundle"
         );
+        assert!(imported.import_receipt_path.is_file());
+        assert_eq!(
+            imported.import_receipt.schema,
+            BUNDLE_IMPORT_RECEIPT_SCHEMA_V1
+        );
+        assert_eq!(imported.import_receipt.bundle_id, "bundle_1234567890");
+        assert_eq!(imported.import_receipt.conflict_strategy, "reject");
+        assert_eq!(
+            imported.import_receipt.destination_path,
+            imported.destination_path.display().to_string()
+        );
+        assert_eq!(
+            imported.import_receipt.imported_manifest_paths,
+            vec!["files/manifest.json", "files/content.bin"]
+        );
+        assert!(imported.import_receipt.skipped_manifest_paths.is_empty());
+        let receipts = list_bundle_import_receipts(&import_root).unwrap();
+        assert_eq!(receipts, vec![imported.import_receipt.clone()]);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -1482,6 +1647,26 @@ mod tests {
             b"existing"
         );
         assert!(imported.destination_path.join("manifest.json").is_file());
+        assert_eq!(
+            imported.imported_manifest_paths,
+            vec!["files/manifest.json".to_string()]
+        );
+        assert_eq!(
+            imported.skipped_manifest_paths,
+            vec!["files/content.bin".to_string()]
+        );
+        let receipts = list_bundle_import_receipts(&import_root).unwrap();
+        assert_eq!(receipts.len(), 1);
+        assert_eq!(receipts[0].bundle_id, "bundle_1234567890");
+        assert_eq!(receipts[0].conflict_strategy, "skip_conflicts");
+        assert_eq!(
+            receipts[0].imported_manifest_paths,
+            vec!["files/manifest.json"]
+        );
+        assert_eq!(
+            receipts[0].skipped_manifest_paths,
+            vec!["files/content.bin"]
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
