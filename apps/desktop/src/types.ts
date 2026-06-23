@@ -145,6 +145,7 @@ export interface LocalBridgePendingActionResultDto {
   has_import_receipt: boolean;
   rollback_file_count: number;
   can_request_rollback: boolean;
+  rollback_blocking_reason: "destination_missing" | "imported_file_missing" | "already_rolled_back" | string | null;
   rolled_back_file_count: number;
   requested_at_ms: number;
   claimed_at_ms: number;

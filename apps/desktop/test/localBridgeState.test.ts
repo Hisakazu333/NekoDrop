@@ -53,6 +53,7 @@ function actionResult(overrides: Partial<LocalBridgePendingActionResultDto> = {}
     has_import_receipt: false,
     rollback_file_count: 0,
     can_request_rollback: false,
+    rollback_blocking_reason: null,
     rolled_back_file_count: 0,
     requested_at_ms: 1_000,
     claimed_at_ms: 2_000,
@@ -143,6 +144,24 @@ test("local bridge action result detail shows rollback results", () => {
     tone: "success",
     label: "完成",
     detail: "已撤回 · 删除 3 个文件"
+  });
+});
+
+test("local bridge action result detail shows rollback blocking reason", () => {
+  const result = actionResult({
+    action_kind: "bundle.rollback",
+    status: "failed",
+    lifecycle_status: "failed",
+    reason: "bundle_rollback_blocked",
+    rollback_blocking_reason: "destination_missing"
+  });
+
+  assert.equal(localBridgeActionResultSummary(result), "撤回导入 · 失败 · 撤回被阻止 · bundle_123");
+  assert.equal(localBridgeActionResultDetailLine(result), "失败：目标已不存在");
+  assert.deepEqual(localBridgeActionResultLifecycleView(result), {
+    tone: "danger",
+    label: "失败",
+    detail: "失败：目标已不存在"
   });
 });
 

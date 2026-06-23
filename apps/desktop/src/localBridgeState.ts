@@ -1,4 +1,4 @@
-import { bundleImportStrategyLabel, bundleTypeLabel } from "./bundleState.ts";
+import { bundleImportStrategyLabel, bundleRollbackBlockingLabel, bundleTypeLabel } from "./bundleState.ts";
 import type {
   LocalBridgePendingActionDto,
   LocalBridgePendingActionResultDto,
@@ -105,6 +105,14 @@ export function localBridgeActionResultDetailLine(result: LocalBridgePendingActi
   if (status === "conflict") return reason ? `冲突：${reason}` : "冲突";
   if (status === "cancelled") return reason ? `已取消：${reason}` : "已取消";
   if (status === "failed_preflight") return reason ? `预检失败：${reason}` : "预检失败";
+  if (
+    result.action_kind === "bundle.rollback" &&
+    status === "failed" &&
+    result.reason === "bundle_rollback_blocked" &&
+    result.rollback_blocking_reason
+  ) {
+    return `失败：${bundleRollbackBlockingLabel(result.rollback_blocking_reason)}`;
+  }
   if (status === "failed") return reason ? `失败：${reason}` : result.message || "失败";
   return reason ? `${localBridgeActionResultStatusLabel(status)}：${reason}` : result.message;
 }
