@@ -35,10 +35,12 @@ function bundle(overrides: Partial<ReceivedBundleDto> = {}): ReceivedBundleDto {
     imported_with_strategy: null,
     import_skipped_file_count: 0,
     import_receipt_path: null,
+    has_import_receipt: false,
     imported_manifest_paths: [],
     skipped_manifest_paths: [],
     rollback_file_count: 0,
     can_rollback_now: false,
+    can_request_rollback: false,
     rollback_blocking_reason: null,
     ...overrides
   };
@@ -130,11 +132,27 @@ test("summarizes renamed imports and skipped conflict counts", () => {
     imported_with_strategy: "skip_conflicts",
     import_skipped_file_count: 2,
     import_receipt_path: "/tmp/imports/.nekodrop_import_receipts/bundle_123-1.json",
+    has_import_receipt: true,
     rollback_file_count: 1,
-    can_rollback_now: true
+    can_rollback_now: true,
+    can_request_rollback: true
   });
 
   assert.equal(receiveBundleImportHint(imported), "已导入到 /tmp/imports/bundle_123-2，跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
+});
+
+test("summarizes imported bundle rollback state without a local receipt path", () => {
+  const imported = bundle({
+    staging_status: "imported",
+    import_path: null,
+    import_receipt_path: null,
+    has_import_receipt: true,
+    rollback_file_count: 1,
+    can_rollback_now: true,
+    can_request_rollback: true
+  });
+
+  assert.equal(receiveBundleImportHint(imported), "已导入 · 可撤回 1 个");
 });
 
 test("summarizes import plan file counts for importable bundles", () => {

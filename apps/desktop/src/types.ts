@@ -298,10 +298,12 @@ export interface ReceivedBundleDto {
   imported_with_strategy: "reject" | "rename" | "skip_conflicts" | string | null;
   import_skipped_file_count: number;
   import_receipt_path: string | null;
+  has_import_receipt: boolean;
   imported_manifest_paths: string[];
   skipped_manifest_paths: string[];
   rollback_file_count: number;
   can_rollback_now: boolean;
+  can_request_rollback: boolean;
   rollback_blocking_reason: "destination_missing" | "imported_file_missing" | string | null;
   rolled_back_file_count: number;
 }

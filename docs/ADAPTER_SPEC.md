@@ -87,7 +87,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 - `rename`：导入到新的目标目录
 - `skip_conflicts`：已有文件不覆盖，只补缺失文件
 
-导入结果会带回 `conflict_strategy`、`skipped_file_count`、`has_import_receipt`、`rollback_file_count` 和 `can_request_rollback`。receipt 路径属于 NekoDrop 本机私有路径，普通 bridge response 不返回；adapter 只根据这些状态字段判断是否能发起 `bundle.rollback`。`bundle.detail` 和列表快照也只返回状态、manifest 相对路径、冲突数量和回滚能力，不返回 `staging_path`、`import_path`、`import_destination` 或 plan 里的本机目标路径。receipt 记录目标目录、实际导入和跳过的 payload 路径。NekoDrop 可以基于 receipt 生成回滚计划，也可以执行 `bundle.rollback`。这个撤回只删除 NekoDrop 本机导入区里“本次导入记录”对应的文件；`skip_conflicts` 跳过的既有文件不会被删除，也不会写回第三方应用目录。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
+导入结果会带回 `conflict_strategy`、`skipped_file_count`、`has_import_receipt`、`rollback_file_count` 和 `can_request_rollback`。receipt 路径属于 NekoDrop 本机私有路径，普通 bridge response 不返回；adapter 只根据这些状态字段判断是否能发起 `bundle.rollback`。`bundle.detail` 和列表快照也会返回 `has_import_receipt`、`rollback_file_count`、`can_rollback_now`、`can_request_rollback`、`rolled_back_file_count` 和 `rollback_blocking_reason`，但不返回 `staging_path`、`import_path`、`import_destination` 或 plan 里的本机目标路径。receipt 记录目标目录、实际导入和跳过的 payload 路径。NekoDrop 可以基于 receipt 生成回滚计划，也可以执行 `bundle.rollback`。这个撤回只删除 NekoDrop 本机导入区里“本次导入记录”对应的文件；`skip_conflicts` 跳过的既有文件不会被删除，也不会写回第三方应用目录。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
 
 `bundle.rollback` 使用 `bundle_id` 找最新 import receipt，需要 `bundle.import.request` 授权。回滚结果也通过 `actions.results` 返回给同一个授权 client，`rolled_back_file_count` 表示本次删除的文件数。它适合撤回 NekoDrop 本机导入区里的临时导入结果，不等于撤回上层应用已经落库、合并或生成的内容。真实产品 adapter 如果把 bundle 写进自己的应用目录，还要实现自己的事务或回滚。
 

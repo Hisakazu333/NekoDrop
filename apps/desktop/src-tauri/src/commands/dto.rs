@@ -169,10 +169,12 @@ pub struct ReceivedBundleDto {
     pub imported_with_strategy: Option<String>,
     pub import_skipped_file_count: usize,
     pub import_receipt_path: Option<String>,
+    pub has_import_receipt: bool,
     pub imported_manifest_paths: Vec<String>,
     pub skipped_manifest_paths: Vec<String>,
     pub rollback_file_count: usize,
     pub can_rollback_now: bool,
+    pub can_request_rollback: bool,
     pub rollback_blocking_reason: Option<String>,
     pub rolled_back_file_count: usize,
 }

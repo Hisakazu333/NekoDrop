@@ -65,10 +65,12 @@ fn staged_bundle_to_dto(
         imported_with_strategy: None,
         import_skipped_file_count: 0,
         import_receipt_path: None,
+        has_import_receipt: false,
         imported_manifest_paths: Vec::new(),
         skipped_manifest_paths: Vec::new(),
         rollback_file_count: 0,
         can_rollback_now: false,
+        can_request_rollback: false,
         rollback_blocking_reason: None,
         rolled_back_file_count: 0,
     })
@@ -167,10 +169,12 @@ pub(super) fn import_staged_bundle_with_strategy_at(
         ),
         import_skipped_file_count: imported.skipped_file_count,
         import_receipt_path: Some(imported.import_receipt_path.display().to_string()),
+        has_import_receipt: true,
         imported_manifest_paths: imported.imported_manifest_paths,
         skipped_manifest_paths: imported.skipped_manifest_paths,
         rollback_file_count: rollback_plan.files.len(),
         can_rollback_now: rollback_plan.can_rollback_now,
+        can_request_rollback: can_request_rollback(&rollback_plan),
         rollback_blocking_reason: rollback_plan.blocking_reason,
         rolled_back_file_count: 0,
     })
@@ -214,10 +218,12 @@ pub(super) fn rollback_imported_bundle_at(
         imported_with_strategy: Some(receipt.conflict_strategy),
         import_skipped_file_count: receipt.skipped_manifest_paths.len(),
         import_receipt_path: None,
+        has_import_receipt: true,
         imported_manifest_paths: Vec::new(),
         skipped_manifest_paths: receipt.skipped_manifest_paths,
         rollback_file_count: 0,
         can_rollback_now: false,
+        can_request_rollback: false,
         rollback_blocking_reason: Some("already_rolled_back".to_string()),
         rolled_back_file_count: rolled_back.removed_file_count,
     })
@@ -279,13 +285,19 @@ fn receipt_to_imported_bundle_dto(
         imported_with_strategy: Some(receipt.conflict_strategy.clone()),
         import_skipped_file_count: receipt.skipped_manifest_paths.len(),
         import_receipt_path: None,
+        has_import_receipt: true,
         imported_manifest_paths: receipt.imported_manifest_paths.clone(),
         skipped_manifest_paths: receipt.skipped_manifest_paths.clone(),
         rollback_file_count: rollback_plan.files.len(),
         can_rollback_now: rollback_plan.can_rollback_now,
+        can_request_rollback: can_request_rollback(&rollback_plan),
         rollback_blocking_reason: rollback_plan.blocking_reason,
         rolled_back_file_count,
     }))
+}
+
+fn can_request_rollback(plan: &nekodrop_storage::BundleImportRollbackPlan) -> bool {
+    plan.can_rollback_now && !plan.files.is_empty()
 }
 
 fn import_plan_files_to_dto(plan: &BundleImportPlan) -> Vec<BundleImportPlanFileDto> {
