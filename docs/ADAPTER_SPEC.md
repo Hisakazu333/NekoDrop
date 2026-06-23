@@ -87,9 +87,9 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 - `rename`：导入到新的目标目录
 - `skip_conflicts`：已有文件不覆盖，只补缺失文件
 
-导入结果会带回 `conflict_strategy`、`skipped_file_count`、本机 import receipt 位置和可撤回文件数。receipt 记录目标目录、实际导入和跳过的 payload 路径。NekoDrop 可以基于 receipt 生成回滚计划，也可以执行 `bundle.rollback`。这个撤回只删除 NekoDrop 本机导入区里“本次导入记录”对应的文件；`skip_conflicts` 跳过的既有文件不会被删除，也不会写回第三方应用目录。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
+导入结果会带回 `conflict_strategy`、`skipped_file_count`、`has_import_receipt`、`rollback_file_count` 和 `can_request_rollback`。receipt 路径属于 NekoDrop 本机私有路径，普通 bridge response 不返回；adapter 只根据这些状态字段判断是否能发起 `bundle.rollback`。receipt 记录目标目录、实际导入和跳过的 payload 路径。NekoDrop 可以基于 receipt 生成回滚计划，也可以执行 `bundle.rollback`。这个撤回只删除 NekoDrop 本机导入区里“本次导入记录”对应的文件；`skip_conflicts` 跳过的既有文件不会被删除，也不会写回第三方应用目录。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
 
-`bundle.rollback` 使用 `bundle_id` 找最新 import receipt，需要 `bundle.import.request` 授权。它适合撤回 NekoDrop 本机导入区里的临时导入结果，不等于撤回上层应用已经落库、合并或生成的内容。真实产品 adapter 如果把 bundle 写进自己的应用目录，还要实现自己的事务或回滚。
+`bundle.rollback` 使用 `bundle_id` 找最新 import receipt，需要 `bundle.import.request` 授权。回滚结果也通过 `actions.results` 返回给同一个授权 client，`rolled_back_file_count` 表示本次删除的文件数。它适合撤回 NekoDrop 本机导入区里的临时导入结果，不等于撤回上层应用已经落库、合并或生成的内容。真实产品 adapter 如果把 bundle 写进自己的应用目录，还要实现自己的事务或回滚。
 
 adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。结果按 `client_id` 和授权 scope 过滤。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 

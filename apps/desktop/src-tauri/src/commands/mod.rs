@@ -3353,7 +3353,7 @@ fn local_bridge_action_results_for_client(
         .filter(|result| after_claimed_at_ms.is_none_or(|after| result.claimed_at_ms > after))
         .filter(|result| match result.action_kind.as_str() {
             "bundle.send" => can_read_send_results,
-            "bundle.import" => can_read_import_results,
+            "bundle.import" | "bundle.rollback" => can_read_import_results,
             _ => false,
         })
         .take(limit)
@@ -7010,8 +7010,8 @@ mod tests {
                 require_trusted_device: None,
                 conflict_strategy: None,
                 skipped_file_count: 0,
-                import_receipt_path: None,
-                rollback_file_count: 0,
+                import_receipt_path: Some("/tmp/private/receipt.json".to_string()),
+                rollback_file_count: 2,
                 rolled_back_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
@@ -7057,6 +7057,10 @@ mod tests {
             Some("bundle_1234567890")
         );
         assert!(response.action_results[0].bundle_root.is_none());
+        assert!(response.action_results[0].import_receipt_path.is_none());
+        assert!(response.action_results[0].has_import_receipt);
+        assert_eq!(response.action_results[0].rollback_file_count, 2);
+        assert!(response.action_results[0].can_request_rollback);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -7144,6 +7148,28 @@ mod tests {
                 requested_at_ms: 1_700,
                 claimed_at_ms: 2_200,
             },
+            LocalBridgePendingActionResult {
+                request_id: "bridge-rollback-1".to_string(),
+                action_kind: "bundle.rollback".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "completed".to_string(),
+                lifecycle_status: Some("succeeded".to_string()),
+                reason: None,
+                message: "rollback completed".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: None,
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rolled_back_file_count: 2,
+                requested_at_ms: 1_800,
+                claimed_at_ms: 2_300,
+            },
         ]);
         let request = serde_json::json!({
             "kind": "actions.results",
@@ -7173,9 +7199,12 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status, "ok");
-        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(response.action_results.len(), 2);
         assert_eq!(response.action_results[0].request_id, "bridge-import-1");
         assert!(response.action_results[0].bundle_root.is_none());
+        assert_eq!(response.action_results[1].request_id, "bridge-rollback-1");
+        assert_eq!(response.action_results[1].action_kind, "bundle.rollback");
+        assert_eq!(response.action_results[1].rolled_back_file_count, 2);
 
         fs::remove_dir_all(dir).unwrap();
     }
