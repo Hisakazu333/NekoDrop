@@ -246,6 +246,113 @@ function buildRequest(kind, flags) {
 function buildWorkflow(flags) {
   const mode = flags.mode ?? "send";
   const steps = [];
+  if (mode === "full-loop") {
+    const bundleRoot = flags["bundle-root"] ?? join(requireFlag(flags, "output"), requireFlag(flags, "bundle-id"));
+    return {
+      client: CLIENT,
+      mode,
+      steps: [
+        {
+          step: "export",
+          command: buildExportCommand(flags),
+          produces: { bundle_root: bundleRoot }
+        },
+        {
+          step: "authorize",
+          request: buildRequest("auth", {
+            scope: ["device.read", "bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
+            reason: flags.reason ?? "Send and import user-selected bundles"
+          })
+        },
+        {
+          step: "send",
+          request: buildRequest("send", {
+            "bundle-root": bundleRoot,
+            "target-device-id": requireFlag(flags, "target-device-id"),
+            type: requireKnownType(requireFlag(flags, "type")),
+            "require-trusted-device": "true"
+          })
+        },
+        {
+          step: "observe_send",
+          request: buildRequest("events", {
+            "after-event-id": flags["after-event-id"] ?? null,
+            limit: flags.limit ?? 20,
+            "timeout-ms": flags["timeout-ms"] ?? 15000
+          })
+        },
+        {
+          step: "send_results",
+          request: buildRequest("results", {
+            "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
+            limit: flags.limit ?? 20
+          })
+        },
+        {
+          step: "inspect_received_bundle",
+          request: buildRequest("detail", {
+            "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
+          })
+        },
+        {
+          step: "import",
+          request: buildRequest("import", {
+            "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
+            type: requireKnownType(requireFlag(flags, "type")),
+            "conflict-strategy": flags["conflict-strategy"] ?? "reject"
+          })
+        },
+        {
+          step: "observe_import",
+          request: buildRequest("events", {
+            "after-event-id": flags["after-event-id"] ?? null,
+            limit: flags.limit ?? 20,
+            "timeout-ms": flags["timeout-ms"] ?? 15000
+          })
+        },
+        {
+          step: "inspect_after_import",
+          request: buildRequest("detail", {
+            "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
+          })
+        },
+        {
+          step: "import_results",
+          request: buildRequest("results", {
+            "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
+            limit: flags.limit ?? 20
+          })
+        },
+        {
+          step: "rollback",
+          request: buildRequest("rollback", {
+            "bundle-id": requireFlag(flags, "staged-bundle-id")
+          })
+        },
+        {
+          step: "observe_rollback",
+          request: buildRequest("events", {
+            "after-event-id": flags["after-event-id"] ?? null,
+            limit: flags.limit ?? 20,
+            "timeout-ms": flags["timeout-ms"] ?? 15000
+          })
+        },
+        {
+          step: "rollback_results",
+          request: buildRequest("results", {
+            "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
+            limit: flags.limit ?? 20
+          })
+        }
+      ],
+      notes: [
+        "Run export on the sending device.",
+        "POST bridge requests on the device that owns that phase.",
+        "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
+        "Rollback only removes files imported into NekoDrop's local import area."
+      ]
+    };
+  }
   steps.push({
     step: "authorize",
     request: buildRequest("auth", {
@@ -321,6 +428,34 @@ function buildWorkflow(flags) {
     mode,
     steps
   };
+}
+
+function buildExportCommand(flags) {
+  const command = [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "export",
+    "--source",
+    requireFlag(flags, "source"),
+    "--output",
+    requireFlag(flags, "output"),
+    "--bundle-id",
+    requireFlag(flags, "bundle-id"),
+    "--type",
+    requireKnownType(requireFlag(flags, "type")),
+    "--name",
+    requireFlag(flags, "name")
+  ];
+  if (flags["source-app"]) {
+    command.push("--source-app", flags["source-app"]);
+  }
+  for (const field of toArray(flags["strip-field"])) {
+    command.push("--strip-field", field);
+  }
+  if (flags["contains-secrets"] !== undefined) {
+    command.push("--contains-secrets", flags["contains-secrets"]);
+  }
+  return command;
 }
 
 async function postRequest(kind, flags) {
@@ -481,6 +616,7 @@ function usage() {
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
+  node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);

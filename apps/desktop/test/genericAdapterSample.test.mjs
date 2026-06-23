@@ -225,6 +225,63 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
   assert.equal(workflow.steps[6].request.kind, "actions.results");
 });
 
+test("generic adapter sample prints a full export send import rollback loop", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "full-loop",
+      "--source",
+      "/tmp/adapter-source",
+      "--output",
+      "/tmp/adapter-out",
+      "--bundle-id",
+      "bundle_full_loop",
+      "--name",
+      "Full loop workspace",
+      "--target-device-id",
+      "neko-device-target",
+      "--staged-bundle-id",
+      "bundle_full_loop",
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "rename",
+      "--strip-field",
+      "auth.token"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+
+  assert.equal(workflow.mode, "full-loop");
+  assert.deepEqual(workflow.steps.map((step) => step.step), [
+    "export",
+    "authorize",
+    "send",
+    "observe_send",
+    "send_results",
+    "inspect_received_bundle",
+    "import",
+    "observe_import",
+    "inspect_after_import",
+    "import_results",
+    "rollback",
+    "observe_rollback",
+    "rollback_results"
+  ]);
+  assert.equal(workflow.steps[0].command.at(-2), "--strip-field");
+  assert.equal(workflow.steps[0].command.at(-1), "auth.token");
+  assert.equal(workflow.steps[2].request.kind, "bundle.send");
+  assert.equal(workflow.steps[2].request.payload.require_trusted_device, true);
+  assert.equal(workflow.steps[6].request.payload.conflict_strategy, "rename");
+  assert.equal(workflow.steps[10].request.kind, "bundle.rollback");
+  assert.match(workflow.notes.join("\n"), /Rollback only removes files imported into NekoDrop/);
+});
+
 test("generic adapter sample derives the next event cursor", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-cursor-"));
   const responsePath = join(tempRoot, "events-response.json");

@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   localBridgeActionResultDetailLine,
+  localBridgeActionResultLifecycleView,
   localBridgeActionResultSummary,
   localBridgePendingActionStateLine,
   localBridgeRuntimeStatusLine
@@ -48,6 +49,9 @@ function actionResult(overrides: Partial<LocalBridgePendingActionResultDto> = {}
     require_trusted_device: null,
     conflict_strategy: "reject",
     skipped_file_count: 0,
+    import_receipt_path: null,
+    rollback_file_count: 0,
+    rolled_back_file_count: 0,
     requested_at_ms: 1_000,
     claimed_at_ms: 2_000,
     ...overrides
@@ -120,4 +124,36 @@ test("local bridge action result detail keeps failed preflight actionable", () =
     })),
     "预检失败：目标未配对"
   );
+});
+
+test("local bridge action result detail shows rollback results", () => {
+  const result = actionResult({
+    action_kind: "bundle.rollback",
+    status: "completed",
+    lifecycle_status: "succeeded",
+    reason: null,
+    rolled_back_file_count: 3
+  });
+
+  assert.equal(localBridgeActionResultSummary(result), "撤回导入 · 完成 · bundle_123");
+  assert.equal(localBridgeActionResultDetailLine(result), "已撤回 · 删除 3 个文件");
+  assert.deepEqual(localBridgeActionResultLifecycleView(result), {
+    tone: "success",
+    label: "完成",
+    detail: "已撤回 · 删除 3 个文件"
+  });
+});
+
+test("local bridge action result labels sensitive bundle policy failures", () => {
+  const view = localBridgeActionResultLifecycleView(actionResult({
+    action_kind: "bundle.send",
+    lifecycle_status: "failed_preflight",
+    reason: "sensitive_bundle_requires_trusted_device",
+    bundle_id: "bundle_sensitive",
+    target_device_id: "device-win"
+  }));
+
+  assert.equal(view.tone, "warning");
+  assert.equal(view.label, "预检失败");
+  assert.equal(view.detail, "预检失败：敏感资料需要可信设备");
 });

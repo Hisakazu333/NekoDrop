@@ -995,7 +995,12 @@ where
             offer.file_count
         )));
     }
-    let bundle = maybe_stage_received_bundle(receive_dir, &offer.root_name, bundle_staging_root)?;
+    let bundle = maybe_stage_received_bundle(
+        receive_dir,
+        &offer.root_name,
+        bundle_staging_root,
+        TransferSecurityMode::LegacyPlain,
+    )?;
 
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
@@ -1146,7 +1151,12 @@ where
             offer.file_count
         )));
     }
-    let bundle = maybe_stage_received_bundle(receive_dir, &offer.root_name, bundle_staging_root)?;
+    let bundle = maybe_stage_received_bundle(
+        receive_dir,
+        &offer.root_name,
+        bundle_staging_root,
+        security_mode,
+    )?;
 
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
@@ -1164,6 +1174,7 @@ fn maybe_stage_received_bundle(
     receive_dir: &Path,
     root_name: &str,
     bundle_staging_root: Option<&Path>,
+    security_mode: TransferSecurityMode,
 ) -> NekoDropResult<Option<ReceivedBundleReport>> {
     let Some(bundle_staging_root) = bundle_staging_root else {
         return Ok(None);
@@ -1172,9 +1183,26 @@ fn maybe_stage_received_bundle(
     if !received_root.join("bundle.json").exists() {
         return Ok(None);
     }
+    let detected = match nekodrop_storage::detect_bundle_directory(&received_root)? {
+        Some(detected) => detected,
+        None => return Ok(None),
+    };
+    if !can_stage_received_bundle_for_import(detected.manifest.bundle_type, security_mode) {
+        return Ok(None);
+    }
     stage_bundle_directory(&received_root, bundle_staging_root)
         .map(staged_bundle_to_report)
         .map(Some)
+}
+
+fn can_stage_received_bundle_for_import(
+    bundle_type: BundleType,
+    security_mode: TransferSecurityMode,
+) -> bool {
+    if bundle_type.requires_authenticated_encrypted_session() {
+        return security_mode == TransferSecurityMode::AuthenticatedEncryptedSession;
+    }
+    security_mode != TransferSecurityMode::LegacyPlain
 }
 
 fn staged_bundle_to_report(staged: StagedBundle) -> ReceivedBundleReport {
@@ -1727,6 +1755,57 @@ mod tests {
         assert_eq!(
             receive_report.security_mode,
             TransferSecurityMode::LegacyPlain
+        );
+        assert_eq!(receive_report.bundle, None);
+        assert!(receive_dir.join("bundle").join("bundle.json").is_file());
+        assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_session_without_authenticated_identity_keeps_sensitive_bundle_as_plain_files_only()
+    {
+        let dir = unique_temp_dir("service-encrypted-sensitive-bundle-not-staged");
+        let source_root = create_valid_bundle_source(&dir);
+        let receive_dir = dir.join("receive");
+        let staging_root = dir.join("staging");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let staging_root = staging_root.clone();
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &staging_root,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on encrypted transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        send_plan_with_encrypted_control_and_cancel(&endpoint, plan, &sender, |_| {}, || false)
+            .unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::EncryptedSession
         );
         assert_eq!(receive_report.bundle, None);
         assert!(receive_dir.join("bundle").join("bundle.json").is_file());

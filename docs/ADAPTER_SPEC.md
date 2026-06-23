@@ -93,7 +93,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。结果按 `client_id` 和授权 scope 过滤。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 
-Bundle 传输必须走 encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；即使收到的目录里有 `bundle.json`，也只会作为普通文件保存，不会进入 import staging。
+Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；非认证 encrypted session 也不会把 `skill`、`session`、`workspace`、`agent_profile` 进入 import staging。即使收到的目录里有 `bundle.json`，不满足策略时也只会作为普通文件保存。发送端 local bridge 对这些敏感类型会强制要求可信目标设备。
 
 ## 类型建议
 

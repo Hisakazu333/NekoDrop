@@ -62,7 +62,7 @@ import {
   shouldShowTransferProgressMeter
 } from "./transferProgress";
 import {
-  localBridgeActionResultDetailLine,
+  localBridgeActionResultLifecycleView,
   localBridgeActionResultSummary,
   localBridgePendingActionKindLabel,
   localBridgePendingActionStateLine,
@@ -2652,16 +2652,22 @@ function IntegrationSettings({
       <SettingsRow label="执行结果">
         <div className="local-bridge-auth-list">
           {localBridgeActionResults.length > 0 ? (
-            localBridgeActionResults.slice(0, 5).map((result) => (
-              <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
-                <div className="console-copy">
-                  <span title={result.message}>
-                    {result.client_display_name} · {localBridgeActionResultSummary(result)}
+            localBridgeActionResults.slice(0, 5).map((result) => {
+              const lifecycle = localBridgeActionResultLifecycleView(result);
+              return (
+                <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
+                  <div className="console-copy">
+                    <span title={result.message}>
+                      {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                    </span>
+                    <small>{lifecycle.detail}</small>
+                  </div>
+                  <span className={`local-bridge-result-status is-${lifecycle.tone}`}>
+                    {lifecycle.label}
                   </span>
-                  <small>{localBridgeActionResultDetailLine(result)}</small>
                 </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="console-empty">暂无结果</div>
           )}
