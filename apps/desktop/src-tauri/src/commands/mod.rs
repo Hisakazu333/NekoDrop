@@ -2655,6 +2655,18 @@ fn preflight_local_bridge_bundle_send_action(
         ));
     }
 
+    if detected_type.requires_authenticated_encrypted_session() && !action.require_trusted_device {
+        return Ok(local_bridge_bundle_send_preflight_result(
+            "failed_preflight",
+            &action,
+            Some(detected.manifest.bundle_id.as_str()),
+            Some(detected_type),
+            Some("sensitive_bundle_requires_trusted_device"),
+            "local bridge sensitive bundle send requires a trusted authenticated session target",
+            now_ms,
+        ));
+    }
+
     if action.require_trusted_device {
         let Some(target_device_id) = action.target_device_id.as_deref() else {
             return Ok(local_bridge_bundle_send_preflight_result(
@@ -6366,6 +6378,50 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_bundle_send_preflight_rejects_sensitive_bundle_without_trusted_session_target()
+    {
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-sensitive-policy");
+        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_sensitive");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .pending_actions
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingAction::SendBundle(
+                LocalBridgePendingSendBundleAction {
+                    request_id: "bridge-send-sensitive".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    target_device_id: Some("device-a".to_string()),
+                    bundle_root: bundle_root.display().to_string(),
+                    bundle_type: BundleType::Skill,
+                    require_trusted_device: false,
+                    requested_at_ms: 1_500,
+                },
+            ));
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+
+        let result = preflight_next_local_bridge_bundle_send_at(&runtime, &trusted, 2_000).unwrap();
+
+        assert_eq!(result.status, "failed_preflight");
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("sensitive_bundle_requires_trusted_device")
+        );
+        assert_eq!(
+            result.bundle_id.as_deref(),
+            Some("bundle_preflight_sensitive")
+        );
+        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn local_bridge_bundle_send_preflight_rejects_missing_trusted_target() {
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-untrusted-target");
         let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_trusted");
@@ -6454,7 +6510,12 @@ mod tests {
     #[test]
     fn local_bridge_bundle_send_preflight_records_result_without_sensitive_path() {
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-result-history");
-        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_result");
+        let bundle_root = create_desktop_test_bundle_with_type(
+            &dir,
+            "bundle",
+            "bundle_preflight_result",
+            BundleType::ConfigSnapshot,
+        );
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .pending_actions
@@ -6470,7 +6531,7 @@ mod tests {
                     },
                     target_device_id: None,
                     bundle_root: bundle_root.display().to_string(),
-                    bundle_type: BundleType::Skill,
+                    bundle_type: BundleType::ConfigSnapshot,
                     require_trusted_device: false,
                     requested_at_ms: 1_500,
                 },
@@ -6480,6 +6541,7 @@ mod tests {
         let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
 
         assert_eq!(preflight.status, "ready");
+        assert_eq!(preflight.bundle_type.as_deref(), Some("config_snapshot"));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].request_id, "bridge-send-result");
         assert_eq!(results[0].action_kind, "bundle.send");
@@ -6637,7 +6699,10 @@ mod tests {
         assert!(!called);
         assert_eq!(result.status, "failed");
         assert_eq!(result.lifecycle_status.as_deref(), Some("failed"));
-        assert_eq!(result.reason.as_deref(), Some("target_device_required"));
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("sensitive_bundle_requires_trusted_device")
+        );
         assert_eq!(result.bundle_id.as_deref(), Some("bundle_send_no_target"));
         assert_eq!(result.bundle_type.as_deref(), Some("skill"));
         assert!(result.bundle_root.is_none());
@@ -6646,7 +6711,10 @@ mod tests {
         assert_eq!(results[0].request_id, "bridge-send-no-target");
         assert_eq!(results[0].status, "failed");
         assert_eq!(results[0].lifecycle_status.as_deref(), Some("failed"));
-        assert_eq!(results[0].reason.as_deref(), Some("target_device_required"));
+        assert_eq!(
+            results[0].reason.as_deref(),
+            Some("sensitive_bundle_requires_trusted_device")
+        );
         assert!(results[0].bundle_root.is_none());
 
         fs::remove_dir_all(dir).unwrap();
@@ -8258,6 +8326,15 @@ mod tests {
         directory_name: &str,
         bundle_id: &str,
     ) -> PathBuf {
+        create_desktop_test_bundle_with_type(dir, directory_name, bundle_id, BundleType::Skill)
+    }
+
+    fn create_desktop_test_bundle_with_type(
+        dir: &std::path::Path,
+        directory_name: &str,
+        bundle_id: &str,
+        bundle_type: BundleType,
+    ) -> PathBuf {
         let root = dir.join(directory_name);
         fs::create_dir_all(root.join("files")).unwrap();
         fs::write(
@@ -8268,6 +8345,7 @@ mod tests {
         fs::write(root.join("files").join("content.bin"), b"hello bundle").unwrap();
         let mut manifest = desktop_test_bundle_manifest();
         manifest.bundle_id = bundle_id.to_string();
+        manifest.bundle_type = bundle_type;
         write_json(root.join("bundle.json"), &manifest);
         write_json(
             root.join("checksums.json"),

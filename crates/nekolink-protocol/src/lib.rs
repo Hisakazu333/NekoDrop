@@ -1689,6 +1689,15 @@ pub enum BundleType {
     ConfigSnapshot,
 }
 
+impl BundleType {
+    pub fn requires_authenticated_encrypted_session(self) -> bool {
+        matches!(
+            self,
+            Self::Skill | Self::Session | Self::Workspace | Self::AgentProfile
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleSender {
     pub device_id: String,
@@ -4763,6 +4772,15 @@ mod tests {
         manifest.validate().unwrap();
         checksums.validate_against(&manifest).unwrap();
         assert!(permissions.can_import().unwrap());
+    }
+
+    #[test]
+    fn sensitive_bundle_types_require_authenticated_encrypted_session() {
+        assert!(BundleType::Skill.requires_authenticated_encrypted_session());
+        assert!(BundleType::Session.requires_authenticated_encrypted_session());
+        assert!(BundleType::Workspace.requires_authenticated_encrypted_session());
+        assert!(BundleType::AgentProfile.requires_authenticated_encrypted_session());
+        assert!(!BundleType::ConfigSnapshot.requires_authenticated_encrypted_session());
     }
 
     #[test]
