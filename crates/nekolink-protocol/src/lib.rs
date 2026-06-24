@@ -2026,6 +2026,8 @@ pub struct LocalBridgePollEventsRequest {
 pub struct LocalBridgeActionResultsRequest {
     pub request_id: String,
     pub client: Option<LocalBridgeClientIdentity>,
+    #[serde(default)]
+    pub action_request_id: Option<String>,
     pub after_claimed_at_ms: Option<u128>,
     pub limit: Option<usize>,
 }
@@ -2259,6 +2261,7 @@ impl LocalBridgeActionResultsRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
+        validate_optional_non_empty("action_request_id", self.action_request_id.as_deref())?;
         if let Some(limit) = self.limit {
             if limit == 0 || limit > 100 {
                 return Err(ProtocolError::new(
@@ -5111,6 +5114,7 @@ mod tests {
                 display_name: "Local Agent App".to_string(),
                 app_kind: Some("agent".to_string()),
             }),
+            action_request_id: Some("bridge-send-1".to_string()),
             after_claimed_at_ms: Some(1_000),
             limit: Some(10),
         });
@@ -5120,6 +5124,7 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["kind"], "actions.results");
         assert_eq!(json["payload"]["request_id"], "bridge-results-1");
+        assert_eq!(json["payload"]["action_request_id"], "bridge-send-1");
         assert_eq!(json["payload"]["after_claimed_at_ms"], 1_000);
         assert_eq!(json["payload"]["limit"], 10);
         assert_eq!(

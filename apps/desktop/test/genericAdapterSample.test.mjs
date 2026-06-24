@@ -147,6 +147,8 @@ test("generic adapter sample prints action result query envelopes", () => {
       sampleCli,
       "request",
       "results",
+      "--action-request-id",
+      "adapter-import-001",
       "--after-claimed-at-ms",
       "1234",
       "--limit",
@@ -159,6 +161,7 @@ test("generic adapter sample prints action result query envelopes", () => {
 
   assert.equal(request.kind, "actions.results");
   assert.equal(request.payload.client.client_id, "generic.adapter.sample");
+  assert.equal(request.payload.action_request_id, "adapter-import-001");
   assert.equal(request.payload.after_claimed_at_ms, 1234);
   assert.equal(request.payload.limit, 5);
 });
@@ -223,6 +226,7 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
   assert.equal(workflow.steps[4].request.payload.conflict_strategy, "skip_conflicts");
   assert.equal(workflow.steps[5].request.kind, "bundle.detail");
   assert.equal(workflow.steps[6].request.kind, "actions.results");
+  assert.equal(workflow.steps[6].request.payload.action_request_id, "adapter-import-001");
 });
 
 test("generic adapter sample prints a full export send import rollback loop", () => {
@@ -276,9 +280,15 @@ test("generic adapter sample prints a full export send import rollback loop", ()
   assert.equal(workflow.steps[0].command.at(-2), "--strip-field");
   assert.equal(workflow.steps[0].command.at(-1), "auth.token");
   assert.equal(workflow.steps[2].request.kind, "bundle.send");
+  assert.equal(workflow.steps[2].request.payload.request_id, "adapter-send-001");
   assert.equal(workflow.steps[2].request.payload.require_trusted_device, true);
+  assert.equal(workflow.steps[4].request.payload.action_request_id, "adapter-send-001");
+  assert.equal(workflow.steps[6].request.payload.request_id, "adapter-import-001");
   assert.equal(workflow.steps[6].request.payload.conflict_strategy, "rename");
+  assert.equal(workflow.steps[9].request.payload.action_request_id, "adapter-import-001");
   assert.equal(workflow.steps[10].request.kind, "bundle.rollback");
+  assert.equal(workflow.steps[10].request.payload.request_id, "adapter-rollback-001");
+  assert.equal(workflow.steps[12].request.payload.action_request_id, "adapter-rollback-001");
   assert.match(workflow.notes.join("\n"), /Rollback only removes files imported into NekoDrop/);
 });
 
