@@ -57,6 +57,10 @@ async function main() {
     printJson(nextCursorFromResponse(parseFlags(args)));
     return;
   }
+  if (command === "action-state") {
+    printJson(actionStateFromResultsResponse(parseFlags(args)));
+    return;
+  }
   usage();
   process.exit(command ? 1 : 0);
 }
@@ -358,6 +362,8 @@ function buildWorkflow(flags) {
       notes: [
         "Run export on the sending device.",
         "POST bridge requests on the device that owns that phase.",
+        "After each action request, observe action.updated events, then query actions.results with the same action_request_id.",
+        "Treat queued as pending, running as in-progress, and succeeded / failed / conflict / cancelled as final results.",
         "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
         "Rollback only removes files imported into NekoDrop's local import area."
       ]
@@ -514,6 +520,54 @@ function nextCursorFromResponse(flags) {
   };
 }
 
+function actionStateFromResultsResponse(flags) {
+  const responsePath = requireFlag(flags, "response");
+  const actionRequestId = requireFlag(flags, "action-request-id");
+  const response = JSON.parse(readFileSync(responsePath, "utf8"));
+  const result = Array.isArray(response.action_results)
+    ? response.action_results.find((item) => item.request_id === actionRequestId)
+    : null;
+  if (!result) {
+    return {
+      action_request_id: actionRequestId,
+      state: "missing",
+      final: false
+    };
+  }
+  const lifecycle = result.lifecycle_status ?? result.status;
+  if (lifecycle === "queued") {
+    return {
+      action_request_id: actionRequestId,
+      state: "pending",
+      final: false,
+      action_kind: result.action_kind,
+      message: result.message
+    };
+  }
+  if (lifecycle === "running") {
+    return {
+      action_request_id: actionRequestId,
+      state: "running",
+      final: false,
+      action_kind: result.action_kind,
+      message: result.message
+    };
+  }
+  return {
+    action_request_id: actionRequestId,
+    state: "result",
+    final: true,
+    action_kind: result.action_kind,
+    lifecycle_status: lifecycle,
+    status: result.status,
+    reason: result.reason ?? null,
+    message: result.message,
+    bundle_id: result.bundle_id ?? null,
+    can_request_rollback: Boolean(result.can_request_rollback),
+    rollback_blocking_reason: result.rollback_blocking_reason ?? null
+  };
+}
+
 function listFiles(root) {
   const files = [];
   for (const name of readdirSync(root).sort()) {
@@ -641,5 +695,6 @@ function usage() {
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
   node generic-adapter.mjs cursor --response bridge-events-response.json
+  node generic-adapter.mjs action-state --response bridge-results-response.json --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }
