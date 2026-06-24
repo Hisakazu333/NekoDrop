@@ -1537,6 +1537,38 @@ button:disabled {
   min-width: 0;
 }
 
+.local-bridge-result-status {
+  flex: 0 0 auto;
+  min-width: 58px;
+  padding: 3px 8px;
+  border-radius: var(--r-xs);
+  color: var(--text-2);
+  background: var(--surface-muted);
+  font-size: 12px;
+  font-weight: 500;
+  text-align: center;
+}
+
+.local-bridge-result-status.is-success {
+  color: var(--success);
+  background: var(--success-soft);
+}
+
+.local-bridge-result-status.is-pending {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+
+.local-bridge-result-status.is-warning {
+  color: var(--accent-press);
+  background: var(--accent-soft);
+}
+
+.local-bridge-result-status.is-danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+}
+
 .connection-code-row {
   display: flex;
   flex-wrap: wrap;
@@ -2141,6 +2173,27 @@ button:disabled {
 .device-detail-row strong.is-mono {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 12px;
+}
+
+.capability-summary {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.capability-token {
+  color: var(--text-3);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.capability-token.is-ready {
+  color: var(--text-1);
+}
+
+.capability-token.is-off {
+  color: var(--text-4);
 }
 
 .device-detail-actions {

@@ -81,11 +81,19 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看、移除，并显示最近结果和失败原因。后台 worker 会按 FIFO 自动取出动作执行。`bundle.send` 执行前先做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。执行时仍走桌面发送主线，不绕过可信设备和 session 校验。动作状态会按 `queued -> running -> succeeded / failed / conflict / cancelled` 写入最近结果，并通过 `events.poll` 的 `action.updated` 事件给授权 client 观察；普通状态列表和事件都不返回本机 `bundle_root`。
 
-`bundle.import` 动作只导入到 NekoDrop 本机导入区，不直接写第三方应用目录。导入使用临时 `.importing` 目录，失败会清理半成品；如果同名 bundle 已经导入，当前策略是拒绝覆盖，并在 `actions.results` 里返回 `bundle_import_conflict`。adapter 收到这个结果后应该让用户选择重命名、跳过或由上层应用自己处理合并，不能静默覆盖。
+`bundle.import` 动作只导入到 NekoDrop 本机导入区，不直接写第三方应用目录。默认策略是 `reject`：同名或文件冲突时停止，并在 `actions.results` 里返回 `bundle_import_conflict`。调用方也可以传 `conflict_strategy`：
 
-adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。结果按 `client_id` 和授权 scope 过滤。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
+- `reject`：默认，不覆盖，冲突时停止
+- `rename`：导入到新的目标目录
+- `skip_conflicts`：已有文件不覆盖，只补缺失文件
 
-Bundle 传输必须走 encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；即使收到的目录里有 `bundle.json`，也只会作为普通文件保存，不会进入 import staging。
+导入结果会带回 `conflict_strategy`、`skipped_file_count`、`has_import_receipt`、`rollback_file_count` 和 `can_request_rollback`。receipt 路径属于 NekoDrop 本机私有路径，普通 bridge response 不返回；adapter 只根据这些状态字段判断是否能发起 `bundle.rollback`。`bundle.detail` 和列表快照也会返回 `has_import_receipt`、`rollback_file_count`、`can_rollback_now`、`can_request_rollback`、`rolled_back_file_count` 和 `rollback_blocking_reason`，但不返回 `staging_path`、`import_path`、`import_destination` 或 plan 里的本机目标路径。receipt 记录目标目录、实际导入和跳过的 payload 路径。NekoDrop 可以基于 receipt 生成回滚计划，也可以执行 `bundle.rollback`。这个撤回只删除 NekoDrop 本机导入区里“本次导入记录”对应的文件；`skip_conflicts` 跳过的既有文件不会被删除，也不会写回第三方应用目录。adapter 应把这些结果交给用户或自己的导入流程处理，不能静默覆盖。
+
+`bundle.rollback` 使用 `bundle_id` 找最新 import receipt，需要 `bundle.import.request` 授权。回滚结果也通过 `actions.results` 返回给同一个授权 client，`rolled_back_file_count` 表示本次删除的文件数。如果结果里的 `reason` 是 `bundle_rollback_blocked`，会额外带 `rollback_blocking_reason`，当前可能是 `destination_missing`、`imported_file_missing` 或 `already_rolled_back`。这个字段只说明阻断类型，不暴露本机目标路径。`bundle.rollback` 适合撤回 NekoDrop 本机导入区里的临时导入结果，不等于撤回上层应用已经落库、合并或生成的内容。真实产品 adapter 如果把 bundle 写进自己的应用目录，还要实现自己的事务或回滚。
+
+adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。`actions.results` 里的 `request_id` 是查询请求本身；要查某次 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的结果，传那次动作的 `request_id` 到 `action_request_id`。不传 `action_request_id` 时，runtime 会按 `after_claimed_at_ms` 和 `limit` 返回最近结果。传 `action_request_id` 时，如果结果表还没有终态记录，但动作仍在同一 client 的待执行队列里，runtime 会返回脱敏的 `queued` 状态；如果 worker 已写入执行状态，则返回 `running` 或终态结果。结果按 `client_id` 和授权 scope 过滤；查不到、没有对应 scope，或结果属于其他 client 时，只返回空结果，不暴露对方状态。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
+
+Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；非认证 encrypted session 也不会把 `skill`、`session`、`workspace`、`agent_profile` 进入 import staging。即使收到的目录里有 `bundle.json`，不满足策略时也只会作为普通文件保存。发送端 local bridge 对这些敏感类型会强制要求可信目标设备；adapter 自己也应该拒绝给这些类型关闭 `require_trusted_device`，不要把安全策略只交给 NekoDrop 兜底。
 
 ## 类型建议
 

@@ -5,6 +5,7 @@ import { bindWindowDragDrop } from "./dragDrop";
 import { invokeCommand, isTauriRuntime } from "./tauri";
 import {
   buildNearbyDeviceViewModel,
+  buildDeviceCapabilitySummary,
   buildTrustedDeviceViewModel,
   platformLabel as devicePlatformLabel,
   selectedTrustedTargetCopy,
@@ -28,7 +29,9 @@ import {
 } from "./securityState";
 import {
   bundleStatusLabel,
+  bundleCanUseImportStrategy,
   bundleImportPlanLine,
+  bundleImportStrategyLabel,
   bundleTypeLabel,
   markBundleDeleted,
   markBundleImportFailed,
@@ -59,7 +62,7 @@ import {
   shouldShowTransferProgressMeter
 } from "./transferProgress";
 import {
-  localBridgeActionResultDetailLine,
+  localBridgeActionResultLifecycleView,
   localBridgeActionResultSummary,
   localBridgePendingActionKindLabel,
   localBridgePendingActionStateLine,
@@ -923,12 +926,15 @@ export function App() {
     }
   }
 
-  async function importCurrentStagedBundle(bundle: ReceivedBundleDto) {
+  async function importCurrentStagedBundle(bundle: ReceivedBundleDto, conflictStrategy = "reject") {
     setBusy("bundle-import");
     setError(null);
     try {
       const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", {
-        bundleId: bundle.bundle_id
+        request: {
+          bundle_id: bundle.bundle_id,
+          conflict_strategy: conflictStrategy
+        }
       });
       setStagedBundles((current) =>
         current.map((item) => item.bundle_id === imported.bundle_id ? imported : item)
@@ -937,7 +943,11 @@ export function App() {
         if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
         return { ...current, bundle: imported };
       });
-      setToast(`已导入：${imported.display_name}`);
+      const strategyLabel = imported.imported_with_strategy
+        ? ` · ${bundleImportStrategyLabel(imported.imported_with_strategy)}`
+        : "";
+      const skipped = imported.import_skipped_file_count > 0 ? `，跳过 ${imported.import_skipped_file_count} 个` : "";
+      setToast(`已导入：${imported.display_name}${skipped}${strategyLabel}`);
     } catch (nextError) {
       setStagedBundles((current) =>
         current.map((item) => item.bundle_id === bundle.bundle_id ? markBundleImportFailed(item) : item)
@@ -946,6 +956,30 @@ export function App() {
         if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
         return { ...current, bundle: markBundleImportFailed(current.bundle) };
       });
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rollbackCurrentBundle(bundle: ReceivedBundleDto) {
+    setBusy("bundle-import");
+    setError(null);
+    try {
+      const rolledBack = await invokeCommand<ReceivedBundleDto>("rollback_imported_bundle", {
+        request: {
+          bundle_id: bundle.bundle_id
+        }
+      });
+      setStagedBundles((current) =>
+        current.map((item) => item.bundle_id === bundle.bundle_id ? rolledBack : item)
+      );
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: rolledBack };
+      });
+      setToast(`已撤回：${rolledBack.display_name}`);
+    } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
       setBusy(null);
@@ -1808,6 +1842,7 @@ export function App() {
                   onStopReceive={stopReceive}
                   onDeleteStagedBundle={deleteCurrentStagedBundle}
                   onImportStagedBundle={importCurrentStagedBundle}
+                  onRollbackBundle={rollbackCurrentBundle}
                 />
               ) : null}
 
@@ -2166,6 +2201,11 @@ function DevicePanel({
     : selectedNearby
       ? trustStateLabel(selectedNearby.trust_state)
       : "—";
+  const selectedCapabilities = buildDeviceCapabilitySummary({
+    trusted: Boolean(selectedTrusted || selectedNearby?.trust_state === "Trusted"),
+    online: selectedOnline,
+    hasPublicKey: Boolean(selectedFingerprint)
+  });
 
   return (
     <section className="device-panel">
@@ -2240,7 +2280,13 @@ function DevicePanel({
             </div>
             <div className="device-detail-row">
               <span>能力</span>
-              <strong>文件传输 · 资料包</strong>
+              <strong className="capability-summary">
+                {selectedCapabilities.map((item) => (
+                  <span className={`capability-token is-${item.state}`} key={item.label}>
+                    {item.label}
+                  </span>
+                ))}
+              </strong>
             </div>
           </div>
           <div className="device-detail-actions">
@@ -2606,16 +2652,22 @@ function IntegrationSettings({
       <SettingsRow label="执行结果">
         <div className="local-bridge-auth-list">
           {localBridgeActionResults.length > 0 ? (
-            localBridgeActionResults.slice(0, 5).map((result) => (
-              <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
-                <div className="console-copy">
-                  <span title={result.message}>
-                    {result.client_display_name} · {localBridgeActionResultSummary(result)}
+            localBridgeActionResults.slice(0, 5).map((result) => {
+              const lifecycle = localBridgeActionResultLifecycleView(result);
+              return (
+                <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
+                  <div className="console-copy">
+                    <span title={result.message}>
+                      {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                    </span>
+                    <small>{lifecycle.detail}</small>
+                  </div>
+                  <span className={`local-bridge-result-status is-${lifecycle.tone}`}>
+                    {lifecycle.label}
                   </span>
-                  <small>{localBridgeActionResultDetailLine(result)}</small>
                 </div>
-              </div>
-            ))
+              );
+            })
           ) : (
             <div className="console-empty">暂无结果</div>
           )}
@@ -2748,6 +2800,7 @@ function ReceivePanel({
   onOpenPath,
   onDeleteStagedBundle,
   onImportStagedBundle,
+  onRollbackBundle,
   onRespondReceiveOffer,
   onRespondPairingRequest,
   onStartReceive,
@@ -2763,7 +2816,8 @@ function ReceivePanel({
   onCopyConnectionCode: () => void;
   onOpenPath: (path: string) => void;
   onDeleteStagedBundle: (bundle: ReceivedBundleDto) => void;
-  onImportStagedBundle: (bundle: ReceivedBundleDto) => void;
+  onImportStagedBundle: (bundle: ReceivedBundleDto, conflictStrategy?: string) => void;
+  onRollbackBundle: (bundle: ReceivedBundleDto) => void;
   onRespondReceiveOffer: (accept: boolean) => void;
   onRespondPairingRequest: (accept: boolean) => void;
   onStartReceive: () => void;
@@ -2790,7 +2844,9 @@ function ReceivePanel({
     : null;
   const receiveSecuritySummary = receiveReport ? receiveSecuritySummaryLine(receiveReport) : null;
   const diagnosticsAdvice = receiveDiagnosticsAdvice(diagnostics);
-  const visibleStagedBundles = stagedBundles.filter((bundle) => bundle.staging_status !== "imported");
+  const visibleStagedBundles = stagedBundles.filter(
+    (bundle) => bundle.staging_status !== "deleted" && bundle.staging_status !== "expired"
+  );
 
   return (
     <section className="receive-page">
@@ -2866,6 +2922,36 @@ function ReceivePanel({
                         type="button"
                       >
                         导入
+                      </button>
+                    ) : null}
+                    {!bundle.can_import_now && bundleCanUseImportStrategy(bundle, "rename") ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(bundle, "rename")}
+                        type="button"
+                      >
+                        重命名
+                      </button>
+                    ) : null}
+                    {!bundle.can_import_now && bundleCanUseImportStrategy(bundle, "skip_conflicts") ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(bundle, "skip_conflicts")}
+                        type="button"
+                      >
+                        跳过冲突
+                      </button>
+                    ) : null}
+                    {bundle.staging_status === "imported" && bundle.can_rollback_now ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onRollbackBundle(bundle)}
+                        type="button"
+                      >
+                        撤回
                       </button>
                     ) : null}
                     <button
@@ -2956,6 +3042,36 @@ function ReceivePanel({
                         type="button"
                       >
                         导入
+                      </button>
+                    ) : null}
+                    {!receivedBundle.can_import_now && bundleCanUseImportStrategy(receivedBundle, "rename") ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(receivedBundle, "rename")}
+                        type="button"
+                      >
+                        重命名
+                      </button>
+                    ) : null}
+                    {!receivedBundle.can_import_now && bundleCanUseImportStrategy(receivedBundle, "skip_conflicts") ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onImportStagedBundle(receivedBundle, "skip_conflicts")}
+                        type="button"
+                      >
+                        跳过冲突
+                      </button>
+                    ) : null}
+                    {receivedBundle.staging_status === "imported" && receivedBundle.can_rollback_now ? (
+                      <button
+                        className="tool-button"
+                        disabled={busy === "bundle-import"}
+                        onClick={() => onRollbackBundle(receivedBundle)}
+                        type="button"
+                      >
+                        撤回
                       </button>
                     ) : null}
                     <button

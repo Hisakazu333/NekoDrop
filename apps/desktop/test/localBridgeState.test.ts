@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   localBridgeActionResultDetailLine,
+  localBridgeActionResultLifecycleView,
   localBridgeActionResultSummary,
   localBridgePendingActionStateLine,
   localBridgeRuntimeStatusLine
@@ -23,6 +24,7 @@ function pendingAction(overrides: Partial<LocalBridgePendingActionDto> = {}): Lo
     target_device_id: "device-win",
     staged_bundle_id: null,
     expected_bundle_type: null,
+    conflict_strategy: null,
     require_trusted_device: true,
     requested_at_ms: 1_000,
     bundle_root: "/tmp/bundle",
@@ -45,6 +47,14 @@ function actionResult(overrides: Partial<LocalBridgePendingActionResultDto> = {}
     bundle_root: null,
     target_device_id: null,
     require_trusted_device: null,
+    conflict_strategy: "reject",
+    skipped_file_count: 0,
+    import_receipt_path: null,
+    has_import_receipt: false,
+    rollback_file_count: 0,
+    can_request_rollback: false,
+    rollback_blocking_reason: null,
+    rolled_back_file_count: 0,
     requested_at_ms: 1_000,
     claimed_at_ms: 2_000,
     ...overrides
@@ -89,6 +99,7 @@ test("pending import action state names the staged bundle", () => {
       action_kind: "bundle.import",
       bundle_type: null,
       expected_bundle_type: "session",
+      conflict_strategy: "rename",
       target_device_id: null,
       staged_bundle_id: "bundle_123",
       require_trusted_device: null,
@@ -116,4 +127,54 @@ test("local bridge action result detail keeps failed preflight actionable", () =
     })),
     "预检失败：目标未配对"
   );
+});
+
+test("local bridge action result detail shows rollback results", () => {
+  const result = actionResult({
+    action_kind: "bundle.rollback",
+    status: "completed",
+    lifecycle_status: "succeeded",
+    reason: null,
+    rolled_back_file_count: 3
+  });
+
+  assert.equal(localBridgeActionResultSummary(result), "撤回导入 · 完成 · bundle_123");
+  assert.equal(localBridgeActionResultDetailLine(result), "已撤回 · 删除 3 个文件");
+  assert.deepEqual(localBridgeActionResultLifecycleView(result), {
+    tone: "success",
+    label: "完成",
+    detail: "已撤回 · 删除 3 个文件"
+  });
+});
+
+test("local bridge action result detail shows rollback blocking reason", () => {
+  const result = actionResult({
+    action_kind: "bundle.rollback",
+    status: "failed",
+    lifecycle_status: "failed",
+    reason: "bundle_rollback_blocked",
+    rollback_blocking_reason: "destination_missing"
+  });
+
+  assert.equal(localBridgeActionResultSummary(result), "撤回导入 · 失败 · 撤回被阻止 · bundle_123");
+  assert.equal(localBridgeActionResultDetailLine(result), "失败：目标已不存在");
+  assert.deepEqual(localBridgeActionResultLifecycleView(result), {
+    tone: "danger",
+    label: "失败",
+    detail: "失败：目标已不存在"
+  });
+});
+
+test("local bridge action result labels sensitive bundle policy failures", () => {
+  const view = localBridgeActionResultLifecycleView(actionResult({
+    action_kind: "bundle.send",
+    lifecycle_status: "failed_preflight",
+    reason: "sensitive_bundle_requires_trusted_device",
+    bundle_id: "bundle_sensitive",
+    target_device_id: "device-win"
+  }));
+
+  assert.equal(view.tone, "warning");
+  assert.equal(view.label, "预检失败");
+  assert.equal(view.detail, "预检失败：敏感资料需要可信设备");
 });

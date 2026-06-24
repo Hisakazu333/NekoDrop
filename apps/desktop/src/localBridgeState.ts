@@ -1,4 +1,4 @@
-import { bundleTypeLabel } from "./bundleState.ts";
+import { bundleImportStrategyLabel, bundleRollbackBlockingLabel, bundleTypeLabel } from "./bundleState.ts";
 import type {
   LocalBridgePendingActionDto,
   LocalBridgePendingActionResultDto,
@@ -39,6 +39,7 @@ export function localBridgeScopeLabel(scope: LocalBridgePermissionScope) {
 export function localBridgePendingActionKindLabel(actionKind: string) {
   if (actionKind === "bundle.send") return "发送资料包";
   if (actionKind === "bundle.import") return "导入资料包";
+  if (actionKind === "bundle.rollback") return "撤回导入";
   return actionKind;
 }
 
@@ -50,7 +51,8 @@ export function localBridgePendingActionSummary(action: LocalBridgePendingAction
   }
   if (action.action_kind === "bundle.import") {
     const type = action.expected_bundle_type ? bundleTypeLabel(action.expected_bundle_type) : "资料包";
-    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}`;
+    const strategy = action.conflict_strategy ? ` · ${bundleImportStrategyLabel(action.conflict_strategy)}` : "";
+    return `${localBridgePendingActionKindLabel(action.action_kind)} · ${type}${strategy}`;
   }
   return localBridgePendingActionKindLabel(action.action_kind);
 }
@@ -64,6 +66,10 @@ export function localBridgePendingActionStateLine(action: LocalBridgePendingActi
   if (action.action_kind === "bundle.import") {
     if (!action.staged_bundle_id) return "等待执行 · 缺少暂存资料";
     return `等待执行 · 导入 ${action.staged_bundle_id}`;
+  }
+  if (action.action_kind === "bundle.rollback") {
+    if (!action.staged_bundle_id) return "等待执行 · 缺少导入记录";
+    return `等待执行 · 撤回 ${action.staged_bundle_id}`;
   }
   return "等待执行";
 }
@@ -86,12 +92,48 @@ export function localBridgeActionResultDetailLine(result: LocalBridgePendingActi
   const reason = result.reason ? localBridgeActionResultReasonLabel(result.reason) : null;
   if (status === "queued") return "排队中";
   if (status === "running") return "执行中";
+  if (result.action_kind === "bundle.rollback" && (status === "succeeded" || status === "completed")) {
+    return `已撤回 · 删除 ${result.rolled_back_file_count} 个文件`;
+  }
+  if ((status === "succeeded" || status === "completed") && result.skipped_file_count > 0) {
+    return `已完成 · 跳过 ${result.skipped_file_count} 个冲突`;
+  }
+  if ((status === "succeeded" || status === "completed") && result.rollback_file_count > 0) {
+    return `已完成 · 可撤回 ${result.rollback_file_count} 个文件`;
+  }
   if (status === "succeeded" || status === "completed") return "已完成";
   if (status === "conflict") return reason ? `冲突：${reason}` : "冲突";
   if (status === "cancelled") return reason ? `已取消：${reason}` : "已取消";
   if (status === "failed_preflight") return reason ? `预检失败：${reason}` : "预检失败";
+  if (
+    result.action_kind === "bundle.rollback" &&
+    status === "failed" &&
+    result.reason === "bundle_rollback_blocked" &&
+    result.rollback_blocking_reason
+  ) {
+    return `失败：${bundleRollbackBlockingLabel(result.rollback_blocking_reason)}`;
+  }
   if (status === "failed") return reason ? `失败：${reason}` : result.message || "失败";
   return reason ? `${localBridgeActionResultStatusLabel(status)}：${reason}` : result.message;
+}
+
+export function localBridgeActionResultLifecycleView(result: LocalBridgePendingActionResultDto) {
+  const status = result.lifecycle_status ?? result.status;
+  const label = localBridgeActionResultStatusLabel(status);
+  const detail = localBridgeActionResultDetailLine(result);
+  const tone =
+    status === "succeeded" || status === "completed" || status === "ready"
+      ? "success"
+      : status === "queued" || status === "running"
+        ? "pending"
+        : status === "conflict" || status === "failed_preflight"
+          ? "warning"
+          : status === "cancelled"
+            ? "muted"
+            : status === "failed"
+              ? "danger"
+              : "muted";
+  return { tone, label, detail };
 }
 
 export function localBridgeActionResultStatusLabel(status: string) {
@@ -118,5 +160,9 @@ export function localBridgeActionResultReasonLabel(reason: string) {
   if (reason === "bundle_send_failed") return "发送失败";
   if (reason === "bundle_import_failed") return "导入失败";
   if (reason === "bundle_import_conflict") return "已存在同名导入";
+  if (reason === "bundle_import_receipt_missing") return "缺少导入记录";
+  if (reason === "bundle_rollback_blocked") return "撤回被阻止";
+  if (reason === "bundle_rollback_failed") return "撤回失败";
+  if (reason === "sensitive_bundle_requires_trusted_device") return "敏感资料需要可信设备";
   return reason;
 }

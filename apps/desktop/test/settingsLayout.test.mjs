@@ -80,8 +80,10 @@ test("local integration settings expose a generic read-only bridge self check", 
   assert.match(appSource, /<SettingsRow label="待授权">/);
   assert.match(appSource, /<SettingsRow label="执行结果">/);
   assert.match(appSource, /localBridgePendingActionStateLine/);
-  assert.match(appSource, /localBridgeActionResultDetailLine/);
+  assert.match(appSource, /localBridgeActionResultLifecycleView/);
+  assert.match(appSource, /local-bridge-result-status/);
   assert.match(appSource, /className="console-copy"/);
+  assert.match(localBridgeStateSource, /localBridgeActionResultDetailLine/);
   assert.match(localBridgeStateSource, /localBridgeActionResultReasonLabel/);
   assert.match(localBridgeStateSource, /bundle_import_conflict/);
 });

@@ -147,11 +147,17 @@ Incoming dialog must show:
 
 ## Overwrite Policy
 
-Default:
+Ordinary file receive:
 
 - do not overwrite existing files silently
 - if a name exists, create a unique name such as `file (1).ext`
-- later versions can offer overwrite/skip/rename options
+
+Bundle import:
+
+- default strategy is `reject`
+- `rename` imports into a new destination directory
+- `skip_conflicts` keeps existing files and imports missing files
+- no path silently overwrites an existing imported bundle file
 
 ## Integrity
 
@@ -194,7 +200,7 @@ Show clear transfer states from real wire modes:
 
 Avoid vague states such as "secure". Old history records may not have a recorded transfer mode; in that case the UI should show no security badge instead of guessing.
 
-Plain compatibility is only for ordinary manual file transfer. If a received directory looks like a NekoLink bundle, the legacy plain path keeps it as normal files and does not stage it for import. Bundle staging and local-bridge import are allowed only after an encrypted session path; sensitive upper-layer data such as session, skill, workspace, agent profile, and config snapshot must not rely on `legacy_plain`.
+Plain compatibility is only for ordinary manual file transfer. If a received directory looks like a NekoLink bundle, the legacy plain path keeps it as normal files and does not stage it for import. Bundle staging and local-bridge import are allowed only after an encrypted session path; sensitive upper-layer data such as session, skill, workspace, and agent profile must not rely on `legacy_plain`. Adapters must keep `require_trusted_device=true` for these sensitive bundle types; NekoDrop also rejects local bridge sends that try to bypass that requirement.
 
 ## Local Bridge
 

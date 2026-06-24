@@ -100,6 +100,50 @@ test("generic adapter sample prints local bridge request envelopes", () => {
   assert.equal(request.payload.require_trusted_device, true);
 });
 
+test("generic adapter sample rejects untrusted sends for sensitive bundle types", () => {
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "request",
+        "send",
+        "--bundle-root",
+        "/tmp/bundle_adapter_sample",
+        "--target-device-id",
+        "neko-device-target",
+        "--type",
+        "session",
+        "--require-trusted-device",
+        "false"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /session bundles require --require-trusted-device true/
+  );
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "send",
+      "--bundle-root",
+      "/tmp/bundle_adapter_sample",
+      "--target-device-id",
+      "neko-device-target",
+      "--type",
+      "config_snapshot",
+      "--require-trusted-device",
+      "false"
+    ],
+    { encoding: "utf8" }
+  );
+  const request = JSON.parse(stdout);
+  assert.equal(request.payload.bundle_type, "config_snapshot");
+  assert.equal(request.payload.require_trusted_device, false);
+});
+
 test("generic adapter sample prints import and detail request envelopes", () => {
   const detailStdout = execFileSync(
     process.execPath,
@@ -121,7 +165,9 @@ test("generic adapter sample prints import and detail request envelopes", () => 
       "--staged-bundle-id",
       "bundle_received_1",
       "--type",
-      "session"
+      "session",
+      "--conflict-strategy",
+      "rename"
     ],
     { encoding: "utf8" }
   );
@@ -135,6 +181,7 @@ test("generic adapter sample prints import and detail request envelopes", () => 
   assert.equal(importRequest.kind, "bundle.import");
   assert.equal(importRequest.payload.staged_bundle_id, "bundle_received_1");
   assert.equal(importRequest.payload.expected_bundle_type, "session");
+  assert.equal(importRequest.payload.conflict_strategy, "rename");
 });
 
 test("generic adapter sample prints action result query envelopes", () => {
@@ -144,6 +191,8 @@ test("generic adapter sample prints action result query envelopes", () => {
       sampleCli,
       "request",
       "results",
+      "--action-request-id",
+      "adapter-import-001",
       "--after-claimed-at-ms",
       "1234",
       "--limit",
@@ -156,8 +205,29 @@ test("generic adapter sample prints action result query envelopes", () => {
 
   assert.equal(request.kind, "actions.results");
   assert.equal(request.payload.client.client_id, "generic.adapter.sample");
+  assert.equal(request.payload.action_request_id, "adapter-import-001");
   assert.equal(request.payload.after_claimed_at_ms, 1234);
   assert.equal(request.payload.limit, 5);
+});
+
+test("generic adapter sample prints rollback request envelopes", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "rollback",
+      "--bundle-id",
+      "bundle_received_1"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const request = JSON.parse(stdout);
+
+  assert.equal(request.kind, "bundle.rollback");
+  assert.equal(request.payload.client.client_id, "generic.adapter.sample");
+  assert.equal(request.payload.bundle_id, "bundle_received_1");
 });
 
 test("generic adapter sample prints a generic roundtrip workflow", () => {
@@ -175,7 +245,9 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
       "--staged-bundle-id",
       "bundle_received_1",
       "--type",
-      "workspace"
+      "workspace",
+      "--conflict-strategy",
+      "skip_conflicts"
     ],
     { encoding: "utf8" }
   );
@@ -189,12 +261,87 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
     "observe",
     "inspect",
     "import",
+    "inspect_after_import",
     "results"
   ]);
   assert.equal(workflow.steps[1].request.kind, "bundle.send");
   assert.equal(workflow.steps[3].request.kind, "bundle.detail");
   assert.equal(workflow.steps[4].request.kind, "bundle.import");
-  assert.equal(workflow.steps[5].request.kind, "actions.results");
+  assert.equal(workflow.steps[4].request.payload.conflict_strategy, "skip_conflicts");
+  assert.equal(workflow.steps[5].request.kind, "bundle.detail");
+  assert.equal(workflow.steps[6].request.kind, "actions.results");
+  assert.equal(workflow.steps[6].request.payload.action_request_id, "adapter-import-001");
+});
+
+test("generic adapter sample prints a full export send import rollback loop", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "full-loop",
+      "--source",
+      "/tmp/adapter-source",
+      "--output",
+      "/tmp/adapter-out",
+      "--bundle-id",
+      "bundle_full_loop",
+      "--name",
+      "Full loop workspace",
+      "--target-device-id",
+      "neko-device-target",
+      "--staged-bundle-id",
+      "bundle_full_loop",
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "rename",
+      "--strip-field",
+      "auth.token"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+
+  assert.equal(workflow.mode, "full-loop");
+  assert.deepEqual(workflow.steps.map((step) => step.step), [
+    "export",
+    "authorize",
+    "send",
+    "observe_send",
+    "send_action_state",
+    "inspect_received_bundle",
+    "import",
+    "observe_import",
+    "import_action_state",
+    "query_import_receipt",
+    "receipt_state",
+    "rollback",
+    "observe_rollback",
+    "rollback_action_state",
+    "query_after_rollback",
+    "rollback_receipt_state"
+  ]);
+  assert.equal(workflow.steps[0].command.at(-2), "--strip-field");
+  assert.equal(workflow.steps[0].command.at(-1), "auth.token");
+  assert.equal(workflow.steps[2].request.kind, "bundle.send");
+  assert.equal(workflow.steps[2].request.payload.request_id, "adapter-send-001");
+  assert.equal(workflow.steps[2].request.payload.require_trusted_device, true);
+  assert.equal(workflow.steps[4].request.payload.action_request_id, "adapter-send-001");
+  assert.equal(workflow.steps[6].request.payload.request_id, "adapter-import-001");
+  assert.equal(workflow.steps[6].request.payload.conflict_strategy, "rename");
+  assert.equal(workflow.steps[8].request.payload.action_request_id, "adapter-import-001");
+  assert.equal(workflow.steps[9].request.kind, "bundle.detail");
+  assert.equal(workflow.steps[10].command.at(2), "receipt-state");
+  assert.equal(workflow.steps[11].request.kind, "bundle.rollback");
+  assert.equal(workflow.steps[11].request.payload.request_id, "adapter-rollback-001");
+  assert.equal(workflow.steps[13].request.payload.action_request_id, "adapter-rollback-001");
+  assert.equal(workflow.steps[14].request.kind, "bundle.detail");
+  assert.equal(workflow.steps[15].command.at(2), "receipt-state");
+  assert.match(workflow.notes.join("\n"), /Rollback only removes files imported into NekoDrop/);
+  assert.match(workflow.notes.join("\n"), /Sensitive bundle types require trusted authenticated targets/);
 });
 
 test("generic adapter sample derives the next event cursor", () => {
@@ -215,6 +362,140 @@ test("generic adapter sample derives the next event cursor", () => {
   assert.equal(cursor.after_event_id, "bridge-event-42");
   assert.equal(cursor.cursor_state, "ok");
   assert.equal(cursor.reset_required, false);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample derives action state from precise result lookups", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-action-state-"));
+  const responsePath = join(tempRoot, "results-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    action_results: [
+      {
+        request_id: "adapter-send-001",
+        action_kind: "bundle.send",
+        status: "queued",
+        lifecycle_status: "queued",
+        message: "local bridge action is queued for the desktop runtime"
+      },
+      {
+        request_id: "adapter-import-001",
+        action_kind: "bundle.import",
+        status: "running",
+        lifecycle_status: "running",
+        message: "local bridge bundle import is running"
+      },
+      {
+        request_id: "adapter-rollback-001",
+        action_kind: "bundle.rollback",
+        status: "completed",
+        lifecycle_status: "succeeded",
+        reason: null,
+        message: "rollback completed",
+        bundle_id: "bundle_received_1",
+        can_request_rollback: false
+      }
+    ]
+  }));
+
+  const pending = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-send-001"],
+    { encoding: "utf8" }
+  ));
+  const running = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-import-001"],
+    { encoding: "utf8" }
+  ));
+  const result = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-rollback-001"],
+    { encoding: "utf8" }
+  ));
+  const missing = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-missing-001"],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(pending.state, "pending");
+  assert.equal(pending.final, false);
+  assert.equal(running.state, "running");
+  assert.equal(running.final, false);
+  assert.equal(result.state, "result");
+  assert.equal(result.final, true);
+  assert.equal(result.lifecycle_status, "succeeded");
+  assert.equal(result.bundle_id, "bundle_received_1");
+  assert.equal(missing.state, "missing");
+  assert.equal(missing.final, false);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample derives receipt state from bundle detail responses", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-receipt-state-"));
+  const responsePath = join(tempRoot, "detail-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    staged_bundles: [
+      {
+        bundle_id: "bundle_imported_1",
+        bundle_type: "workspace",
+        display_name: "Imported workspace",
+        staging_status: "imported",
+        import_allowed: true,
+        has_import_receipt: true,
+        imported_with_strategy: "rename",
+        import_skipped_file_count: 1,
+        rollback_file_count: 3,
+        can_request_rollback: true,
+        can_rollback_now: true,
+        rollback_blocking_reason: null,
+        rolled_back_file_count: 0
+      },
+      {
+        bundle_id: "bundle_rolled_back_1",
+        bundle_type: "workspace",
+        display_name: "Rolled back workspace",
+        staging_status: "rolled_back",
+        import_allowed: true,
+        has_import_receipt: true,
+        imported_with_strategy: "rename",
+        import_skipped_file_count: 0,
+        rollback_file_count: 3,
+        can_request_rollback: false,
+        can_rollback_now: false,
+        rollback_blocking_reason: "already_rolled_back",
+        rolled_back_file_count: 3
+      }
+    ]
+  }));
+
+  const imported = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "receipt-state", "--response", responsePath, "--bundle-id", "bundle_imported_1"],
+    { encoding: "utf8" }
+  ));
+  const rolledBack = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "receipt-state", "--response", responsePath, "--bundle-id", "bundle_rolled_back_1"],
+    { encoding: "utf8" }
+  ));
+  const missing = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "receipt-state", "--response", responsePath, "--bundle-id", "bundle_missing_1"],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(imported.state, "imported_can_rollback");
+  assert.equal(imported.imported_with_strategy, "rename");
+  assert.equal(imported.import_skipped_file_count, 1);
+  assert.equal(imported.rollback_file_count, 3);
+  assert.equal(rolledBack.state, "rolled_back");
+  assert.equal(rolledBack.rollback_blocking_reason, "already_rolled_back");
+  assert.equal(rolledBack.rolled_back_file_count, 3);
+  assert.equal(missing.state, "missing");
+  assert.equal(missing.can_request_rollback, false);
 
   rmSync(tempRoot, { recursive: true, force: true });
 });

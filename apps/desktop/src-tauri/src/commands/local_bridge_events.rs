@@ -81,6 +81,7 @@ fn local_bridge_event_is_allowed(
         LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
             "bundle.send" => can_send_bundles,
             "bundle.import" => can_import_bundles,
+            "bundle.rollback" => can_import_bundles,
             _ => false,
         },
         LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,

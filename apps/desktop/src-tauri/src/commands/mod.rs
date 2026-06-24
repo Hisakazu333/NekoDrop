@@ -59,7 +59,8 @@ use device_dtos::{
 };
 use local_bridge_action_results::{
     local_bridge_action_lifecycle_result, local_bridge_bundle_import_result,
-    local_bridge_bundle_send_result, local_bridge_bundle_send_result_from_preflight,
+    local_bridge_bundle_rollback_result, local_bridge_bundle_send_result,
+    local_bridge_bundle_send_result_from_preflight,
 };
 use local_bridge_dtos::{
     local_bridge_authorization_to_dto, local_bridge_authorizations_to_dtos,
@@ -81,7 +82,9 @@ use path_dialog::{
 use receive_diagnostics::{receive_port_diagnostics_from_session, receive_session_to_dto};
 use staged_bundles::{
     delete_staged_bundle_at, find_staged_bundle_dto_at, import_staged_bundle_at,
-    list_staged_bundle_dtos_at, prune_staged_bundle_dtos_at, validate_safe_bundle_id,
+    import_staged_bundle_with_strategy_at, latest_bundle_import_receipt_dto_at,
+    list_staged_bundle_dtos_at, parse_import_conflict_strategy, prune_staged_bundle_dtos_at,
+    rollback_imported_bundle_at, validate_safe_bundle_id,
 };
 use transfer_dtos::{
     pending_offer_to_dto, pending_pairing_request_to_dto, pending_resume_summary_from_offer,
@@ -102,9 +105,10 @@ use crate::app_config::{receive_policy_label, save_app_config};
 use crate::app_state::{
     ActiveReceiveSession, AppState, LocalBridgeAuthorizationRecord, LocalBridgePendingAction,
     LocalBridgePendingActionResult, LocalBridgePendingImportBundleAction,
-    LocalBridgePendingSendBundleAction, LocalBridgeRuntimeState, PendingLocalBridgeAuthorization,
-    PendingPairingRequest, PendingReceiveFile, PendingReceiveOffer, PendingReceiveResumeSummary,
-    ReceiveDecision, TransferStatusState,
+    LocalBridgePendingRollbackBundleImportAction, LocalBridgePendingSendBundleAction,
+    LocalBridgeRuntimeState, PendingLocalBridgeAuthorization, PendingPairingRequest,
+    PendingReceiveFile, PendingReceiveOffer, PendingReceiveResumeSummary, ReceiveDecision,
+    TransferStatusState,
 };
 use crate::device_identity::app_config_dir;
 use crate::local_bridge_authorizations::{
@@ -389,10 +393,21 @@ pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-pub fn import_staged_bundle(bundle_id: String) -> Result<ReceivedBundleDto, String> {
+pub fn import_staged_bundle(
+    request: ImportStagedBundleRequestDto,
+) -> Result<ReceivedBundleDto, String> {
     let staging_root = bundle_staging_root()?;
     let import_root = bundle_import_root()?;
-    import_staged_bundle_at(&staging_root, &import_root, &bundle_id)
+    let strategy = parse_import_conflict_strategy(request.conflict_strategy.as_deref())?;
+    import_staged_bundle_with_strategy_at(&staging_root, &import_root, &request.bundle_id, strategy)
+}
+
+#[tauri::command]
+pub fn rollback_imported_bundle(
+    request: RollbackImportedBundleRequestDto,
+) -> Result<ReceivedBundleDto, String> {
+    let import_root = bundle_import_root()?;
+    rollback_imported_bundle_at(&import_root, &request.bundle_id)
 }
 
 #[tauri::command]
@@ -668,6 +683,14 @@ pub(crate) fn run_local_bridge_runtime_worker_once_at(
                 &state.local_bridge_runtime,
                 result.clone(),
             )?;
+            Ok(Some(local_bridge_pending_action_result_to_dto(
+                &result, false,
+            )))
+        }
+        Some(LocalBridgePendingAction::RollbackBundleImport(action)) => {
+            let import_root = bundle_import_root()?;
+            let result = execute_local_bridge_bundle_rollback_action(action, &import_root, now_ms)?;
+            push_local_bridge_action_lifecycle_result(&state.local_bridge_runtime, result.clone())?;
             Ok(Some(local_bridge_pending_action_result_to_dto(
                 &result, false,
             )))
@@ -2013,6 +2036,11 @@ fn handle_local_bridge_request_with_runtime_at(
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+    let pending_actions = runtime
+        .pending_actions
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
 
     if let LocalBridgeRequest::SendBundle(request) = &request {
         if local_bridge_client_has_scope(
@@ -2058,6 +2086,28 @@ fn handle_local_bridge_request_with_runtime_at(
         }
     }
 
+    if let LocalBridgeRequest::RollbackBundleImport(request) = &request {
+        if local_bridge_client_has_scope(
+            request.client.as_ref(),
+            &authorizations,
+            LocalBridgePermissionScope::BundleImportRequest,
+            now_ms,
+        ) {
+            push_local_bridge_pending_action_queued(
+                runtime,
+                LocalBridgePendingAction::RollbackBundleImport(
+                    local_bridge_pending_rollback_action_from_request(request, now_ms)?,
+                ),
+                now_ms,
+            )?;
+            return Ok(local_bridge_authorized_runtime_pending_response(
+                request.request_id.clone(),
+                request.client.clone(),
+                "local bridge bundle rollback is authorized and waiting for the desktop runtime",
+            ));
+        }
+    }
+
     let response = handle_validated_local_bridge_request_with_auth_at(
         request,
         trusted_devices,
@@ -2066,6 +2116,7 @@ fn handle_local_bridge_request_with_runtime_at(
         import_root,
         &authorizations,
         &events,
+        &pending_actions,
         &action_results,
         now_ms,
     )?;
@@ -2191,6 +2242,9 @@ fn preflight_next_local_bridge_bundle_send_at(
         match actions.remove(0) {
             LocalBridgePendingAction::SendBundle(action) => action,
             LocalBridgePendingAction::ImportBundle(_) => unreachable!("first action checked above"),
+            LocalBridgePendingAction::RollbackBundleImport(_) => {
+                unreachable!("first action checked above")
+            }
         }
     };
 
@@ -2211,6 +2265,13 @@ fn execute_next_local_bridge_bundle_import_at(
             push_front_local_bridge_pending_action(
                 runtime,
                 LocalBridgePendingAction::SendBundle(action),
+            )?;
+            return Ok(None);
+        }
+        Some(LocalBridgePendingAction::RollbackBundleImport(action)) => {
+            push_front_local_bridge_pending_action(
+                runtime,
+                LocalBridgePendingAction::RollbackBundleImport(action),
             )?;
             return Ok(None);
         }
@@ -2299,6 +2360,13 @@ where
             push_front_local_bridge_pending_action(
                 runtime,
                 LocalBridgePendingAction::ImportBundle(action),
+            )?;
+            return Ok(None);
+        }
+        Some(LocalBridgePendingAction::RollbackBundleImport(action)) => {
+            push_front_local_bridge_pending_action(
+                runtime,
+                LocalBridgePendingAction::RollbackBundleImport(action),
             )?;
             return Ok(None);
         }
@@ -2408,6 +2476,9 @@ fn execute_local_bridge_bundle_import_action(
                 "local bridge staged bundle does not contain bundle.json",
                 None,
                 None,
+                0,
+                None,
+                0,
                 now_ms,
             ));
         }
@@ -2419,6 +2490,9 @@ fn execute_local_bridge_bundle_import_action(
                 &format!("local bridge staged bundle validation failed: {error}"),
                 None,
                 None,
+                0,
+                None,
+                0,
                 now_ms,
             ));
         }
@@ -2435,12 +2509,22 @@ fn execute_local_bridge_bundle_import_action(
                 "local bridge expected bundle_type does not match the staged bundle manifest",
                 Some(bundle_id.as_str()),
                 Some(bundle_type),
+                0,
+                None,
+                0,
                 now_ms,
             ));
         }
     }
 
-    match import_staged_bundle_at(staging_root, import_root, &action.staged_bundle_id) {
+    let conflict_strategy =
+        parse_import_conflict_strategy(Some(action.conflict_strategy.as_str()))?;
+    match import_staged_bundle_with_strategy_at(
+        staging_root,
+        import_root,
+        &action.staged_bundle_id,
+        conflict_strategy,
+    ) {
         Ok(imported) => Ok(local_bridge_bundle_import_result(
             "completed",
             &action,
@@ -2448,6 +2532,9 @@ fn execute_local_bridge_bundle_import_action(
             "local bridge staged bundle was imported",
             Some(imported.bundle_id.as_str()),
             bundle_type_from_label(&imported.bundle_type).or(Some(bundle_type)),
+            imported.import_skipped_file_count,
+            imported.import_receipt_path.as_deref(),
+            imported.rollback_file_count,
             now_ms,
         )),
         Err(error) => {
@@ -2459,6 +2546,41 @@ fn execute_local_bridge_bundle_import_action(
                 &format!("local bridge staged bundle import failed: {error}"),
                 Some(bundle_id.as_str()),
                 Some(bundle_type),
+                0,
+                None,
+                0,
+                now_ms,
+            ))
+        }
+    }
+}
+
+fn execute_local_bridge_bundle_rollback_action(
+    action: LocalBridgePendingRollbackBundleImportAction,
+    import_root: &std::path::Path,
+    now_ms: u128,
+) -> Result<LocalBridgePendingActionResult, String> {
+    validate_safe_bundle_id(&action.bundle_id)?;
+    match rollback_imported_bundle_at(import_root, &action.bundle_id) {
+        Ok(rolled_back) => Ok(local_bridge_bundle_rollback_result(
+            "completed",
+            &action,
+            None,
+            None,
+            "local bridge bundle import was rolled back",
+            rolled_back.rolled_back_file_count,
+            now_ms,
+        )),
+        Err(error) => {
+            let reason = local_bridge_bundle_rollback_failure_reason(&error);
+            let rollback_blocking_reason = local_bridge_bundle_rollback_blocking_reason(&error);
+            Ok(local_bridge_bundle_rollback_result(
+                "failed",
+                &action,
+                Some(reason),
+                rollback_blocking_reason,
+                &format!("local bridge bundle rollback failed: {error}"),
+                0,
                 now_ms,
             ))
         }
@@ -2470,6 +2592,32 @@ fn local_bridge_bundle_import_failure_reason(error: &str) -> &'static str {
         return "bundle_import_conflict";
     }
     "bundle_import_failed"
+}
+
+fn local_bridge_bundle_rollback_failure_reason(error: &str) -> &'static str {
+    if error.contains("没有找到资料包导入记录") {
+        return "bundle_import_receipt_missing";
+    }
+    if error.contains("destination_missing")
+        || error.contains("imported_file_missing")
+        || error.contains("already_rolled_back")
+    {
+        return "bundle_rollback_blocked";
+    }
+    "bundle_rollback_failed"
+}
+
+fn local_bridge_bundle_rollback_blocking_reason(error: &str) -> Option<&'static str> {
+    if error.contains("destination_missing") {
+        return Some("destination_missing");
+    }
+    if error.contains("imported_file_missing") {
+        return Some("imported_file_missing");
+    }
+    if error.contains("already_rolled_back") {
+        return Some("already_rolled_back");
+    }
+    None
 }
 
 fn preflight_local_bridge_bundle_send_action(
@@ -2525,6 +2673,18 @@ fn preflight_local_bridge_bundle_send_action(
             Some(detected_type),
             Some("bundle_type_mismatch"),
             "local bridge bundle_type does not match the detected bundle manifest",
+            now_ms,
+        ));
+    }
+
+    if detected_type.requires_authenticated_encrypted_session() && !action.require_trusted_device {
+        return Ok(local_bridge_bundle_send_preflight_result(
+            "failed_preflight",
+            &action,
+            Some(detected.manifest.bundle_id.as_str()),
+            Some(detected_type),
+            Some("sensitive_bundle_requires_trusted_device"),
+            "local bridge sensitive bundle send requires a trusted authenticated session target",
             now_ms,
         ));
     }
@@ -2629,6 +2789,12 @@ fn push_local_bridge_pending_action_result(
         bundle_root: result.bundle_root.clone(),
         target_device_id: result.target_device_id.clone(),
         require_trusted_device: result.require_trusted_device,
+        conflict_strategy: None,
+        skipped_file_count: 0,
+        import_receipt_path: None,
+        rollback_file_count: 0,
+        rollback_blocking_reason: None,
+        rolled_back_file_count: 0,
         requested_at_ms,
         claimed_at_ms,
     };
@@ -2786,10 +2952,12 @@ fn remove_local_bridge_pending_action_at(
             match &action {
                 LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
                 LocalBridgePendingAction::ImportBundle(action) => action.expected_bundle_type,
+                LocalBridgePendingAction::RollbackBundleImport(_) => None,
             },
             match &action {
                 LocalBridgePendingAction::SendBundle(action) => action.target_device_id.as_deref(),
                 LocalBridgePendingAction::ImportBundle(_) => None,
+                LocalBridgePendingAction::RollbackBundleImport(_) => None,
             },
             now_ms(),
         ),
@@ -2801,6 +2969,7 @@ fn local_bridge_pending_action_request_id(action: &LocalBridgePendingAction) -> 
     match action {
         LocalBridgePendingAction::SendBundle(action) => &action.request_id,
         LocalBridgePendingAction::ImportBundle(action) => &action.request_id,
+        LocalBridgePendingAction::RollbackBundleImport(action) => &action.request_id,
     }
 }
 
@@ -2836,6 +3005,26 @@ fn local_bridge_pending_import_action_from_request(
         client,
         staged_bundle_id: request.staged_bundle_id.clone(),
         expected_bundle_type: request.expected_bundle_type,
+        conflict_strategy: request
+            .conflict_strategy
+            .clone()
+            .unwrap_or_else(|| "reject".to_string()),
+        requested_at_ms: now_ms,
+    })
+}
+
+fn local_bridge_pending_rollback_action_from_request(
+    request: &nekolink_protocol::LocalBridgeRollbackBundleImportRequest,
+    now_ms: u128,
+) -> Result<LocalBridgePendingRollbackBundleImportAction, String> {
+    let client = request
+        .client
+        .clone()
+        .ok_or_else(|| "authorized local bridge rollback requires a client identity".to_string())?;
+    Ok(LocalBridgePendingRollbackBundleImportAction {
+        request_id: request.request_id.clone(),
+        client,
+        bundle_id: request.bundle_id.clone(),
         requested_at_ms: now_ms,
     })
 }
@@ -2861,6 +3050,7 @@ fn handle_local_bridge_request_with_auth_at(
         authorizations,
         &[],
         &[],
+        &[],
         now_ms,
     )
 }
@@ -2873,6 +3063,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
     import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     events: &[LocalBridgeEvent],
+    pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
@@ -2903,6 +3094,12 @@ fn handle_validated_local_bridge_request_with_auth_at(
             let client = request.client.clone();
             let bundle =
                 find_staged_bundle_dto_at(staging_root, import_root, &request.staged_bundle_id)?;
+            let bundle = match bundle {
+                Some(bundle) => Some(bundle),
+                None => {
+                    latest_bundle_import_receipt_dto_at(import_root, &request.staged_bundle_id)?
+                }
+            };
             match bundle {
                 Some(bundle) => Ok(local_bridge_read_only_response(
                     request.request_id,
@@ -2970,7 +3167,9 @@ fn handle_validated_local_bridge_request_with_auth_at(
             let action_results = local_bridge_action_results_for_client(
                 request.client.as_ref(),
                 authorizations,
+                pending_actions,
                 action_results,
+                request.action_request_id.as_deref(),
                 request.after_claimed_at_ms,
                 request.limit.unwrap_or(50),
                 now_ms,
@@ -3017,6 +3216,25 @@ fn handle_validated_local_bridge_request_with_auth_at(
                     request.request_id,
                     request.client,
                     "local bridge bundle import is authorized, but the import runtime is not connected yet",
+                ))
+            } else {
+                Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ))
+            }
+        }
+        LocalBridgeRequest::RollbackBundleImport(request) => {
+            if local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::BundleImportRequest,
+                now_ms,
+            ) {
+                Ok(local_bridge_authorized_runtime_pending_response(
+                    request.request_id,
+                    request.client,
+                    "local bridge bundle rollback is authorized, but the rollback runtime is not connected yet",
                 ))
             } else {
                 Ok(local_bridge_pending_confirmation_response(
@@ -3131,7 +3349,9 @@ fn local_bridge_transfer_phase_from_status(
 fn local_bridge_action_results_for_client(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],
+    pending_actions: &[LocalBridgePendingAction],
     results: &[LocalBridgePendingActionResult],
+    action_request_id: Option<&str>,
     after_claimed_at_ms: Option<u128>,
     limit: usize,
     now_ms: u128,
@@ -3159,16 +3379,101 @@ fn local_bridge_action_results_for_client(
     let output = results
         .iter()
         .filter(|result| result.client_id == client.client_id)
+        .filter(|result| action_request_id.is_none_or(|request_id| result.request_id == request_id))
         .filter(|result| after_claimed_at_ms.is_none_or(|after| result.claimed_at_ms > after))
         .filter(|result| match result.action_kind.as_str() {
             "bundle.send" => can_read_send_results,
-            "bundle.import" => can_read_import_results,
+            "bundle.import" | "bundle.rollback" => can_read_import_results,
             _ => false,
         })
         .take(limit)
         .map(|result| local_bridge_pending_action_result_to_dto(result, false))
-        .collect();
+        .collect::<Vec<_>>();
+    if !output.is_empty() {
+        return Ok(Some(output));
+    }
+    let Some(request_id) = action_request_id else {
+        return Ok(Some(output));
+    };
+    let Some(pending_action) = pending_actions.iter().find(|action| {
+        local_bridge_pending_action_request_id(action) == request_id
+            && local_bridge_pending_action_client_id(action) == client.client_id
+    }) else {
+        return Ok(Some(output));
+    };
+    if !local_bridge_client_can_read_pending_action(
+        pending_action,
+        can_read_send_results,
+        can_read_import_results,
+    ) {
+        return Ok(Some(output));
+    }
+
+    let queued_result = local_bridge_action_lifecycle_result(
+        pending_action,
+        LocalBridgeActionLifecycleStatus::Queued,
+        None,
+        "local bridge action is queued for the desktop runtime",
+        None,
+        local_bridge_pending_action_bundle_type(pending_action),
+        local_bridge_pending_action_target_device_id(pending_action),
+        local_bridge_pending_action_requested_at_ms(pending_action),
+    );
+    if after_claimed_at_ms.is_some_and(|after| queued_result.claimed_at_ms <= after) {
+        return Ok(Some(output));
+    }
+
+    let output = vec![local_bridge_pending_action_result_to_dto(
+        &queued_result,
+        false,
+    )];
     Ok(Some(output))
+}
+
+fn local_bridge_pending_action_client_id(action: &LocalBridgePendingAction) -> &str {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => &action.client.client_id,
+        LocalBridgePendingAction::ImportBundle(action) => &action.client.client_id,
+        LocalBridgePendingAction::RollbackBundleImport(action) => &action.client.client_id,
+    }
+}
+
+fn local_bridge_pending_action_requested_at_ms(action: &LocalBridgePendingAction) -> u128 {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => action.requested_at_ms,
+        LocalBridgePendingAction::ImportBundle(action) => action.requested_at_ms,
+        LocalBridgePendingAction::RollbackBundleImport(action) => action.requested_at_ms,
+    }
+}
+
+fn local_bridge_pending_action_bundle_type(
+    action: &LocalBridgePendingAction,
+) -> Option<BundleType> {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
+        LocalBridgePendingAction::ImportBundle(action) => action.expected_bundle_type,
+        LocalBridgePendingAction::RollbackBundleImport(_) => None,
+    }
+}
+
+fn local_bridge_pending_action_target_device_id(action: &LocalBridgePendingAction) -> Option<&str> {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => action.target_device_id.as_deref(),
+        LocalBridgePendingAction::ImportBundle(_) => None,
+        LocalBridgePendingAction::RollbackBundleImport(_) => None,
+    }
+}
+
+fn local_bridge_client_can_read_pending_action(
+    action: &LocalBridgePendingAction,
+    can_read_send_results: bool,
+    can_read_import_results: bool,
+) -> bool {
+    match action {
+        LocalBridgePendingAction::SendBundle(_) => can_read_send_results,
+        LocalBridgePendingAction::ImportBundle(_)
+        | LocalBridgePendingAction::RollbackBundleImport(_) => can_read_import_results,
+    }
 }
 
 fn confirm_local_bridge_runtime_authorization_at(
@@ -3456,6 +3761,7 @@ fn wait_for_local_bridge_events(
         import_root,
         authorizations,
         &events,
+        &[],
         &action_results,
         now_ms,
     )
@@ -4706,6 +5012,8 @@ mod tests {
         assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
         assert_eq!(bundles[0].staging_status, "saved");
         assert!(bundles[0].can_import_now);
+        assert!(!bundles[0].has_import_receipt);
+        assert!(!bundles[0].can_request_rollback);
         assert!(!bundles[0].import_conflict);
         assert_eq!(
             bundles[0].import_destination.as_deref(),
@@ -4766,12 +5074,9 @@ mod tests {
         let import_root = dir.join("bundle_imports");
         let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
         nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
-        fs::create_dir_all(import_root.join("bundle_1234567890").join("files")).unwrap();
+        fs::create_dir_all(import_root.join("bundle_1234567890")).unwrap();
         fs::write(
-            import_root
-                .join("bundle_1234567890")
-                .join("files")
-                .join("content.bin"),
+            import_root.join("bundle_1234567890").join("content.bin"),
             b"existing",
         )
         .unwrap();
@@ -4807,6 +5112,8 @@ mod tests {
         assert_eq!(imported.bundle_id, "bundle_1234567890");
         assert_eq!(imported.staging_status, "imported");
         assert!(!imported.can_import_now);
+        assert!(imported.has_import_receipt);
+        assert!(imported.can_request_rollback);
         assert_eq!(
             imported.import_path.as_deref(),
             Some(
@@ -4820,6 +5127,29 @@ mod tests {
             .join("bundle_1234567890")
             .join("content.bin")
             .is_file());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn staged_bundle_dto_keeps_imported_status_after_refresh() {
+        let dir = unique_bundle_temp_dir("desktop-bundle-imported-refresh");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+
+        let bundles = list_staged_bundle_dtos_at(&staging_root, &import_root).unwrap();
+
+        assert_eq!(bundles.len(), 1);
+        assert_eq!(bundles[0].bundle_id, "bundle_1234567890");
+        assert_eq!(bundles[0].staging_status, "imported");
+        assert!(bundles[0].can_rollback_now);
+        assert!(bundles[0].has_import_receipt);
+        assert!(bundles[0].can_request_rollback);
+        assert_eq!(bundles[0].rollback_file_count, 2);
+        assert!(bundles[0].import_receipt_path.is_none());
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -4898,6 +5228,8 @@ mod tests {
         assert_eq!(response.devices[0].device_id, "device-a");
         assert_eq!(response.staged_bundles.len(), 1);
         assert_eq!(response.staged_bundles[0].bundle_id, "bundle_1234567890");
+        assert!(response.staged_bundles[0].staging_path.is_empty());
+        assert!(response.staged_bundles[0].import_destination.is_none());
         assert!(response.transfer_status.is_none());
 
         fs::remove_dir_all(dir).unwrap();
@@ -4999,7 +5331,117 @@ mod tests {
         assert_eq!(response.security_state, "read_only");
         assert_eq!(response.staged_bundles.len(), 1);
         assert_eq!(response.staged_bundles[0].bundle_id, "bundle_1234567890");
+        assert!(response.staged_bundles[0].staging_path.is_empty());
+        assert!(response.staged_bundles[0].import_destination.is_none());
+        assert!(response.staged_bundles[0].import_receipt_path.is_none());
+        assert!(!response.staged_bundles[0].has_import_receipt);
+        assert!(!response.staged_bundles[0].can_request_rollback);
+        assert!(response.staged_bundles[0]
+            .import_plan_files
+            .iter()
+            .all(|file| file.destination_path.is_empty()));
         assert!(!response.requires_user_confirmation);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_detail_returns_imported_status_without_local_paths() {
+        let dir = unique_bundle_temp_dir("local-bridge-bundle-detail-imported");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        let request = serde_json::json!({
+            "kind": "bundle.detail",
+            "payload": {
+                "request_id": "bridge-request-detail-imported",
+                "staged_bundle_id": "bundle_1234567890"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &[],
+            2_000,
+        )
+        .unwrap();
+
+        assert_eq!(response.request_id, "bridge-request-detail-imported");
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.security_state, "read_only");
+        assert_eq!(response.staged_bundles.len(), 1);
+        let bundle = &response.staged_bundles[0];
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.staging_status, "imported");
+        assert!(bundle.staging_path.is_empty());
+        assert!(bundle.import_path.is_none());
+        assert!(bundle.import_destination.is_none());
+        assert!(bundle.import_receipt_path.is_none());
+        assert!(bundle.has_import_receipt);
+        assert_eq!(bundle.rollback_file_count, 2);
+        assert!(bundle.can_rollback_now);
+        assert!(bundle.can_request_rollback);
+        assert!(bundle.rollback_blocking_reason.is_none());
+        assert_eq!(bundle.rolled_back_file_count, 0);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_detail_returns_rolled_back_status_without_local_paths() {
+        let dir = unique_bundle_temp_dir("local-bridge-bundle-detail-rolled-back");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let bundle_root = create_desktop_test_bundle(&dir, "source", "bundle_1234567890");
+        nekodrop_storage::stage_bundle_directory(&bundle_root, &staging_root).unwrap();
+        import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        rollback_imported_bundle_at(&import_root, "bundle_1234567890").unwrap();
+        let request = serde_json::json!({
+            "kind": "bundle.detail",
+            "payload": {
+                "request_id": "bridge-request-detail-rolled-back",
+                "staged_bundle_id": "bundle_1234567890"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &[],
+            2_000,
+        )
+        .unwrap();
+
+        assert_eq!(response.request_id, "bridge-request-detail-rolled-back");
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.staged_bundles.len(), 1);
+        let bundle = &response.staged_bundles[0];
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.staging_status, "rolled_back");
+        assert!(bundle.staging_path.is_empty());
+        assert!(bundle.import_path.is_none());
+        assert!(bundle.import_destination.is_none());
+        assert!(bundle.import_receipt_path.is_none());
+        assert!(bundle.has_import_receipt);
+        assert_eq!(bundle.rollback_file_count, 2);
+        assert!(!bundle.can_rollback_now);
+        assert!(!bundle.can_request_rollback);
+        assert_eq!(
+            bundle.rollback_blocking_reason.as_deref(),
+            Some("destination_missing")
+        );
+        assert_eq!(bundle.rolled_back_file_count, 2);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -5543,6 +5985,64 @@ mod tests {
     }
 
     #[test]
+    fn authorized_local_bridge_bundle_rollback_is_queued_as_pending_action() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-pending-rollback-action");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        let rollback_request = serde_json::json!({
+            "kind": "bundle.rollback",
+            "payload": {
+                "request_id": "bridge-request-rollback",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "bundle_id": "bundle_1234567890"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &rollback_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_runtime");
+        let actions = runtime.pending_actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::app_state::LocalBridgePendingAction::RollbackBundleImport(action) => {
+                assert_eq!(action.request_id, "bridge-request-rollback");
+                assert_eq!(action.client.client_id, "local-agent-app");
+                assert_eq!(action.bundle_id, "bundle_1234567890");
+                assert_eq!(action.requested_at_ms, 1_500);
+            }
+            other => panic!("expected rollback bundle action, got {other:?}"),
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn unauthorized_local_bridge_bundle_mutation_is_not_queued() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-no-pending-action");
         let staging_root = dir.join("bundle_staging");
@@ -5607,6 +6107,7 @@ mod tests {
                 },
                 staged_bundle_id: "bundle_1234567890".to_string(),
                 expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
                 requested_at_ms: 1_600,
             }),
         ]);
@@ -5655,6 +6156,7 @@ mod tests {
                 },
                 staged_bundle_id: "bundle_1234567890".to_string(),
                 expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
                 requested_at_ms: 1_600,
             }),
         ]);
@@ -5713,6 +6215,7 @@ mod tests {
                 },
                 staged_bundle_id: "bundle_1234567890".to_string(),
                 expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
                 requested_at_ms: 1_600,
             }),
         ]);
@@ -5762,6 +6265,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(BundleType::Skill),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ));
@@ -5815,6 +6319,83 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_bundle_rollback_execution_removes_imported_files_and_records_result() {
+        let dir = unique_bundle_temp_dir("local-bridge-rollback-execution");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let imported =
+            import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        assert!(
+            std::path::Path::new(imported.import_path.as_deref().unwrap())
+                .join("content.bin")
+                .exists()
+        );
+        let action = LocalBridgePendingRollbackBundleImportAction {
+            request_id: "bridge-rollback-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            },
+            bundle_id: "bundle_1234567890".to_string(),
+            requested_at_ms: 1_500,
+        };
+        let result =
+            execute_local_bridge_bundle_rollback_action(action, &import_root, 2_000).unwrap();
+
+        assert_eq!(result.request_id, "bridge-rollback-1");
+        assert_eq!(result.action_kind, "bundle.rollback");
+        assert_eq!(result.status, "completed");
+        assert_eq!(result.lifecycle_status.as_deref(), Some("succeeded"));
+        assert_eq!(result.bundle_id.as_deref(), Some("bundle_1234567890"));
+        assert_eq!(result.rolled_back_file_count, 2);
+        assert!(result.rollback_blocking_reason.is_none());
+        assert!(!std::path::Path::new(imported.import_path.as_deref().unwrap()).exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_bundle_rollback_execution_records_blocking_reason() {
+        let dir = unique_bundle_temp_dir("local-bridge-rollback-blocked");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        create_desktop_test_bundle(&staging_root, "bundle_1234567890", "bundle_1234567890");
+        let imported =
+            import_staged_bundle_at(&staging_root, &import_root, "bundle_1234567890").unwrap();
+        fs::remove_file(
+            std::path::Path::new(imported.import_path.as_deref().unwrap()).join("content.bin"),
+        )
+        .unwrap();
+        let action = LocalBridgePendingRollbackBundleImportAction {
+            request_id: "bridge-rollback-blocked-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            },
+            bundle_id: "bundle_1234567890".to_string(),
+            requested_at_ms: 1_500,
+        };
+        let result =
+            execute_local_bridge_bundle_rollback_action(action, &import_root, 2_000).unwrap();
+
+        assert_eq!(result.request_id, "bridge-rollback-blocked-1");
+        assert_eq!(result.action_kind, "bundle.rollback");
+        assert_eq!(result.status, "failed");
+        assert_eq!(result.lifecycle_status.as_deref(), Some("failed"));
+        assert_eq!(result.reason.as_deref(), Some("bundle_rollback_blocked"));
+        assert_eq!(
+            result.rollback_blocking_reason.as_deref(),
+            Some("imported_file_missing")
+        );
+        assert_eq!(result.rolled_back_file_count, 0);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn local_bridge_bundle_import_execution_rejects_expected_type_mismatch() {
         let dir = unique_bundle_temp_dir("local-bridge-import-execution-type-mismatch");
         let staging_root = dir.join("bundle_staging");
@@ -5835,6 +6416,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(BundleType::Workspace),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ));
@@ -5885,6 +6467,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(BundleType::Skill),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ));
@@ -6068,6 +6651,63 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_bundle_send_preflight_rejects_sensitive_bundles_without_trusted_session_target()
+    {
+        let dir = unique_bundle_temp_dir("local-bridge-send-preflight-sensitive-policy");
+        let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
+
+        for bundle_type in [
+            BundleType::Skill,
+            BundleType::Session,
+            BundleType::Workspace,
+            BundleType::AgentProfile,
+        ] {
+            let label = bundle_type_label(bundle_type);
+            let bundle_id = format!("bundle_preflight_sensitive_{label}");
+            let bundle_root = create_desktop_test_bundle_with_type(
+                &dir,
+                format!("bundle_{label}").as_str(),
+                &bundle_id,
+                bundle_type,
+            );
+            let runtime = LocalBridgeRuntimeState::default();
+            runtime
+                .pending_actions
+                .lock()
+                .unwrap()
+                .push(LocalBridgePendingAction::SendBundle(
+                    LocalBridgePendingSendBundleAction {
+                        request_id: format!("bridge-send-sensitive-{label}"),
+                        client: LocalBridgeClientIdentity {
+                            client_id: "local-agent-app".to_string(),
+                            display_name: "Local Agent App".to_string(),
+                            app_kind: Some("agent".to_string()),
+                        },
+                        target_device_id: Some("device-a".to_string()),
+                        bundle_root: bundle_root.display().to_string(),
+                        bundle_type,
+                        require_trusted_device: false,
+                        requested_at_ms: 1_500,
+                    },
+                ));
+
+            let result =
+                preflight_next_local_bridge_bundle_send_at(&runtime, &trusted, 2_000).unwrap();
+
+            assert_eq!(result.status, "failed_preflight");
+            assert_eq!(
+                result.reason.as_deref(),
+                Some("sensitive_bundle_requires_trusted_device")
+            );
+            assert_eq!(result.bundle_id.as_deref(), Some(bundle_id.as_str()));
+            assert_eq!(result.bundle_type.as_deref(), Some(label));
+            assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn local_bridge_bundle_send_preflight_rejects_missing_trusted_target() {
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-untrusted-target");
         let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_trusted");
@@ -6156,7 +6796,12 @@ mod tests {
     #[test]
     fn local_bridge_bundle_send_preflight_records_result_without_sensitive_path() {
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-result-history");
-        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_result");
+        let bundle_root = create_desktop_test_bundle_with_type(
+            &dir,
+            "bundle",
+            "bundle_preflight_result",
+            BundleType::ConfigSnapshot,
+        );
         let runtime = LocalBridgeRuntimeState::default();
         runtime
             .pending_actions
@@ -6172,7 +6817,7 @@ mod tests {
                     },
                     target_device_id: None,
                     bundle_root: bundle_root.display().to_string(),
-                    bundle_type: BundleType::Skill,
+                    bundle_type: BundleType::ConfigSnapshot,
                     require_trusted_device: false,
                     requested_at_ms: 1_500,
                 },
@@ -6182,6 +6827,7 @@ mod tests {
         let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
 
         assert_eq!(preflight.status, "ready");
+        assert_eq!(preflight.bundle_type.as_deref(), Some("config_snapshot"));
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].request_id, "bridge-send-result");
         assert_eq!(results[0].action_kind, "bundle.send");
@@ -6339,7 +6985,10 @@ mod tests {
         assert!(!called);
         assert_eq!(result.status, "failed");
         assert_eq!(result.lifecycle_status.as_deref(), Some("failed"));
-        assert_eq!(result.reason.as_deref(), Some("target_device_required"));
+        assert_eq!(
+            result.reason.as_deref(),
+            Some("sensitive_bundle_requires_trusted_device")
+        );
         assert_eq!(result.bundle_id.as_deref(), Some("bundle_send_no_target"));
         assert_eq!(result.bundle_type.as_deref(), Some("skill"));
         assert!(result.bundle_root.is_none());
@@ -6348,7 +6997,10 @@ mod tests {
         assert_eq!(results[0].request_id, "bridge-send-no-target");
         assert_eq!(results[0].status, "failed");
         assert_eq!(results[0].lifecycle_status.as_deref(), Some("failed"));
-        assert_eq!(results[0].reason.as_deref(), Some("target_device_required"));
+        assert_eq!(
+            results[0].reason.as_deref(),
+            Some("sensitive_bundle_requires_trusted_device")
+        );
         assert!(results[0].bundle_root.is_none());
 
         fs::remove_dir_all(dir).unwrap();
@@ -6642,6 +7294,12 @@ mod tests {
                 bundle_root: None,
                 target_device_id: None,
                 require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
+                import_receipt_path: Some("/tmp/private/receipt.json".to_string()),
+                rollback_file_count: 2,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
             });
@@ -6686,6 +7344,10 @@ mod tests {
             Some("bundle_1234567890")
         );
         assert!(response.action_results[0].bundle_root.is_none());
+        assert!(response.action_results[0].import_receipt_path.is_none());
+        assert!(response.action_results[0].has_import_receipt);
+        assert_eq!(response.action_results[0].rollback_file_count, 2);
+        assert!(response.action_results[0].can_request_rollback);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -6721,6 +7383,12 @@ mod tests {
                 bundle_root: None,
                 target_device_id: None,
                 require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
                 requested_at_ms: 1_500,
                 claimed_at_ms: 2_000,
             },
@@ -6738,6 +7406,12 @@ mod tests {
                 bundle_root: Some("/tmp/private/bundle".to_string()),
                 target_device_id: Some("device-a".to_string()),
                 require_trusted_device: Some(true),
+                conflict_strategy: None,
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
                 requested_at_ms: 1_600,
                 claimed_at_ms: 2_100,
             },
@@ -6755,8 +7429,37 @@ mod tests {
                 bundle_root: None,
                 target_device_id: None,
                 require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
                 requested_at_ms: 1_700,
                 claimed_at_ms: 2_200,
+            },
+            LocalBridgePendingActionResult {
+                request_id: "bridge-rollback-1".to_string(),
+                action_kind: "bundle.rollback".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "completed".to_string(),
+                lifecycle_status: Some("succeeded".to_string()),
+                reason: None,
+                message: "rollback completed".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: None,
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                conflict_strategy: None,
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 2,
+                requested_at_ms: 1_800,
+                claimed_at_ms: 2_300,
             },
         ]);
         let request = serde_json::json!({
@@ -6787,9 +7490,331 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.status, "ok");
-        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(response.action_results.len(), 2);
         assert_eq!(response.action_results[0].request_id, "bridge-import-1");
         assert!(response.action_results[0].bundle_root.is_none());
+        assert_eq!(response.action_results[1].request_id, "bridge-rollback-1");
+        assert_eq!(response.action_results[1].action_kind, "bundle.rollback");
+        assert_eq!(response.action_results[1].rolled_back_file_count, 2);
+
+        let exact_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-exact",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-rollback-1",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let exact_response = handle_local_bridge_request_with_runtime_at(
+            &exact_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(exact_response.status, "ok");
+        assert_eq!(exact_response.action_results.len(), 1);
+        assert_eq!(
+            exact_response.action_results[0].request_id,
+            "bridge-rollback-1"
+        );
+        assert_eq!(
+            exact_response.action_results[0].action_kind,
+            "bundle.rollback"
+        );
+        assert_eq!(exact_response.action_results[0].rolled_back_file_count, 2);
+
+        let send_without_scope_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-send-without-scope",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-1",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let send_without_scope_response = handle_local_bridge_request_with_runtime_at(
+            &send_without_scope_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(send_without_scope_response.status, "ok");
+        assert!(send_without_scope_response.action_results.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_action_results_returns_pending_queue_status_for_exact_lookup() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-results-pending-lookup");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.authorizations.lock().unwrap().extend([
+            local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ),
+            local_bridge_authorization(
+                "other-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ),
+            local_bridge_authorization(
+                "import-only-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ),
+        ]);
+        runtime.pending_actions.lock().unwrap().extend([
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-pending".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-a".to_string()),
+                bundle_root: "/tmp/private/bundle".to_string(),
+                bundle_type: BundleType::Skill,
+                require_trusted_device: true,
+                requested_at_ms: 1_500,
+            }),
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-import-only".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "import-only-app".to_string(),
+                    display_name: "Import Only App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-b".to_string()),
+                bundle_root: "/tmp/private/import-only-bundle".to_string(),
+                bundle_type: BundleType::Workspace,
+                require_trusted_device: true,
+                requested_at_ms: 1_600,
+            }),
+        ]);
+        let request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-pending",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-pending",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(response.action_results[0].request_id, "bridge-send-pending");
+        assert_eq!(response.action_results[0].action_kind, "bundle.send");
+        assert_eq!(response.action_results[0].status, "queued");
+        assert_eq!(
+            response.action_results[0].lifecycle_status.as_deref(),
+            Some("queued")
+        );
+        assert_eq!(
+            response.action_results[0].bundle_type.as_deref(),
+            Some("skill")
+        );
+        assert_eq!(
+            response.action_results[0].target_device_id.as_deref(),
+            Some("device-a")
+        );
+        assert!(response.action_results[0].bundle_root.is_none());
+
+        let other_client_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-other-client",
+                "client": {
+                    "client_id": "other-app",
+                    "display_name": "Other App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-pending",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let other_client_response = handle_local_bridge_request_with_runtime_at(
+            &other_client_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+        assert_eq!(other_client_response.status, "ok");
+        assert!(other_client_response.action_results.is_empty());
+
+        let wrong_scope_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-wrong-scope",
+                "client": {
+                    "client_id": "import-only-app",
+                    "display_name": "Import Only App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-import-only",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let wrong_scope_response = handle_local_bridge_request_with_runtime_at(
+            &wrong_scope_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+        assert_eq!(wrong_scope_response.status, "ok");
+        assert!(wrong_scope_response.action_results.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_action_results_returns_running_lifecycle_status_for_exact_lookup() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-results-running-lookup");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        runtime
+            .pending_action_results
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingActionResult {
+                request_id: "bridge-import-running".to_string(),
+                action_kind: "bundle.import".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "running".to_string(),
+                lifecycle_status: Some("running".to_string()),
+                reason: None,
+                message: "local bridge bundle import is running".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                conflict_strategy: Some("reject".to_string()),
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
+                requested_at_ms: 1_500,
+                claimed_at_ms: 2_000,
+            });
+        let request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-running",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-import-running",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(
+            response.action_results[0].request_id,
+            "bridge-import-running"
+        );
+        assert_eq!(response.action_results[0].status, "running");
+        assert_eq!(
+            response.action_results[0].lifecycle_status.as_deref(),
+            Some("running")
+        );
+        assert!(response.action_results[0].import_receipt_path.is_none());
+        assert!(!response.action_results[0].has_import_receipt);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -7940,6 +8965,15 @@ mod tests {
         directory_name: &str,
         bundle_id: &str,
     ) -> PathBuf {
+        create_desktop_test_bundle_with_type(dir, directory_name, bundle_id, BundleType::Skill)
+    }
+
+    fn create_desktop_test_bundle_with_type(
+        dir: &std::path::Path,
+        directory_name: &str,
+        bundle_id: &str,
+        bundle_type: BundleType,
+    ) -> PathBuf {
         let root = dir.join(directory_name);
         fs::create_dir_all(root.join("files")).unwrap();
         fs::write(
@@ -7950,6 +8984,7 @@ mod tests {
         fs::write(root.join("files").join("content.bin"), b"hello bundle").unwrap();
         let mut manifest = desktop_test_bundle_manifest();
         manifest.bundle_id = bundle_id.to_string();
+        manifest.bundle_type = bundle_type;
         write_json(root.join("bundle.json"), &manifest);
         write_json(
             root.join("checksums.json"),

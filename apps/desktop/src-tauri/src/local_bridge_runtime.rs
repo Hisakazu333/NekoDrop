@@ -563,6 +563,7 @@ mod tests {
                     },
                     staged_bundle_id: "bundle_1234567890".to_string(),
                     expected_bundle_type: Some(nekolink_protocol::BundleType::Skill),
+                    conflict_strategy: "reject".to_string(),
                     requested_at_ms: 1_500,
                 },
             ),

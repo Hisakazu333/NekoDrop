@@ -1689,6 +1689,15 @@ pub enum BundleType {
     ConfigSnapshot,
 }
 
+impl BundleType {
+    pub fn requires_authenticated_encrypted_session(self) -> bool {
+        matches!(
+            self,
+            Self::Skill | Self::Session | Self::Workspace | Self::AgentProfile
+        )
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BundleSender {
     pub device_id: String,
@@ -1933,6 +1942,8 @@ pub enum LocalBridgeRequest {
     BundleDetail(LocalBridgeBundleDetailRequest),
     #[serde(rename = "bundle.import")]
     ImportBundle(LocalBridgeImportBundleRequest),
+    #[serde(rename = "bundle.rollback")]
+    RollbackBundleImport(LocalBridgeRollbackBundleImportRequest),
     #[serde(rename = "authorization.request")]
     AuthorizationRequest(LocalBridgeAuthorizationRequest),
     #[serde(rename = "transfer.status")]
@@ -1980,6 +1991,15 @@ pub struct LocalBridgeImportBundleRequest {
     pub client: Option<LocalBridgeClientIdentity>,
     pub staged_bundle_id: String,
     pub expected_bundle_type: Option<BundleType>,
+    #[serde(default)]
+    pub conflict_strategy: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LocalBridgeRollbackBundleImportRequest {
+    pub request_id: String,
+    pub client: Option<LocalBridgeClientIdentity>,
+    pub bundle_id: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2006,6 +2026,8 @@ pub struct LocalBridgePollEventsRequest {
 pub struct LocalBridgeActionResultsRequest {
     pub request_id: String,
     pub client: Option<LocalBridgeClientIdentity>,
+    #[serde(default)]
+    pub action_request_id: Option<String>,
     pub after_claimed_at_ms: Option<u128>,
     pub limit: Option<usize>,
 }
@@ -2144,6 +2166,7 @@ impl LocalBridgeRequest {
             Self::SendBundle(request) => request.validate(),
             Self::BundleDetail(request) => request.validate(),
             Self::ImportBundle(request) => request.validate(),
+            Self::RollbackBundleImport(request) => request.validate(),
             Self::AuthorizationRequest(request) => request.validate(),
             Self::TransferStatus(request) => request.validate(),
             Self::PollEvents(request) => request.validate(),
@@ -2180,7 +2203,24 @@ impl LocalBridgeImportBundleRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
-        validate_staged_bundle_id(&self.staged_bundle_id)
+        validate_staged_bundle_id(&self.staged_bundle_id)?;
+        if let Some(strategy) = self.conflict_strategy.as_deref() {
+            if !matches!(strategy, "reject" | "rename" | "skip_conflicts") {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "bundle import conflict_strategy must be reject, rename, or skip_conflicts",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+impl LocalBridgeRollbackBundleImportRequest {
+    pub fn validate(&self) -> Result<(), ProtocolError> {
+        validate_non_empty("request_id", &self.request_id)?;
+        validate_optional_bridge_client(self.client.as_ref())?;
+        validate_staged_bundle_id(&self.bundle_id)
     }
 }
 
@@ -2221,6 +2261,7 @@ impl LocalBridgeActionResultsRequest {
     pub fn validate(&self) -> Result<(), ProtocolError> {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
+        validate_optional_non_empty("action_request_id", self.action_request_id.as_deref())?;
         if let Some(limit) = self.limit {
             if limit == 0 || limit > 100 {
                 return Err(ProtocolError::new(
@@ -4737,6 +4778,15 @@ mod tests {
     }
 
     #[test]
+    fn sensitive_bundle_types_require_authenticated_encrypted_session() {
+        assert!(BundleType::Skill.requires_authenticated_encrypted_session());
+        assert!(BundleType::Session.requires_authenticated_encrypted_session());
+        assert!(BundleType::Workspace.requires_authenticated_encrypted_session());
+        assert!(BundleType::AgentProfile.requires_authenticated_encrypted_session());
+        assert!(!BundleType::ConfigSnapshot.requires_authenticated_encrypted_session());
+    }
+
+    #[test]
     fn bundle_checksums_match_documented_path_map_json() {
         let checksums = valid_bundle_checksums();
 
@@ -5064,6 +5114,7 @@ mod tests {
                 display_name: "Local Agent App".to_string(),
                 app_kind: Some("agent".to_string()),
             }),
+            action_request_id: Some("bridge-send-1".to_string()),
             after_claimed_at_ms: Some(1_000),
             limit: Some(10),
         });
@@ -5073,6 +5124,7 @@ mod tests {
         let json = serde_json::to_value(&request).unwrap();
         assert_eq!(json["kind"], "actions.results");
         assert_eq!(json["payload"]["request_id"], "bridge-results-1");
+        assert_eq!(json["payload"]["action_request_id"], "bridge-send-1");
         assert_eq!(json["payload"]["after_claimed_at_ms"], 1_000);
         assert_eq!(json["payload"]["limit"], 10);
         assert_eq!(
