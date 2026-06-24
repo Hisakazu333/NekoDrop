@@ -6651,45 +6651,58 @@ mod tests {
     }
 
     #[test]
-    fn local_bridge_bundle_send_preflight_rejects_sensitive_bundle_without_trusted_session_target()
+    fn local_bridge_bundle_send_preflight_rejects_sensitive_bundles_without_trusted_session_target()
     {
         let dir = unique_bundle_temp_dir("local-bridge-send-preflight-sensitive-policy");
-        let bundle_root = create_desktop_test_bundle(&dir, "bundle", "bundle_preflight_sensitive");
-        let runtime = LocalBridgeRuntimeState::default();
-        runtime
-            .pending_actions
-            .lock()
-            .unwrap()
-            .push(LocalBridgePendingAction::SendBundle(
-                LocalBridgePendingSendBundleAction {
-                    request_id: "bridge-send-sensitive".to_string(),
-                    client: LocalBridgeClientIdentity {
-                        client_id: "local-agent-app".to_string(),
-                        display_name: "Local Agent App".to_string(),
-                        app_kind: Some("agent".to_string()),
-                    },
-                    target_device_id: Some("device-a".to_string()),
-                    bundle_root: bundle_root.display().to_string(),
-                    bundle_type: BundleType::Skill,
-                    require_trusted_device: false,
-                    requested_at_ms: 1_500,
-                },
-            ));
         let trusted = vec![trusted_record("device-a", "MacBook", "sha256:device-a")];
 
-        let result = preflight_next_local_bridge_bundle_send_at(&runtime, &trusted, 2_000).unwrap();
+        for bundle_type in [
+            BundleType::Skill,
+            BundleType::Session,
+            BundleType::Workspace,
+            BundleType::AgentProfile,
+        ] {
+            let label = bundle_type_label(bundle_type);
+            let bundle_id = format!("bundle_preflight_sensitive_{label}");
+            let bundle_root = create_desktop_test_bundle_with_type(
+                &dir,
+                format!("bundle_{label}").as_str(),
+                &bundle_id,
+                bundle_type,
+            );
+            let runtime = LocalBridgeRuntimeState::default();
+            runtime
+                .pending_actions
+                .lock()
+                .unwrap()
+                .push(LocalBridgePendingAction::SendBundle(
+                    LocalBridgePendingSendBundleAction {
+                        request_id: format!("bridge-send-sensitive-{label}"),
+                        client: LocalBridgeClientIdentity {
+                            client_id: "local-agent-app".to_string(),
+                            display_name: "Local Agent App".to_string(),
+                            app_kind: Some("agent".to_string()),
+                        },
+                        target_device_id: Some("device-a".to_string()),
+                        bundle_root: bundle_root.display().to_string(),
+                        bundle_type,
+                        require_trusted_device: false,
+                        requested_at_ms: 1_500,
+                    },
+                ));
 
-        assert_eq!(result.status, "failed_preflight");
-        assert_eq!(
-            result.reason.as_deref(),
-            Some("sensitive_bundle_requires_trusted_device")
-        );
-        assert_eq!(
-            result.bundle_id.as_deref(),
-            Some("bundle_preflight_sensitive")
-        );
-        assert_eq!(result.bundle_type.as_deref(), Some("skill"));
-        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+            let result =
+                preflight_next_local_bridge_bundle_send_at(&runtime, &trusted, 2_000).unwrap();
+
+            assert_eq!(result.status, "failed_preflight");
+            assert_eq!(
+                result.reason.as_deref(),
+                Some("sensitive_bundle_requires_trusted_device")
+            );
+            assert_eq!(result.bundle_id.as_deref(), Some(bundle_id.as_str()));
+            assert_eq!(result.bundle_type.as_deref(), Some(label));
+            assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        }
 
         fs::remove_dir_all(dir).unwrap();
     }

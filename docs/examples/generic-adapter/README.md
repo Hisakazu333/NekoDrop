@@ -113,19 +113,20 @@ node docs/examples/generic-adapter/generic-adapter.mjs workflow \
 输出步骤：
 
 ```text
-export -> authorize -> send -> observe_send -> send_results
+export -> authorize -> send -> observe_send -> send_action_state
 -> inspect_received_bundle -> import -> observe_import
--> inspect_after_import -> import_results -> rollback
--> observe_rollback -> rollback_results
+-> import_action_state -> query_import_receipt -> receipt_state
+-> rollback -> observe_rollback -> rollback_action_state
+-> query_after_rollback -> rollback_receipt_state
 ```
 
 这不是让一个脚本跨两台机器自动跑完。真实 adapter 应该按设备拆开：
 
 - 发送端：导出 bundle，申请授权，请求 `bundle.send`，观察发送结果。
-- 接收端：收到 staged bundle 后先 `bundle.detail`，再请求 `bundle.import`，观察导入结果。
-- 需要撤回时：用 `bundle.rollback` 撤回 NekoDrop 本机导入区里的文件。
+- 接收端：收到 staged bundle 后先 `bundle.detail`，再请求 `bundle.import`，观察导入结果，并用 `receipt-state` 判断 receipt 是否可撤回。
+- 需要撤回时：用 `bundle.rollback` 撤回 NekoDrop 本机导入区里的文件，再查 `actions.results` 和 `bundle.detail` 确认撤回状态。
 
-`skill`、`session`、`workspace`、`agent_profile` 都按敏感资料处理：发送端必须要求可信目标，接收端只有 authenticated encrypted session 收到的 bundle 才会进入暂存和导入流程。旧兼容路径收到的目录即使有 `bundle.json`，也只当普通文件保存。
+`skill`、`session`、`workspace`、`agent_profile` 都按敏感资料处理：发送端必须要求可信目标，接收端只有 authenticated encrypted session 收到的 bundle 才会进入暂存和导入流程。这个示例会直接拒绝给这些类型传 `--require-trusted-device false`。旧兼容路径收到的目录即使有 `bundle.json`，也只当普通文件保存。
 
 ## 发送
 
@@ -210,6 +211,23 @@ node docs/examples/generic-adapter/generic-adapter.mjs action-state \
 - `running`：worker 正在执行
 - `result`：动作已有终态结果
 - `missing`：当前 client 查不到这个动作，可能是 request id 不对、权限不够、动作属于别的 client，或结果已被清理
+
+导入后再用 `bundle.detail` 响应推导 receipt 状态：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs receipt-state \
+  --response bridge-detail-response.json \
+  --bundle-id bundle_workspace_demo
+```
+
+`receipt-state` 只读 bridge response 里的公开字段，不读取 NekoDrop 本机私有路径。常见状态：
+
+- `imported_can_rollback`
+- `imported_no_rollback`
+- `rolled_back`
+- `save_only`
+- `not_imported`
+- `missing`
 
 结果里的 `lifecycle_status` 可能是：
 

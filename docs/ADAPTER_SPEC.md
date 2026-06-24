@@ -93,7 +93,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。`actions.results` 里的 `request_id` 是查询请求本身；要查某次 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的结果，传那次动作的 `request_id` 到 `action_request_id`。不传 `action_request_id` 时，runtime 会按 `after_claimed_at_ms` 和 `limit` 返回最近结果。传 `action_request_id` 时，如果结果表还没有终态记录，但动作仍在同一 client 的待执行队列里，runtime 会返回脱敏的 `queued` 状态；如果 worker 已写入执行状态，则返回 `running` 或终态结果。结果按 `client_id` 和授权 scope 过滤；查不到、没有对应 scope，或结果属于其他 client 时，只返回空结果，不暴露对方状态。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 
-Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；非认证 encrypted session 也不会把 `skill`、`session`、`workspace`、`agent_profile` 进入 import staging。即使收到的目录里有 `bundle.json`，不满足策略时也只会作为普通文件保存。发送端 local bridge 对这些敏感类型会强制要求可信目标设备。
+Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；非认证 encrypted session 也不会把 `skill`、`session`、`workspace`、`agent_profile` 进入 import staging。即使收到的目录里有 `bundle.json`，不满足策略时也只会作为普通文件保存。发送端 local bridge 对这些敏感类型会强制要求可信目标设备；adapter 自己也应该拒绝给这些类型关闭 `require_trusted_device`，不要把安全策略只交给 NekoDrop 兜底。
 
 ## 类型建议
 

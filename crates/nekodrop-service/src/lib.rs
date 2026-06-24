@@ -1815,6 +1815,42 @@ mod tests {
     }
 
     #[test]
+    fn bundle_staging_policy_requires_authenticated_session_for_sensitive_types() {
+        for bundle_type in [
+            BundleType::Skill,
+            BundleType::Session,
+            BundleType::Workspace,
+            BundleType::AgentProfile,
+        ] {
+            assert!(!can_stage_received_bundle_for_import(
+                bundle_type,
+                TransferSecurityMode::LegacyPlain
+            ));
+            assert!(!can_stage_received_bundle_for_import(
+                bundle_type,
+                TransferSecurityMode::EncryptedSession
+            ));
+            assert!(can_stage_received_bundle_for_import(
+                bundle_type,
+                TransferSecurityMode::AuthenticatedEncryptedSession
+            ));
+        }
+
+        assert!(!can_stage_received_bundle_for_import(
+            BundleType::ConfigSnapshot,
+            TransferSecurityMode::LegacyPlain
+        ));
+        assert!(can_stage_received_bundle_for_import(
+            BundleType::ConfigSnapshot,
+            TransferSecurityMode::EncryptedSession
+        ));
+        assert!(can_stage_received_bundle_for_import(
+            BundleType::ConfigSnapshot,
+            TransferSecurityMode::AuthenticatedEncryptedSession
+        ));
+    }
+
+    #[test]
     fn encrypted_session_transfer_sends_control_and_file_payload_through_session() {
         let dir = unique_temp_dir("service-encrypted-session-loopback");
         let source_root = dir.join("source").join("drop");
