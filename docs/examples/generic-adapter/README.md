@@ -180,6 +180,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs post send \
       "display_name": "Generic Adapter",
       "app_kind": "agent"
     },
+    "action_request_id": "adapter-import-001",
     "after_claimed_at_ms": null,
     "limit": 20
   }
@@ -189,8 +190,11 @@ node docs/examples/generic-adapter/generic-adapter.mjs post send \
 脚本生成：
 
 ```bash
-node docs/examples/generic-adapter/generic-adapter.mjs request results
+node docs/examples/generic-adapter/generic-adapter.mjs request results \
+  --action-request-id adapter-import-001
 ```
+
+`request_id` 是这次查询请求本身的 id。`action_request_id` 是之前 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的请求 id，用来精确查询某个动作结果。不传 `action_request_id` 时，NekoDrop 按 `after_claimed_at_ms` 和 `limit` 返回一组最近结果。
 
 结果里的 `lifecycle_status` 可能是：
 
@@ -285,9 +289,9 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
 
 - `action.updated` 里的 `request_id` 是最稳定的关联键。
 - `queued` / `running` 只表示 NekoDrop 已接手动作，不代表业务完成。
-- `succeeded` 后再读 `actions.results`，拿 `has_import_receipt`、`can_request_rollback`、`rollback_file_count`、`rolled_back_file_count`。
+- `succeeded` 后再用 `actions.results.action_request_id` 查这次动作结果，拿 `has_import_receipt`、`can_request_rollback`、`rollback_file_count`、`rolled_back_file_count`。
 - `conflict` 时先读 `bundle.detail`，让用户选 `rename` 或 `skip_conflicts`，不要自动覆盖。
-- cursor 丢失时从 `after_event_id=null` 重新拉快照，再用本机保存的 request_id 去对齐结果。
+- cursor 丢失时从 `after_event_id=null` 重新拉快照，再用本机保存的 request_id 作为 `action_request_id` 对齐结果。
 
 这只是本机短等待，不是公网长连接。
 

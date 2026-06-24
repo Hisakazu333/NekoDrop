@@ -3160,6 +3160,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 request.client.as_ref(),
                 authorizations,
                 action_results,
+                request.action_request_id.as_deref(),
                 request.after_claimed_at_ms,
                 request.limit.unwrap_or(50),
                 now_ms,
@@ -3340,6 +3341,7 @@ fn local_bridge_action_results_for_client(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],
     results: &[LocalBridgePendingActionResult],
+    action_request_id: Option<&str>,
     after_claimed_at_ms: Option<u128>,
     limit: usize,
     now_ms: u128,
@@ -3367,6 +3369,7 @@ fn local_bridge_action_results_for_client(
     let output = results
         .iter()
         .filter(|result| result.client_id == client.client_id)
+        .filter(|result| action_request_id.is_none_or(|request_id| result.request_id == request_id))
         .filter(|result| after_claimed_at_ms.is_none_or(|after| result.claimed_at_ms > after))
         .filter(|result| match result.action_kind.as_str() {
             "bundle.send" => can_read_send_results,
@@ -7385,6 +7388,75 @@ mod tests {
         assert_eq!(response.action_results[1].request_id, "bridge-rollback-1");
         assert_eq!(response.action_results[1].action_kind, "bundle.rollback");
         assert_eq!(response.action_results[1].rolled_back_file_count, 2);
+
+        let exact_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-exact",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-rollback-1",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let exact_response = handle_local_bridge_request_with_runtime_at(
+            &exact_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(exact_response.status, "ok");
+        assert_eq!(exact_response.action_results.len(), 1);
+        assert_eq!(
+            exact_response.action_results[0].request_id,
+            "bridge-rollback-1"
+        );
+        assert_eq!(
+            exact_response.action_results[0].action_kind,
+            "bundle.rollback"
+        );
+        assert_eq!(exact_response.action_results[0].rolled_back_file_count, 2);
+
+        let send_without_scope_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-send-without-scope",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-1",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let send_without_scope_response = handle_local_bridge_request_with_runtime_at(
+            &send_without_scope_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(send_without_scope_response.status, "ok");
+        assert!(send_without_scope_response.action_results.is_empty());
 
         fs::remove_dir_all(dir).unwrap();
     }

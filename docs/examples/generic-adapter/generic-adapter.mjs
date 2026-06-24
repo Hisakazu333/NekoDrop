@@ -233,6 +233,7 @@ function buildRequest(kind, flags) {
       payload: {
         request_id: flags["request-id"] ?? `adapter-results-${Date.now()}`,
         client: CLIENT,
+        action_request_id: flags["action-request-id"] ?? null,
         after_claimed_at_ms: flags["after-claimed-at-ms"] === undefined || flags["after-claimed-at-ms"] === null
           ? null
           : Number(flags["after-claimed-at-ms"]),
@@ -246,6 +247,9 @@ function buildRequest(kind, flags) {
 function buildWorkflow(flags) {
   const mode = flags.mode ?? "send";
   const steps = [];
+  const sendRequestId = flags["send-request-id"] ?? "adapter-send-001";
+  const importRequestId = flags["import-request-id"] ?? "adapter-import-001";
+  const rollbackRequestId = flags["rollback-request-id"] ?? "adapter-rollback-001";
   if (mode === "full-loop") {
     const bundleRoot = flags["bundle-root"] ?? join(requireFlag(flags, "output"), requireFlag(flags, "bundle-id"));
     return {
@@ -267,6 +271,7 @@ function buildWorkflow(flags) {
         {
           step: "send",
           request: buildRequest("send", {
+            "request-id": sendRequestId,
             "bundle-root": bundleRoot,
             "target-device-id": requireFlag(flags, "target-device-id"),
             type: requireKnownType(requireFlag(flags, "type")),
@@ -284,6 +289,7 @@ function buildWorkflow(flags) {
         {
           step: "send_results",
           request: buildRequest("results", {
+            "action-request-id": sendRequestId,
             "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
             limit: flags.limit ?? 20
           })
@@ -297,6 +303,7 @@ function buildWorkflow(flags) {
         {
           step: "import",
           request: buildRequest("import", {
+            "request-id": importRequestId,
             "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
             type: requireKnownType(requireFlag(flags, "type")),
             "conflict-strategy": flags["conflict-strategy"] ?? "reject"
@@ -319,6 +326,7 @@ function buildWorkflow(flags) {
         {
           step: "import_results",
           request: buildRequest("results", {
+            "action-request-id": importRequestId,
             "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
             limit: flags.limit ?? 20
           })
@@ -326,6 +334,7 @@ function buildWorkflow(flags) {
         {
           step: "rollback",
           request: buildRequest("rollback", {
+            "request-id": rollbackRequestId,
             "bundle-id": requireFlag(flags, "staged-bundle-id")
           })
         },
@@ -340,6 +349,7 @@ function buildWorkflow(flags) {
         {
           step: "rollback_results",
           request: buildRequest("results", {
+            "action-request-id": rollbackRequestId,
             "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
             limit: flags.limit ?? 20
           })
@@ -364,6 +374,7 @@ function buildWorkflow(flags) {
     steps.push({
       step: "send",
       request: buildRequest("send", {
+        "request-id": sendRequestId,
         "bundle-root": requireFlag(flags, "bundle-root"),
         "target-device-id": requireFlag(flags, "target-device-id"),
         type: requireKnownType(requireFlag(flags, "type")),
@@ -389,6 +400,7 @@ function buildWorkflow(flags) {
     steps.push({
       step: "import",
       request: buildRequest("import", {
+        "request-id": importRequestId,
         "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
         type: requireKnownType(requireFlag(flags, "type")),
         "conflict-strategy": flags["conflict-strategy"] ?? "reject"
@@ -411,13 +423,23 @@ function buildWorkflow(flags) {
     steps.push({
       step: "rollback",
       request: buildRequest("rollback", {
+        "request-id": rollbackRequestId,
         "bundle-id": requireFlag(flags, "bundle-id")
       })
     });
   }
+  const resultActionRequestId =
+    mode === "rollback"
+      ? rollbackRequestId
+      : mode === "import" || mode === "roundtrip"
+        ? importRequestId
+        : mode === "send"
+          ? sendRequestId
+          : null;
   steps.push({
     step: "results",
     request: buildRequest("results", {
+      "action-request-id": resultActionRequestId,
       "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
       limit: flags.limit ?? 20
     })
@@ -614,7 +636,7 @@ function usage() {
   node generic-adapter.mjs request import --staged-bundle-id ID --type session --conflict-strategy reject
   node generic-adapter.mjs request rollback --bundle-id ID
   node generic-adapter.mjs request events --timeout-ms 15000
-  node generic-adapter.mjs request results
+  node generic-adapter.mjs request results --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
