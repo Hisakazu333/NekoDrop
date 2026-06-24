@@ -27,6 +27,7 @@ const TYPE_CONFIG = {
   agent_profile: { scope: "agent_profile.import", target: "adapter.agent_profile" },
   config_snapshot: { scope: "config.import", target: "adapter.config" }
 };
+const SENSITIVE_BUNDLE_TYPES = new Set(["skill", "session", "workspace", "agent_profile"]);
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -59,6 +60,10 @@ async function main() {
   }
   if (command === "action-state") {
     printJson(actionStateFromResultsResponse(parseFlags(args)));
+    return;
+  }
+  if (command === "receipt-state") {
+    printJson(receiptStateFromDetailResponse(parseFlags(args)));
     return;
   }
   usage();
@@ -175,6 +180,7 @@ function buildRequest(kind, flags) {
     };
   }
   if (kind === "send") {
+    const bundleType = requireKnownType(requireFlag(flags, "type"));
     return {
       kind: "bundle.send",
       payload: {
@@ -182,8 +188,8 @@ function buildRequest(kind, flags) {
         client: CLIENT,
         target_device_id: requireFlag(flags, "target-device-id"),
         bundle_root: requireFlag(flags, "bundle-root"),
-        bundle_type: requireKnownType(requireFlag(flags, "type")),
-        require_trusted_device: flags["require-trusted-device"] !== "false"
+        bundle_type: bundleType,
+        require_trusted_device: requireTrustedDeviceForType(bundleType, flags["require-trusted-device"])
       }
     };
   }
@@ -291,7 +297,7 @@ function buildWorkflow(flags) {
           })
         },
         {
-          step: "send_results",
+          step: "send_action_state",
           request: buildRequest("results", {
             "action-request-id": sendRequestId,
             "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
@@ -322,18 +328,22 @@ function buildWorkflow(flags) {
           })
         },
         {
-          step: "inspect_after_import",
-          request: buildRequest("detail", {
-            "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
-          })
-        },
-        {
-          step: "import_results",
+          step: "import_action_state",
           request: buildRequest("results", {
             "action-request-id": importRequestId,
             "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
             limit: flags.limit ?? 20
           })
+        },
+        {
+          step: "query_import_receipt",
+          request: buildRequest("detail", {
+            "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
+          })
+        },
+        {
+          step: "receipt_state",
+          command: buildReceiptStateCommand(flags)
         },
         {
           step: "rollback",
@@ -351,19 +361,31 @@ function buildWorkflow(flags) {
           })
         },
         {
-          step: "rollback_results",
+          step: "rollback_action_state",
           request: buildRequest("results", {
             "action-request-id": rollbackRequestId,
             "after-claimed-at-ms": flags["after-claimed-at-ms"] ?? null,
             limit: flags.limit ?? 20
           })
+        },
+        {
+          step: "query_after_rollback",
+          request: buildRequest("detail", {
+            "staged-bundle-id": requireFlag(flags, "staged-bundle-id")
+          })
+        },
+        {
+          step: "rollback_receipt_state",
+          command: buildReceiptStateCommand(flags)
         }
       ],
       notes: [
         "Run export on the sending device.",
         "POST bridge requests on the device that owns that phase.",
         "After each action request, observe action.updated events, then query actions.results with the same action_request_id.",
+        "After import or rollback, query bundle.detail and derive receipt state from has_import_receipt, can_request_rollback, rollback_file_count, rolled_back_file_count, and rollback_blocking_reason.",
         "Treat queued as pending, running as in-progress, and succeeded / failed / conflict / cancelled as final results.",
+        "Sensitive bundle types require trusted authenticated targets; this sample refuses --require-trusted-device false for skill, session, workspace, and agent_profile.",
         "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
         "Rollback only removes files imported into NekoDrop's local import area."
       ]
@@ -486,6 +508,18 @@ function buildExportCommand(flags) {
   return command;
 }
 
+function buildReceiptStateCommand(flags) {
+  return [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "receipt-state",
+    "--response",
+    flags["detail-response"] ?? "bridge-detail-response.json",
+    "--bundle-id",
+    requireFlag(flags, "staged-bundle-id")
+  ];
+}
+
 async function postRequest(kind, flags) {
   const port = requireFlag(flags, "port");
   const url = `http://127.0.0.1:${port}/nekolink/local-bridge/v1`;
@@ -566,6 +600,66 @@ function actionStateFromResultsResponse(flags) {
     can_request_rollback: Boolean(result.can_request_rollback),
     rollback_blocking_reason: result.rollback_blocking_reason ?? null
   };
+}
+
+function receiptStateFromDetailResponse(flags) {
+  const responsePath = requireFlag(flags, "response");
+  const bundleId = requireFlag(flags, "bundle-id");
+  const response = JSON.parse(readFileSync(responsePath, "utf8"));
+  const bundle = Array.isArray(response.staged_bundles)
+    ? response.staged_bundles.find((item) => item.bundle_id === bundleId)
+    : null;
+  if (!bundle) {
+    return {
+      bundle_id: bundleId,
+      state: "missing",
+      can_request_rollback: false
+    };
+  }
+  const receipt = {
+    bundle_id: bundle.bundle_id,
+    bundle_type: bundle.bundle_type,
+    display_name: bundle.display_name,
+    staging_status: bundle.staging_status,
+    has_import_receipt: Boolean(bundle.has_import_receipt),
+    imported_with_strategy: bundle.imported_with_strategy ?? null,
+    import_skipped_file_count: Number(bundle.import_skipped_file_count ?? 0),
+    rollback_file_count: Number(bundle.rollback_file_count ?? 0),
+    can_request_rollback: Boolean(bundle.can_request_rollback),
+    can_rollback_now: Boolean(bundle.can_rollback_now),
+    rollback_blocking_reason: bundle.rollback_blocking_reason ?? null,
+    rolled_back_file_count: Number(bundle.rolled_back_file_count ?? 0)
+  };
+  if (receipt.rolled_back_file_count > 0 || receipt.staging_status === "rolled_back") {
+    return {
+      ...receipt,
+      state: "rolled_back"
+    };
+  }
+  if (receipt.has_import_receipt) {
+    return {
+      ...receipt,
+      state: receipt.can_request_rollback ? "imported_can_rollback" : "imported_no_rollback"
+    };
+  }
+  if (bundle.import_allowed === false) {
+    return {
+      ...receipt,
+      state: "save_only",
+      import_blocking_reason: bundle.import_blocking_reason ?? null
+    };
+  }
+  return {
+    ...receipt,
+    state: "not_imported"
+  };
+}
+
+function requireTrustedDeviceForType(bundleType, flag) {
+  if (SENSITIVE_BUNDLE_TYPES.has(bundleType) && flag === "false") {
+    throw new Error(`${bundleType} bundles require --require-trusted-device true`);
+  }
+  return flag !== "false";
 }
 
 function listFiles(root) {
@@ -696,5 +790,6 @@ function usage() {
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs action-state --response bridge-results-response.json --action-request-id ACTION_REQUEST_ID
+  node generic-adapter.mjs receipt-state --response bridge-detail-response.json --bundle-id ID
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }
