@@ -194,7 +194,22 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results \
   --action-request-id adapter-import-001
 ```
 
-`request_id` 是这次查询请求本身的 id。`action_request_id` 是之前 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的请求 id，用来精确查询某个动作结果。不传 `action_request_id` 时，NekoDrop 按 `after_claimed_at_ms` 和 `limit` 返回一组最近结果。
+`request_id` 是这次查询请求本身的 id。`action_request_id` 是之前 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的请求 id，用来精确查询某个动作结果。不传 `action_request_id` 时，NekoDrop 按 `after_claimed_at_ms` 和 `limit` 返回一组最近结果。精确查询时，如果还没有终态结果，但动作仍在同一个 client 的待执行队列里，响应会返回脱敏的 `queued`；如果 worker 已经写入执行状态，则返回 `running` 或终态结果。
+
+也可以让示例脚本把精确查询响应归类：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs action-state \
+  --response bridge-results-response.json \
+  --action-request-id adapter-import-001
+```
+
+返回的 `state` 只有四类：
+
+- `pending`：`lifecycle_status=queued`，NekoDrop 已接手，还没开始执行
+- `running`：worker 正在执行
+- `result`：动作已有终态结果
+- `missing`：当前 client 查不到这个动作，可能是 request id 不对、权限不够、动作属于别的 client，或结果已被清理
 
 结果里的 `lifecycle_status` 可能是：
 

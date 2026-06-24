@@ -314,6 +314,73 @@ test("generic adapter sample derives the next event cursor", () => {
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample derives action state from precise result lookups", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-action-state-"));
+  const responsePath = join(tempRoot, "results-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    action_results: [
+      {
+        request_id: "adapter-send-001",
+        action_kind: "bundle.send",
+        status: "queued",
+        lifecycle_status: "queued",
+        message: "local bridge action is queued for the desktop runtime"
+      },
+      {
+        request_id: "adapter-import-001",
+        action_kind: "bundle.import",
+        status: "running",
+        lifecycle_status: "running",
+        message: "local bridge bundle import is running"
+      },
+      {
+        request_id: "adapter-rollback-001",
+        action_kind: "bundle.rollback",
+        status: "completed",
+        lifecycle_status: "succeeded",
+        reason: null,
+        message: "rollback completed",
+        bundle_id: "bundle_received_1",
+        can_request_rollback: false
+      }
+    ]
+  }));
+
+  const pending = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-send-001"],
+    { encoding: "utf8" }
+  ));
+  const running = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-import-001"],
+    { encoding: "utf8" }
+  ));
+  const result = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-rollback-001"],
+    { encoding: "utf8" }
+  ));
+  const missing = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-missing-001"],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(pending.state, "pending");
+  assert.equal(pending.final, false);
+  assert.equal(running.state, "running");
+  assert.equal(running.final, false);
+  assert.equal(result.state, "result");
+  assert.equal(result.final, true);
+  assert.equal(result.lifecycle_status, "succeeded");
+  assert.equal(result.bundle_id, "bundle_received_1");
+  assert.equal(missing.state, "missing");
+  assert.equal(missing.final, false);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample resets missing event cursors", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-cursor-missing-"));
   const responsePath = join(tempRoot, "events-response.json");

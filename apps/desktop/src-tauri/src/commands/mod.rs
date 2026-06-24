@@ -2036,6 +2036,11 @@ fn handle_local_bridge_request_with_runtime_at(
         .lock()
         .map_err(|error| error.to_string())?
         .clone();
+    let pending_actions = runtime
+        .pending_actions
+        .lock()
+        .map_err(|error| error.to_string())?
+        .clone();
 
     if let LocalBridgeRequest::SendBundle(request) = &request {
         if local_bridge_client_has_scope(
@@ -2111,6 +2116,7 @@ fn handle_local_bridge_request_with_runtime_at(
         import_root,
         &authorizations,
         &events,
+        &pending_actions,
         &action_results,
         now_ms,
     )?;
@@ -3044,6 +3050,7 @@ fn handle_local_bridge_request_with_auth_at(
         authorizations,
         &[],
         &[],
+        &[],
         now_ms,
     )
 }
@@ -3056,6 +3063,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
     import_root: &std::path::Path,
     authorizations: &[LocalBridgeAuthorizationRecord],
     events: &[LocalBridgeEvent],
+    pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
     now_ms: u128,
 ) -> Result<LocalBridgeResponseDto, String> {
@@ -3159,6 +3167,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
             let action_results = local_bridge_action_results_for_client(
                 request.client.as_ref(),
                 authorizations,
+                pending_actions,
                 action_results,
                 request.action_request_id.as_deref(),
                 request.after_claimed_at_ms,
@@ -3340,6 +3349,7 @@ fn local_bridge_transfer_phase_from_status(
 fn local_bridge_action_results_for_client(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],
+    pending_actions: &[LocalBridgePendingAction],
     results: &[LocalBridgePendingActionResult],
     action_request_id: Option<&str>,
     after_claimed_at_ms: Option<u128>,
@@ -3378,8 +3388,92 @@ fn local_bridge_action_results_for_client(
         })
         .take(limit)
         .map(|result| local_bridge_pending_action_result_to_dto(result, false))
-        .collect();
+        .collect::<Vec<_>>();
+    if !output.is_empty() {
+        return Ok(Some(output));
+    }
+    let Some(request_id) = action_request_id else {
+        return Ok(Some(output));
+    };
+    let Some(pending_action) = pending_actions.iter().find(|action| {
+        local_bridge_pending_action_request_id(action) == request_id
+            && local_bridge_pending_action_client_id(action) == client.client_id
+    }) else {
+        return Ok(Some(output));
+    };
+    if !local_bridge_client_can_read_pending_action(
+        pending_action,
+        can_read_send_results,
+        can_read_import_results,
+    ) {
+        return Ok(Some(output));
+    }
+
+    let queued_result = local_bridge_action_lifecycle_result(
+        pending_action,
+        LocalBridgeActionLifecycleStatus::Queued,
+        None,
+        "local bridge action is queued for the desktop runtime",
+        None,
+        local_bridge_pending_action_bundle_type(pending_action),
+        local_bridge_pending_action_target_device_id(pending_action),
+        local_bridge_pending_action_requested_at_ms(pending_action),
+    );
+    if after_claimed_at_ms.is_some_and(|after| queued_result.claimed_at_ms <= after) {
+        return Ok(Some(output));
+    }
+
+    let output = vec![local_bridge_pending_action_result_to_dto(
+        &queued_result,
+        false,
+    )];
     Ok(Some(output))
+}
+
+fn local_bridge_pending_action_client_id(action: &LocalBridgePendingAction) -> &str {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => &action.client.client_id,
+        LocalBridgePendingAction::ImportBundle(action) => &action.client.client_id,
+        LocalBridgePendingAction::RollbackBundleImport(action) => &action.client.client_id,
+    }
+}
+
+fn local_bridge_pending_action_requested_at_ms(action: &LocalBridgePendingAction) -> u128 {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => action.requested_at_ms,
+        LocalBridgePendingAction::ImportBundle(action) => action.requested_at_ms,
+        LocalBridgePendingAction::RollbackBundleImport(action) => action.requested_at_ms,
+    }
+}
+
+fn local_bridge_pending_action_bundle_type(
+    action: &LocalBridgePendingAction,
+) -> Option<BundleType> {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
+        LocalBridgePendingAction::ImportBundle(action) => action.expected_bundle_type,
+        LocalBridgePendingAction::RollbackBundleImport(_) => None,
+    }
+}
+
+fn local_bridge_pending_action_target_device_id(action: &LocalBridgePendingAction) -> Option<&str> {
+    match action {
+        LocalBridgePendingAction::SendBundle(action) => action.target_device_id.as_deref(),
+        LocalBridgePendingAction::ImportBundle(_) => None,
+        LocalBridgePendingAction::RollbackBundleImport(_) => None,
+    }
+}
+
+fn local_bridge_client_can_read_pending_action(
+    action: &LocalBridgePendingAction,
+    can_read_send_results: bool,
+    can_read_import_results: bool,
+) -> bool {
+    match action {
+        LocalBridgePendingAction::SendBundle(_) => can_read_send_results,
+        LocalBridgePendingAction::ImportBundle(_)
+        | LocalBridgePendingAction::RollbackBundleImport(_) => can_read_import_results,
+    }
 }
 
 fn confirm_local_bridge_runtime_authorization_at(
@@ -3667,6 +3761,7 @@ fn wait_for_local_bridge_events(
         import_root,
         authorizations,
         &events,
+        &[],
         &action_results,
         now_ms,
     )
@@ -7457,6 +7552,256 @@ mod tests {
 
         assert_eq!(send_without_scope_response.status, "ok");
         assert!(send_without_scope_response.action_results.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_action_results_returns_pending_queue_status_for_exact_lookup() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-results-pending-lookup");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.authorizations.lock().unwrap().extend([
+            local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ),
+            local_bridge_authorization(
+                "other-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ),
+            local_bridge_authorization(
+                "import-only-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ),
+        ]);
+        runtime.pending_actions.lock().unwrap().extend([
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-pending".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-a".to_string()),
+                bundle_root: "/tmp/private/bundle".to_string(),
+                bundle_type: BundleType::Skill,
+                require_trusted_device: true,
+                requested_at_ms: 1_500,
+            }),
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-import-only".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "import-only-app".to_string(),
+                    display_name: "Import Only App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-b".to_string()),
+                bundle_root: "/tmp/private/import-only-bundle".to_string(),
+                bundle_type: BundleType::Workspace,
+                require_trusted_device: true,
+                requested_at_ms: 1_600,
+            }),
+        ]);
+        let request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-pending",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-pending",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(response.action_results[0].request_id, "bridge-send-pending");
+        assert_eq!(response.action_results[0].action_kind, "bundle.send");
+        assert_eq!(response.action_results[0].status, "queued");
+        assert_eq!(
+            response.action_results[0].lifecycle_status.as_deref(),
+            Some("queued")
+        );
+        assert_eq!(
+            response.action_results[0].bundle_type.as_deref(),
+            Some("skill")
+        );
+        assert_eq!(
+            response.action_results[0].target_device_id.as_deref(),
+            Some("device-a")
+        );
+        assert!(response.action_results[0].bundle_root.is_none());
+
+        let other_client_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-other-client",
+                "client": {
+                    "client_id": "other-app",
+                    "display_name": "Other App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-pending",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let other_client_response = handle_local_bridge_request_with_runtime_at(
+            &other_client_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+        assert_eq!(other_client_response.status, "ok");
+        assert!(other_client_response.action_results.is_empty());
+
+        let wrong_scope_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-wrong-scope",
+                "client": {
+                    "client_id": "import-only-app",
+                    "display_name": "Import Only App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-send-import-only",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let wrong_scope_response = handle_local_bridge_request_with_runtime_at(
+            &wrong_scope_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+        assert_eq!(wrong_scope_response.status, "ok");
+        assert!(wrong_scope_response.action_results.is_empty());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_action_results_returns_running_lifecycle_status_for_exact_lookup() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-results-running-lookup");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        runtime
+            .pending_action_results
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingActionResult {
+                request_id: "bridge-import-running".to_string(),
+                action_kind: "bundle.import".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                status: "running".to_string(),
+                lifecycle_status: Some("running".to_string()),
+                reason: None,
+                message: "local bridge bundle import is running".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                conflict_strategy: Some("reject".to_string()),
+                skipped_file_count: 0,
+                import_receipt_path: None,
+                rollback_file_count: 0,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
+                requested_at_ms: 1_500,
+                claimed_at_ms: 2_000,
+            });
+        let request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-running",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-import-running",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(
+            response.action_results[0].request_id,
+            "bridge-import-running"
+        );
+        assert_eq!(response.action_results[0].status, "running");
+        assert_eq!(
+            response.action_results[0].lifecycle_status.as_deref(),
+            Some("running")
+        );
+        assert!(response.action_results[0].import_receipt_path.is_none());
+        assert!(!response.action_results[0].has_import_receipt);
 
         fs::remove_dir_all(dir).unwrap();
     }
