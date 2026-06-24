@@ -57,6 +57,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs export \
     },
     "requested_scopes": [
       "device.read",
+      "bundle.read",
       "bundle.send",
       "bundle.import.request",
       "transfer.status.read"
@@ -73,7 +74,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs export \
 node docs/examples/generic-adapter/generic-adapter.mjs request auth
 ```
 
-NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。
+NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。授权绑定 `client_id`、`app_kind`、scope 和过期时间；adapter 后续请求必须保持同一个 client identity，不能换 `app_kind` 复用授权。
 
 如果只想看完整接入顺序，可以让脚本生成一组通用请求：
 
@@ -123,7 +124,7 @@ export -> authorize -> send -> observe_send -> send_action_state
 这不是让一个脚本跨两台机器自动跑完。真实 adapter 应该按设备拆开：
 
 - 发送端：导出 bundle，申请授权，请求 `bundle.send`，观察发送结果。
-- 接收端：收到 staged bundle 后先 `bundle.detail`，再请求 `bundle.import`，观察导入结果，并用 `receipt-state` 判断 receipt 是否可撤回。
+- 接收端：收到 staged bundle 后先用 `bundle.read` 授权调用 `bundle.detail`，再请求 `bundle.import`，观察导入结果，并用 `receipt-state` 判断 receipt 是否可撤回。
 - 需要撤回时：用 `bundle.rollback` 撤回 NekoDrop 本机导入区里的文件，再查 `actions.results` 和 `bundle.detail` 确认撤回状态。
 
 `skill`、`session`、`workspace`、`agent_profile` 都按敏感资料处理：发送端必须要求可信目标，接收端只有 authenticated encrypted session 收到的 bundle 才会进入暂存和导入流程。这个示例会直接拒绝给这些类型传 `--require-trusted-device false`。旧兼容路径收到的目录即使有 `bundle.json`，也只当普通文件保存。
@@ -338,6 +339,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
 node docs/examples/generic-adapter/generic-adapter.mjs request detail \
   --staged-bundle-id bundle_1234567890
 ```
+
+`bundle.detail` 需要 `bundle.read` 授权。它只返回 staged bundle、receipt 和 rollback 的公开状态，不返回 NekoDrop 本机私有路径。
 
 ```json
 {

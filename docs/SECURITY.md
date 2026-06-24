@@ -211,14 +211,15 @@ Current desktop behavior:
 - binds only to `127.0.0.1`
 - accepts only `POST /bridge/request`
 - rejects oversized request bodies
-- allows read-only requests for devices, staged bundle details, and transfer status
+- allows scoped read requests for devices, staged bundle details, and transfer status; `bundle.detail` requires `bundle.read`
 - lets local apps request scopes with a short authorization code
-- persists confirmed authorizations locally and restores only unexpired records on restart
+- persists confirmed authorizations locally, restores only unexpired records on restart, and tracks last-used time in the running authorization list
+- matches authorization by `client_id`, `app_kind`, requested scope, and expiration
 - lets the user list, revoke, and prune local bridge authorizations from Settings
 - keeps `bundle.send` and `bundle.import` behind authorization; authorized requests enter an in-memory pending-action queue that Settings can inspect and remove
 - executes `bundle.import` only into the NekoDrop local import directory; it does not write third-party app directories
 - keeps `bundle.send` behind authorization and trusted-target checks; desktop execution still goes through the existing send path, and result records do not expose local paths
-- lets authorized clients query their own action results without exposing local import paths
+- lets authorized clients query their own action results without exposing local import paths; action result lookup is bound to the same `client_id` and `app_kind`
 
 Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.
 

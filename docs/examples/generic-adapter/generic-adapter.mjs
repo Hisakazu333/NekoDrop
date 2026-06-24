@@ -173,7 +173,7 @@ function buildRequest(kind, flags) {
         client: CLIENT,
         requested_scopes: toArray(flags.scope).length > 0
           ? toArray(flags.scope)
-          : ["device.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
+          : ["device.read", "bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
         reason: flags.reason ?? "Send and import user-selected bundles",
         ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
       }

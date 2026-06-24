@@ -25,6 +25,7 @@ pub(super) fn local_bridge_bundle_import_result(
         action_kind: "bundle.import".to_string(),
         client_id: action.client.client_id.clone(),
         client_display_name: action.client.display_name.clone(),
+        client_app_kind: action.client.app_kind.clone(),
         status: status.to_string(),
         lifecycle_status: Some(
             local_bridge_lifecycle_status_from_result(status, reason).to_string(),
@@ -61,6 +62,7 @@ pub(super) fn local_bridge_bundle_rollback_result(
         action_kind: "bundle.rollback".to_string(),
         client_id: action.client.client_id.clone(),
         client_display_name: action.client.display_name.clone(),
+        client_app_kind: action.client.app_kind.clone(),
         status: status.to_string(),
         lifecycle_status: Some(
             local_bridge_lifecycle_status_from_result(status, reason).to_string(),
@@ -117,6 +119,7 @@ pub(super) fn local_bridge_bundle_send_result(
         action_kind: "bundle.send".to_string(),
         client_id: action.client.client_id.clone(),
         client_display_name: action.client.display_name.clone(),
+        client_app_kind: action.client.app_kind.clone(),
         status: status.to_string(),
         lifecycle_status: Some(
             local_bridge_lifecycle_status_from_result(status, reason).to_string(),
@@ -155,6 +158,7 @@ pub(super) fn local_bridge_action_lifecycle_result(
             action_kind: "bundle.send".to_string(),
             client_id: action.client.client_id.clone(),
             client_display_name: action.client.display_name.clone(),
+            client_app_kind: action.client.app_kind.clone(),
             status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
             lifecycle_status: Some(
                 local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
@@ -182,6 +186,7 @@ pub(super) fn local_bridge_action_lifecycle_result(
             action_kind: "bundle.import".to_string(),
             client_id: action.client.client_id.clone(),
             client_display_name: action.client.display_name.clone(),
+            client_app_kind: action.client.app_kind.clone(),
             status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
             lifecycle_status: Some(
                 local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
@@ -207,6 +212,7 @@ pub(super) fn local_bridge_action_lifecycle_result(
             action_kind: "bundle.rollback".to_string(),
             client_id: action.client.client_id.clone(),
             client_display_name: action.client.display_name.clone(),
+            client_app_kind: action.client.app_kind.clone(),
             status: local_bridge_lifecycle_status_label(lifecycle_status).to_string(),
             lifecycle_status: Some(
                 local_bridge_lifecycle_status_label(lifecycle_status).to_string(),

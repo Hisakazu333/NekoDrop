@@ -500,6 +500,7 @@ mod tests {
                 app_kind: Some("generic".to_string()),
                 scopes: vec![nekolink_protocol::LocalBridgePermissionScope::BundleImportRequest],
                 granted_at_ms: 1_000,
+                last_used_at_ms: 1_000,
                 expires_at_ms: None,
             },
         );
