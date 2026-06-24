@@ -81,15 +81,25 @@ fn local_bridge_event_is_allowed(
     match event {
         LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
         LocalBridgeEvent::BundleSendPreflight(event) => {
-            can_send_bundles && client.is_some_and(|client| event.client_id == client.client_id)
+            can_send_bundles
+                && client.is_some_and(|client| {
+                    event.client_id == client.client_id && event.client_app_kind == client.app_kind
+                })
         }
         LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
             "bundle.send" => {
-                can_send_bundles && client.is_some_and(|client| event.client_id == client.client_id)
+                can_send_bundles
+                    && client.is_some_and(|client| {
+                        event.client_id == client.client_id
+                            && event.client_app_kind == client.app_kind
+                    })
             }
             "bundle.import" | "bundle.rollback" => {
                 can_import_bundles
-                    && client.is_some_and(|client| event.client_id == client.client_id)
+                    && client.is_some_and(|client| {
+                        event.client_id == client.client_id
+                            && event.client_app_kind == client.app_kind
+                    })
             }
             _ => false,
         },

@@ -219,7 +219,7 @@ Current desktop behavior:
 - keeps `bundle.send` and `bundle.import` behind authorization; authorized requests enter an in-memory pending-action queue that Settings can inspect and remove
 - executes `bundle.import` only into the NekoDrop local import directory; it does not write third-party app directories
 - keeps `bundle.send` behind authorization and trusted-target checks; desktop execution still goes through the existing send path, and result records do not expose local paths
-- lets authorized clients query their own action results without exposing local import paths; action result lookup is bound to the same `client_id` and `app_kind`
+- lets authorized clients observe their own action events and query their own action results without exposing local import paths; action event/result lookup is bound to the same `client_id` and `app_kind`
 
 Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.
 

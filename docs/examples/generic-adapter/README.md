@@ -295,7 +295,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs receipt-state \
 }
 ```
 
-`action.updated` 事件会带 `request_id`、`action_kind`、`status`、`reason`、`bundle_id`、`bundle_type` 和 `target_device_id`。事件不会返回本机 `bundle_root`。
+`action.updated` 事件会带 `request_id`、`action_kind`、`client_id`、`client_app_kind`、`status`、`reason`、`bundle_id`、`bundle_type` 和 `target_device_id`。事件按当前请求的 client identity 和授权 scope 过滤，不会返回本机 `bundle_root`。
 
 响应里除了 `events` 数组，还会带：
 

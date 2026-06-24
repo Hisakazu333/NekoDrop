@@ -2842,6 +2842,7 @@ fn push_local_bridge_pending_action_result(
             event_id,
             request_id,
             client_id,
+            client_app_kind: result.client_app_kind.clone(),
             status,
             reason: result.reason.clone(),
             bundle_id: result.bundle_id.clone(),
@@ -2898,6 +2899,7 @@ fn push_local_bridge_action_lifecycle_result(
             request_id: result.request_id,
             action_kind: result.action_kind,
             client_id: result.client_id,
+            client_app_kind: result.client_app_kind,
             status: local_bridge_lifecycle_status_from_label(
                 result
                     .lifecycle_status
@@ -7443,6 +7445,7 @@ mod tests {
                     request_id: "bridge-send-1".to_string(),
                     action_kind: "bundle.send".to_string(),
                     client_id: "sender-app".to_string(),
+                    client_app_kind: Some("agent".to_string()),
                     status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
                     reason: None,
                     message: "send running".to_string(),
@@ -7462,6 +7465,7 @@ mod tests {
                     request_id: "bridge-import-1".to_string(),
                     action_kind: "bundle.import".to_string(),
                     client_id: "importer-app".to_string(),
+                    client_app_kind: Some("agent".to_string()),
                     status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
                     reason: None,
                     message: "import running".to_string(),
@@ -7469,6 +7473,26 @@ mod tests {
                     bundle_type: Some(BundleType::Skill),
                     target_device_id: None,
                     updated_at_ms: 2_100,
+                },
+            ),
+        )
+        .unwrap();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-send-automation-running".to_string(),
+                    request_id: "bridge-send-automation".to_string(),
+                    action_kind: "bundle.send".to_string(),
+                    client_id: "sender-app".to_string(),
+                    client_app_kind: Some("automation".to_string()),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "automation send running".to_string(),
+                    bundle_id: Some("bundle_automation".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: Some("device-a".to_string()),
+                    updated_at_ms: 2_200,
                 },
             ),
         )
