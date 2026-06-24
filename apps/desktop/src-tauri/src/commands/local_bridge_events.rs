@@ -1,9 +1,10 @@
-use nekolink_protocol::LocalBridgeEvent;
+use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgeEvent};
 
 use super::local_bridge_responses::LocalBridgeEventPage;
 
 pub(super) fn local_bridge_events_after(
     events: &[LocalBridgeEvent],
+    client: Option<&LocalBridgeClientIdentity>,
     after_event_id: Option<&str>,
     limit: usize,
     can_read_bundles: bool,
@@ -31,6 +32,7 @@ pub(super) fn local_bridge_events_after(
             can_read_transfers,
             can_send_bundles,
             can_import_bundles,
+            client,
         ) {
             continue;
         }
@@ -74,14 +76,21 @@ fn local_bridge_event_is_allowed(
     can_read_transfers: bool,
     can_send_bundles: bool,
     can_import_bundles: bool,
+    client: Option<&LocalBridgeClientIdentity>,
 ) -> bool {
     match event {
         LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
-        LocalBridgeEvent::BundleSendPreflight(_) => can_send_bundles,
+        LocalBridgeEvent::BundleSendPreflight(event) => {
+            can_send_bundles && client.is_some_and(|client| event.client_id == client.client_id)
+        }
         LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
-            "bundle.send" => can_send_bundles,
-            "bundle.import" => can_import_bundles,
-            "bundle.rollback" => can_import_bundles,
+            "bundle.send" => {
+                can_send_bundles && client.is_some_and(|client| event.client_id == client.client_id)
+            }
+            "bundle.import" | "bundle.rollback" => {
+                can_import_bundles
+                    && client.is_some_and(|client| event.client_id == client.client_id)
+            }
             _ => false,
         },
         LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,

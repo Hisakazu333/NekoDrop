@@ -83,6 +83,7 @@ export interface LocalBridgeAuthorizationDto {
   app_kind: string | null;
   scopes: LocalBridgePermissionScope[];
   granted_at_ms: number;
+  last_used_at_ms: number;
   expires_at_ms: number | null;
 }
 
@@ -101,6 +102,7 @@ export interface LocalBridgePendingActionDto {
   action_kind: "bundle.send" | "bundle.import" | string;
   client_id: string;
   client_display_name: string;
+  client_app_kind: string | null;
   bundle_type: string | null;
   target_device_id: string | null;
   staged_bundle_id: string | null;
@@ -130,6 +132,7 @@ export interface LocalBridgePendingActionResultDto {
   action_kind: "bundle.send" | "bundle.import" | "bundle.rollback" | string;
   client_id: string;
   client_display_name: string;
+  client_app_kind: string | null;
   status: string;
   lifecycle_status: string | null;
   reason: string | null;
