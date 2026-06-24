@@ -211,7 +211,7 @@ Current desktop behavior:
 - binds only to `127.0.0.1`
 - accepts only `POST /bridge/request`
 - rejects oversized request bodies
-- allows scoped read requests for devices, staged bundle details, and transfer status; `bundle.detail` requires `bundle.read`
+- keeps read requests scoped: `devices.list` requires `device.read`, `bundle.detail` requires `bundle.read`, and `transfer.status` requires `transfer.status.read`
 - lets local apps request scopes with a short authorization code
 - persists confirmed authorizations locally, restores only unexpired records on restart, and tracks last-used time in the running authorization list
 - matches authorization by `client_id`, `app_kind`, requested scope, and expiration

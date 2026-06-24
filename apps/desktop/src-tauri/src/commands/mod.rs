@@ -3103,6 +3103,17 @@ fn handle_validated_local_bridge_request_with_auth_at(
 ) -> Result<LocalBridgeResponseDto, String> {
     match request {
         LocalBridgeRequest::ListDevices(request) => {
+            if !local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::DeviceRead,
+                now_ms,
+            ) {
+                return Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ));
+            }
             let client = request.client.clone();
             Ok(local_bridge_read_only_response(
                 request.request_id,
@@ -3114,6 +3125,17 @@ fn handle_validated_local_bridge_request_with_auth_at(
             ))
         }
         LocalBridgeRequest::TransferStatus(request) => {
+            if !local_bridge_client_has_scope(
+                request.client.as_ref(),
+                authorizations,
+                LocalBridgePermissionScope::TransferStatusRead,
+                now_ms,
+            ) {
+                return Ok(local_bridge_pending_confirmation_response(
+                    request.request_id,
+                    request.client,
+                ));
+            }
             let client = request.client.clone();
             Ok(local_bridge_read_only_response(
                 request.request_id,
@@ -3753,6 +3775,10 @@ fn local_bridge_authorized_scopes_for_completed_request(
     request: &LocalBridgeRequest,
 ) -> Vec<LocalBridgePermissionScope> {
     match request {
+        LocalBridgeRequest::ListDevices(_) => vec![LocalBridgePermissionScope::DeviceRead],
+        LocalBridgeRequest::TransferStatus(_) => {
+            vec![LocalBridgePermissionScope::TransferStatusRead]
+        }
         LocalBridgeRequest::BundleDetail(_) => vec![LocalBridgePermissionScope::BundleRead],
         LocalBridgeRequest::PollEvents(_) => vec![
             LocalBridgePermissionScope::BundleRead,
@@ -3768,9 +3794,7 @@ fn local_bridge_authorized_scopes_for_completed_request(
         LocalBridgeRequest::ImportBundle(_) | LocalBridgeRequest::RollbackBundleImport(_) => {
             vec![LocalBridgePermissionScope::BundleImportRequest]
         }
-        LocalBridgeRequest::ListDevices(_)
-        | LocalBridgeRequest::AuthorizationRequest(_)
-        | LocalBridgeRequest::TransferStatus(_) => Vec::new(),
+        LocalBridgeRequest::AuthorizationRequest(_) => Vec::new(),
     }
 }
 
@@ -5339,13 +5363,31 @@ mod tests {
             "kind": "devices.list",
             "payload": {
                 "request_id": "bridge-request-1",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
                 "trusted_only": true
             }
         })
         .to_string();
 
-        let response =
-            handle_local_bridge_request_at(&request, &trusted, None, &staging_root).unwrap();
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &trusted,
+            None,
+            &staging_root,
+            &dir.join("bundle_imports"),
+            &[local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::DeviceRead],
+                1_000,
+                5_000,
+            )],
+            2_000,
+        )
+        .unwrap();
 
         assert_eq!(response.request_id, "bridge-request-1");
         assert_eq!(response.status, "ok");
@@ -5361,19 +5403,38 @@ mod tests {
     }
 
     #[test]
-    fn local_bridge_read_only_requests_are_marked_read_only() {
+    fn local_bridge_read_only_requests_require_matching_scope() {
         let dir = unique_bundle_temp_dir("local-bridge-read-only-security");
         let staging_root = dir.join("bundle_staging");
         let request = serde_json::json!({
             "kind": "transfer.status",
             "payload": {
                 "request_id": "bridge-request-status",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
                 "transfer_id": null
             }
         })
         .to_string();
 
-        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &dir.join("bundle_imports"),
+            &[local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            )],
+            2_000,
+        )
+        .unwrap();
 
         assert_eq!(response.status, "ok");
         assert_eq!(response.security_state, "read_only");
@@ -5383,8 +5444,50 @@ mod tests {
     }
 
     #[test]
-    fn local_bridge_response_marks_anonymous_client() {
-        let dir = unique_bundle_temp_dir("local-bridge-client-anonymous");
+    fn local_bridge_read_only_requests_without_scope_require_authorization() {
+        let dir = unique_bundle_temp_dir("local-bridge-read-only-requires-scope");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "transfer.status",
+            "payload": {
+                "request_id": "bridge-request-status",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "transfer_id": null
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &dir.join("bundle_imports"),
+            &[local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::DeviceRead],
+                1_000,
+                5_000,
+            )],
+            2_000,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "pending_auth");
+        assert_eq!(response.security_state, "requires_user_confirmation");
+        assert!(response.requires_user_confirmation);
+        assert!(response.transfer_status.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_unauthorized_read_only_response_marks_anonymous_client() {
+        let dir = unique_bundle_temp_dir("local-bridge-client-anonymous-pending");
         let staging_root = dir.join("bundle_staging");
         let request = serde_json::json!({
             "kind": "transfer.status",
@@ -5397,9 +5500,54 @@ mod tests {
 
         let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
 
+        assert_eq!(response.status, "pending_auth");
         assert_eq!(response.client_state, "anonymous");
         assert!(response.client_id.is_none());
         assert!(response.client_display_name.is_none());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_authorized_read_only_response_echoes_identified_client() {
+        let dir = unique_bundle_temp_dir("local-bridge-client-read-identified");
+        let staging_root = dir.join("bundle_staging");
+        let request = serde_json::json!({
+            "kind": "transfer.status",
+            "payload": {
+                "request_id": "bridge-request-status",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "transfer_id": null
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &dir.join("bundle_imports"),
+            &[local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            )],
+            2_000,
+        )
+        .unwrap();
+
+        assert_eq!(response.client_state, "identified");
+        assert_eq!(response.client_id.as_deref(), Some("local-agent-app"));
+        assert_eq!(
+            response.client_display_name.as_deref(),
+            Some("Local Agent App")
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -5422,7 +5570,21 @@ mod tests {
         })
         .to_string();
 
-        let response = handle_local_bridge_request_at(&request, &[], None, &staging_root).unwrap();
+        let response = handle_local_bridge_request_with_auth_at(
+            &request,
+            &[],
+            None,
+            &staging_root,
+            &dir.join("bundle_imports"),
+            &[local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::TransferStatusRead],
+                1_000,
+                5_000,
+            )],
+            2_000,
+        )
+        .unwrap();
 
         assert_eq!(response.client_state, "identified");
         assert_eq!(response.client_id.as_deref(), Some("local-agent-app"));
