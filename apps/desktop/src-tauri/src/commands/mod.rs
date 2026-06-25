@@ -3945,11 +3945,21 @@ fn confirm_pending_local_bridge_authorization(
         client_id: pending.client.client_id.clone(),
         display_name: pending.client.display_name.clone(),
         app_kind: pending.client.app_kind.clone(),
-        scopes: pending.requested_scopes.clone(),
+        scopes: dedupe_local_bridge_permission_scopes(&pending.requested_scopes),
         granted_at_ms: now_ms,
         last_used_at_ms: now_ms,
         expires_at_ms: Some(pending.expires_at_ms),
     })
+}
+
+fn dedupe_local_bridge_permission_scopes(
+    scopes: &[LocalBridgePermissionScope],
+) -> Vec<LocalBridgePermissionScope> {
+    let mut output = Vec::new();
+    for scope in scopes {
+        push_local_bridge_scope_once(&mut output, *scope);
+    }
+    output
 }
 
 fn local_bridge_authorization_code(
@@ -9544,6 +9554,38 @@ mod tests {
             LocalBridgePermissionScope::BundleImportRequest,
             3_000,
         ));
+    }
+
+    #[test]
+    fn confirmed_local_bridge_authorization_dedupes_requested_scopes() {
+        let pending = PendingLocalBridgeAuthorization {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            },
+            requested_scopes: vec![
+                LocalBridgePermissionScope::BundleRead,
+                LocalBridgePermissionScope::BundleRead,
+                LocalBridgePermissionScope::TransferStatusRead,
+            ],
+            reason: "Read local bridge state".to_string(),
+            authorization_code: "ABC-123".to_string(),
+            requested_at_ms: 1_000,
+            expires_at_ms: 11_000,
+        };
+
+        let authorization =
+            confirm_pending_local_bridge_authorization(&pending, "ABC-123", 2_000).unwrap();
+
+        assert_eq!(
+            authorization.scopes,
+            vec![
+                LocalBridgePermissionScope::BundleRead,
+                LocalBridgePermissionScope::TransferStatusRead,
+            ]
+        );
     }
 
     #[test]

@@ -2288,6 +2288,14 @@ impl LocalBridgeAuthorizationRequest {
                 "requested_scopes cannot be empty",
             ));
         }
+        for (index, scope) in self.requested_scopes.iter().enumerate() {
+            if self.requested_scopes[..index].contains(scope) {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "requested_scopes cannot contain duplicates",
+                ));
+            }
+        }
         validate_non_empty("reason", &self.reason)?;
         if let Some(ttl_seconds) = self.ttl_seconds {
             if ttl_seconds == 0 || ttl_seconds > 604_800 {
@@ -5061,6 +5069,28 @@ mod tests {
         let error = request.validate().unwrap_err();
 
         assert!(error.message.contains("ttl_seconds"));
+    }
+
+    #[test]
+    fn local_bridge_authorization_request_rejects_duplicate_scopes() {
+        let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            },
+            requested_scopes: vec![
+                LocalBridgePermissionScope::BundleRead,
+                LocalBridgePermissionScope::BundleRead,
+            ],
+            reason: "Read staged bundle metadata".to_string(),
+            ttl_seconds: Some(900),
+        });
+
+        let error = request.validate().unwrap_err();
+
+        assert!(error.message.contains("duplicates"));
     }
 
     #[test]
