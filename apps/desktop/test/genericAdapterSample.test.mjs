@@ -1119,14 +1119,20 @@ test("generic adapter sample derives action state from precise result lookups", 
         action_kind: "bundle.send",
         status: "queued",
         lifecycle_status: "queued",
-        message: "local bridge action is queued for the desktop runtime"
+        message: "local bridge action is queued for the desktop runtime",
+        bundle_type: "skill",
+        target_device_id: "device-a",
+        require_trusted_device: true
       },
       {
         request_id: "adapter-import-001",
         action_kind: "bundle.import",
         status: "running",
         lifecycle_status: "running",
-        message: "local bridge bundle import is running"
+        message: "local bridge bundle import is running",
+        bundle_id: "bundle_received_import",
+        bundle_type: "workspace",
+        conflict_strategy: "rename"
       },
       {
         request_id: "adapter-import-conflict-001",
@@ -1191,8 +1197,14 @@ test("generic adapter sample derives action state from precise result lookups", 
 
   assert.equal(pending.state, "pending");
   assert.equal(pending.final, false);
+  assert.equal(pending.bundle_type, "skill");
+  assert.equal(pending.target_device_id, "device-a");
+  assert.equal(pending.require_trusted_device, true);
   assert.equal(running.state, "running");
   assert.equal(running.final, false);
+  assert.equal(running.bundle_id, "bundle_received_import");
+  assert.equal(running.bundle_type, "workspace");
+  assert.equal(running.conflict_strategy, "rename");
   assert.equal(result.state, "result");
   assert.equal(result.final, true);
   assert.equal(result.lifecycle_status, "succeeded");
