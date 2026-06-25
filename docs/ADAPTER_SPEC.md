@@ -95,7 +95,7 @@ adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.res
 
 通用 adapter 示例会把这些结果再归纳成一个 `next_action` 提示，方便上层决定下一步是继续等、换冲突策略、查 receipt、请求回滚，还是直接报错。这个提示只属于示例层，不是协议字段。
 
-示例里还提供了一个 `import-target` 命令，用来演示上层应用如何把已校验 bundle 导入自己的数据目录。它会先重新校验 manifest / checksums / permissions，再写入 adapter 自己的目标路径，并生成 adapter 私有 receipt。这个命令只说明“上层应用自己的导入流程应该怎么写”，不代表 NekoDrop 负责写第三方应用目录。
+示例里还提供了 `import-target` 和 `rollback-target` 命令，用来演示上层应用如何把已校验 bundle 导入自己的数据目录，再按 adapter 私有 receipt 保守撤回。导入前会重新校验 manifest / checksums / permissions；撤回只删除 receipt 记录里本次导入且未被改写的文件。这个样例只说明“上层应用自己的导入流程应该怎么写”，不代表 NekoDrop 负责写第三方应用目录。
 
 Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plain` 路径只保留普通手动文件兼容；非认证 encrypted session 也不会把 `skill`、`session`、`workspace`、`agent_profile` 进入 import staging。即使收到的目录里有 `bundle.json`，不满足策略时也只会作为普通文件保存。发送端 local bridge 对这些敏感类型会强制要求可信目标设备；adapter 自己也应该拒绝给这些类型关闭 `require_trusted_device`，不要把安全策略只交给 NekoDrop 兜底。
 

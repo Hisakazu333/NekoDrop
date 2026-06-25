@@ -124,7 +124,8 @@ test("generic adapter sample imports a checked bundle into an adapter-owned targ
   assert.equal(imported.imported_file_count, 2);
   assert.equal(imported.skipped_file_count, 0);
   assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "import me\n");
-  assert.equal(readJson(join(targetPath, ".generic-adapter-import-receipt.json")).schema, "generic.adapter.import_receipt.v1");
+  const receiptPath = imported.receipt_path;
+  assert.equal(readJson(receiptPath).schema, "generic.adapter.import_receipt.v1");
 
   const conflictStdout = execFileSync(
     process.execPath,
@@ -168,6 +169,21 @@ test("generic adapter sample imports a checked bundle into an adapter-owned targ
   assert.equal(renamed.target_path, `${targetPath}-2`);
 
   writeFileSync(join(targetPath, "notes.md"), "keep existing\n");
+  const blockedRollbackStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "rollback-target",
+      "--receipt",
+      receiptPath
+    ],
+    { encoding: "utf8" }
+  );
+  const blockedRollback = JSON.parse(blockedRollbackStdout);
+  assert.equal(blockedRollback.status, "blocked");
+  assert.equal(blockedRollback.reason, "imported_file_missing_changed_or_not_file");
+  assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "keep existing\n");
+
   const skipStdout = execFileSync(
     process.execPath,
     [
@@ -188,6 +204,79 @@ test("generic adapter sample imports a checked bundle into an adapter-owned targ
   assert.equal(skipped.status, "imported");
   assert.equal(skipped.skipped_file_count, 2);
   assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "keep existing\n");
+
+  const skipRollbackStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "rollback-target",
+      "--receipt",
+      skipped.receipt_path
+    ],
+    { encoding: "utf8" }
+  );
+  const skipRollback = JSON.parse(skipRollbackStdout);
+  assert.equal(skipRollback.status, "rolled_back");
+  assert.equal(skipRollback.removed_file_count, 0);
+  assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "keep existing\n");
+
+  const rollbackStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "rollback-target",
+      "--receipt",
+      renamed.receipt_path
+    ],
+    { encoding: "utf8" }
+  );
+  const rolledBack = JSON.parse(rollbackStdout);
+  assert.equal(rolledBack.status, "rolled_back");
+  assert.equal(rolledBack.removed_file_count, 2);
+  assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "keep existing\n");
+  assert.equal(readJson(join(renamed.target_path, ".generic-adapter-rollback-receipt.json")).bundle_id, "bundle_workspace_import");
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample rejects rollback receipts outside their target", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-rollback-target-"));
+  const target = join(tempRoot, "adapter-data", "workspace", "bundle_workspace_import");
+  mkdirSync(target, { recursive: true });
+  writeFileSync(join(target, "notes.md"), "keep\n");
+  const outsideReceipt = join(tempRoot, "receipt.json");
+  writeFileSync(outsideReceipt, JSON.stringify({
+    schema: "generic.adapter.import_receipt.v1",
+    bundle_id: "bundle_workspace_import",
+    bundle_type: "workspace",
+    display_name: "Workspace import",
+    source_app: "Generic Adapter",
+    target_path: target,
+    conflict_strategy: "reject",
+    imported_manifest_paths: ["files/notes.md"],
+    imported_files: [{
+      manifest_path: "files/notes.md",
+      size: 5,
+      sha256: createHash("sha256").update("keep\n").digest("hex")
+    }],
+    skipped_manifest_paths: [],
+    imported_at: "2026-06-25T00:00:00.000Z"
+  }));
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "rollback-target",
+        "--receipt",
+        outsideReceipt
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /adapter import receipt must live inside its target_path/
+  );
+  assert.equal(readFileSync(join(target, "notes.md"), "utf8"), "keep\n");
 
   rmSync(tempRoot, { recursive: true, force: true });
 });

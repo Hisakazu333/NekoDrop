@@ -408,7 +408,16 @@ node docs/examples/generic-adapter/generic-adapter.mjs import-target \
 adapter-data/<bundle_type>/<bundle_id>/
 ```
 
-并写入 `.generic-adapter-import-receipt.json`。冲突策略和 bridge import 保持一致：`reject`、`rename`、`skip_conflicts`。如果 bundle 标记了 `contains_secrets=true`，示例会拒绝自动导入。
+并写入 `.generic-adapter-import-receipt-*.json`。冲突策略和 bridge import 保持一致：`reject`、`rename`、`skip_conflicts`。如果 bundle 标记了 `contains_secrets=true`，示例会拒绝自动导入。
+
+每次成功导入都会写一条独立的 adapter receipt。需要撤回 adapter 自己的导入时，用 `rollback-target`：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs rollback-target \
+  --receipt ./adapter-data/workspace/bundle_workspace_demo/.generic-adapter-import-receipt-xxx.json
+```
+
+`rollback-target` 只删除 receipt 记录里本次导入的文件。`skip_conflicts` 跳过的既有文件不会被删除；如果某个已导入文件已经被用户或应用改写，示例会拒绝撤回，避免盲删新内容。
 
 生成撤回请求：
 
