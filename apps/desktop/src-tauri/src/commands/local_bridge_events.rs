@@ -19,21 +19,23 @@ pub(super) fn local_bridge_events_after(
     let mut next_after_event_id = None;
     let mut has_more = false;
     for event in events {
-        if !after_cursor {
-            after_cursor = local_bridge_event_id(event) == after_event_id.unwrap_or_default();
-            if after_cursor {
-                cursor_found = true;
-            }
-            continue;
-        }
-        if !local_bridge_event_is_allowed(
+        let is_allowed = local_bridge_event_is_allowed(
             event,
             can_read_bundles,
             can_read_transfers,
             can_send_bundles,
             can_import_bundles,
             client,
-        ) {
+        );
+        if !after_cursor {
+            after_cursor =
+                is_allowed && local_bridge_event_id(event) == after_event_id.unwrap_or_default();
+            if after_cursor {
+                cursor_found = true;
+            }
+            continue;
+        }
+        if !is_allowed {
             continue;
         }
         let event_id = local_bridge_event_id(event).to_string();
