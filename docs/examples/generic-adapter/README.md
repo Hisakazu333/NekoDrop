@@ -16,7 +16,9 @@ node docs/examples/generic-adapter/generic-adapter.mjs
 node docs/examples/generic-adapter/generic-adapter.mjs descriptor \
   --type session \
   --type workspace \
-  --capability both > adapter.json
+  --capability both \
+  --conflict-strategy reject \
+  --conflict-strategy rename > adapter.json
 
 node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
   --descriptor adapter.json
@@ -31,7 +33,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth \
   --descriptor adapter.json
 ```
 
-传了 `--descriptor` 后，`request send` 和 `request import` 会检查 descriptor 是否声明了对应 `bundle_type`，也会检查 `can_export` / `can_import`。只会导入的 adapter 不能发起发送请求，只会导出的 adapter 不能发起导入请求。
+传了 `--descriptor` 后，`request send` 和 `request import` 会检查 descriptor 是否声明了对应 `bundle_type`，也会检查 `can_export` / `can_import` 和 `conflict_strategies`。只会导入的 adapter 不能发起发送请求，只会导出的 adapter 不能发起导入请求；只声明 `reject` 的 adapter 不能发起 `rename` 导入。
 
 ## 导出
 

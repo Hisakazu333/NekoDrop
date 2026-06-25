@@ -496,6 +496,9 @@ function buildAdapterDescriptor(flags) {
     : Object.keys(TYPE_CONFIG);
   const uniqueTypes = [...new Set(bundleTypes)];
   const capability = requireDescriptorCapability(flags.capability ?? "both");
+  const conflictStrategies = toArray(flags["conflict-strategy"]).length > 0
+    ? [...new Set(toArray(flags["conflict-strategy"]).map(requireConflictStrategy))]
+    : ["reject", "rename", "skip_conflicts"];
   const bridgeScopes = toArray(flags.scope).length > 0
     ? toArray(flags.scope)
     : FULL_LOOP_BRIDGE_SCOPES;
@@ -517,7 +520,7 @@ function buildAdapterDescriptor(flags) {
       write_target: TYPE_CONFIG[type].target,
       sensitive: SENSITIVE_BUNDLE_TYPES.has(type),
       requires_trusted_device: SENSITIVE_BUNDLE_TYPES.has(type),
-      conflict_strategies: ["reject", "rename", "skip_conflicts"]
+      conflict_strategies: conflictStrategies
     })),
     security: {
       rejects_contains_secrets: true,
@@ -646,6 +649,14 @@ function requireDescriptorBundleType(descriptor, bundleType, capability) {
   return entry;
 }
 
+function requireDescriptorConflictStrategy(entry, strategy) {
+  if (!entry) return strategy;
+  if (!entry.conflict_strategies.includes(strategy)) {
+    throw new Error(`descriptor does not allow ${strategy} imports for ${entry.bundle_type}`);
+  }
+  return strategy;
+}
+
 function buildRequest(kind, flags) {
   const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
   if (kind === "auth") {
@@ -680,7 +691,11 @@ function buildRequest(kind, flags) {
   }
   if (kind === "import") {
     const bundleType = requireKnownType(requireFlag(flags, "type"));
-    requireDescriptorBundleType(descriptor, bundleType, "import");
+    const descriptorEntry = requireDescriptorBundleType(descriptor, bundleType, "import");
+    const conflictStrategy = requireDescriptorConflictStrategy(
+      descriptorEntry,
+      requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
+    );
     return {
       kind: "bundle.import",
       payload: {
@@ -688,7 +703,7 @@ function buildRequest(kind, flags) {
         client: CLIENT,
         staged_bundle_id: requireFlag(flags, "staged-bundle-id"),
         expected_bundle_type: bundleType,
-        conflict_strategy: requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
+        conflict_strategy: conflictStrategy
       }
     };
   }
@@ -1435,7 +1450,7 @@ function usage() {
   node generic-adapter.mjs request rollback --bundle-id ID
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results --action-request-id ACTION_REQUEST_ID
-  node generic-adapter.mjs descriptor --type session --type workspace --capability both
+  node generic-adapter.mjs descriptor --type session --type workspace --capability both --conflict-strategy reject
   node generic-adapter.mjs validate-descriptor --descriptor adapter.json
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
