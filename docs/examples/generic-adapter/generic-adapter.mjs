@@ -531,8 +531,7 @@ function buildAdapterDescriptor(flags) {
 
 function validateAdapterDescriptorFile(flags) {
   const descriptorPath = requireFlag(flags, "descriptor");
-  const descriptor = readJson(descriptorPath);
-  validateAdapterDescriptor(descriptor);
+  const descriptor = loadAdapterDescriptor(descriptorPath);
   return {
     schema: descriptor.schema,
     adapter_id: descriptor.adapter_id,
@@ -542,6 +541,12 @@ function validateAdapterDescriptorFile(flags) {
       .filter((entry) => entry.sensitive)
       .map((entry) => entry.bundle_type)
   };
+}
+
+function loadAdapterDescriptor(descriptorPath) {
+  const descriptor = readJson(descriptorPath);
+  validateAdapterDescriptor(descriptor);
+  return descriptor;
 }
 
 function validateAdapterDescriptor(descriptor) {
@@ -627,16 +632,18 @@ function validateDescriptorBundleType(entry, seenTypes) {
 
 function buildRequest(kind, flags) {
   if (kind === "auth") {
+    const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
+    const requestedScopes = toArray(flags.scope).length > 0
+      ? toArray(flags.scope)
+      : descriptor?.bridge?.requested_scopes ?? DEFAULT_BRIDGE_SCOPES;
     return {
       kind: "authorization.request",
       payload: {
         request_id: flags["request-id"] ?? `adapter-auth-${Date.now()}`,
         client: CLIENT,
-        requested_scopes: toArray(flags.scope).length > 0
-          ? toArray(flags.scope)
-          : DEFAULT_BRIDGE_SCOPES,
+        requested_scopes: requestedScopes,
         reason: flags.reason ?? "Send and import user-selected bundles",
-        ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
+        ttl_seconds: Number(flags["ttl-seconds"] ?? descriptor?.bridge?.default_ttl_seconds ?? 3600)
       }
     };
   }
@@ -718,6 +725,7 @@ function buildRequest(kind, flags) {
 
 function buildWorkflow(flags) {
   const mode = flags.mode ?? "send";
+  const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
   const steps = [];
   const sendRequestId = flags["send-request-id"] ?? "adapter-send-001";
   const importRequestId = flags["import-request-id"] ?? "adapter-import-001";
@@ -736,7 +744,8 @@ function buildWorkflow(flags) {
         {
           step: "authorize",
           request: buildRequest("auth", {
-            scope: FULL_LOOP_BRIDGE_SCOPES,
+            descriptor: flags.descriptor,
+            scope: descriptor ? undefined : FULL_LOOP_BRIDGE_SCOPES,
             reason: flags.reason ?? "Send and import user-selected bundles"
           })
         },
@@ -856,7 +865,8 @@ function buildWorkflow(flags) {
   steps.push({
     step: "authorize",
     request: buildRequest("auth", {
-      scope: scopesForWorkflowMode(mode),
+      descriptor: flags.descriptor,
+      scope: descriptor ? undefined : scopesForWorkflowMode(mode),
       reason: flags.reason ?? "Send and import user-selected bundles"
     })
   });

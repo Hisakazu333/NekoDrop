@@ -416,6 +416,59 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample can derive auth scopes from an adapter descriptor", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-auth-"));
+  const descriptorPath = join(tempRoot, "adapter.json");
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "descriptor",
+      "--type",
+      "workspace",
+      "--scope",
+      "bundle.read",
+      "--scope",
+      "bundle.import.request",
+      "--ttl-seconds",
+      "7200"
+    ],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+
+  const auth = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "request", "auth", "--descriptor", descriptorPath],
+    { encoding: "utf8" }
+  ));
+  assert.deepEqual(auth.payload.requested_scopes, ["bundle.read", "bundle.import.request"]);
+  assert.equal(auth.payload.ttl_seconds, 7200);
+
+  const workflow = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "import",
+      "--descriptor",
+      descriptorPath,
+      "--staged-bundle-id",
+      "bundle_received_1",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.deepEqual(workflow.steps[0].request.payload.requested_scopes, [
+    "bundle.read",
+    "bundle.import.request"
+  ]);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample rejects unsafe adapter descriptors", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-invalid-"));
   const descriptorPath = join(tempRoot, "adapter.json");

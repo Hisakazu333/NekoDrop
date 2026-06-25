@@ -23,6 +23,13 @@ node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
 
 敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
 
+生成请求时也可以直接引用 descriptor：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs request auth \
+  --descriptor adapter.json
+```
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：

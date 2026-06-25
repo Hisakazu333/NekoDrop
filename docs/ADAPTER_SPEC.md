@@ -102,7 +102,7 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 }
 ```
 
-`skill`、`session`、`workspace` 和 `agent_profile` 必须标记为 `sensitive=true`，并且 `requires_trusted_device=true`。`bridge.requested_scopes` 只能使用 NekoDrop 已定义的 local bridge scope。descriptor 只是能力声明；真实导出、导入和回滚仍由 adapter 自己执行。
+`skill`、`session`、`workspace` 和 `agent_profile` 必须标记为 `sensitive=true`，并且 `requires_trusted_device=true`。`bridge.requested_scopes` 只能使用 NekoDrop 已定义的 local bridge scope。adapter 可以用 descriptor 生成授权请求，避免声明的 scope 和实际申请的 scope 分叉。descriptor 只是能力声明；真实导出、导入和回滚仍由 adapter 自己执行。
 
 ## Local Bridge 请求
 
