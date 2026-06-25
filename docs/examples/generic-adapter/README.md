@@ -30,6 +30,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth \
   --descriptor adapter.json
 ```
 
+传了 `--descriptor` 后，`request send` 和 `request import` 也会检查 descriptor 是否声明了对应 `bundle_type`，避免实际请求和能力声明分叉。
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：

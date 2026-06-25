@@ -469,6 +469,78 @@ test("generic adapter sample can derive auth scopes from an adapter descriptor",
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample gates send and import types by descriptor", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-gates-"));
+  const descriptorPath = join(tempRoot, "adapter.json");
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "descriptor", "--type", "workspace"],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+
+  const send = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "send",
+      "--descriptor",
+      descriptorPath,
+      "--bundle-root",
+      "/tmp/bundle_workspace",
+      "--target-device-id",
+      "neko-device-target",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(send.payload.bundle_type, "workspace");
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "request",
+        "send",
+        "--descriptor",
+        descriptorPath,
+        "--bundle-root",
+        "/tmp/bundle_session",
+        "--target-device-id",
+        "neko-device-target",
+        "--type",
+        "session"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /descriptor does not declare bundle type: session/
+  );
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "request",
+        "import",
+        "--descriptor",
+        descriptorPath,
+        "--staged-bundle-id",
+        "bundle_session",
+        "--type",
+        "session"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /descriptor does not declare bundle type: session/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample rejects unsafe adapter descriptors", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-invalid-"));
   const descriptorPath = join(tempRoot, "adapter.json");

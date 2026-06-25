@@ -630,9 +630,24 @@ function validateDescriptorBundleType(entry, seenTypes) {
   }
 }
 
+function requireDescriptorBundleType(descriptor, bundleType, capability) {
+  if (!descriptor) return null;
+  const entry = descriptor.bundle_types.find((item) => item.bundle_type === bundleType);
+  if (!entry) {
+    throw new Error(`descriptor does not declare bundle type: ${bundleType}`);
+  }
+  if (capability === "export" && entry.can_export !== true) {
+    throw new Error(`descriptor does not allow exporting ${bundleType}`);
+  }
+  if (capability === "import" && entry.can_import !== true) {
+    throw new Error(`descriptor does not allow importing ${bundleType}`);
+  }
+  return entry;
+}
+
 function buildRequest(kind, flags) {
+  const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
   if (kind === "auth") {
-    const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
     const requestedScopes = toArray(flags.scope).length > 0
       ? toArray(flags.scope)
       : descriptor?.bridge?.requested_scopes ?? DEFAULT_BRIDGE_SCOPES;
@@ -649,6 +664,7 @@ function buildRequest(kind, flags) {
   }
   if (kind === "send") {
     const bundleType = requireKnownType(requireFlag(flags, "type"));
+    requireDescriptorBundleType(descriptor, bundleType, "export");
     return {
       kind: "bundle.send",
       payload: {
@@ -662,13 +678,15 @@ function buildRequest(kind, flags) {
     };
   }
   if (kind === "import") {
+    const bundleType = requireKnownType(requireFlag(flags, "type"));
+    requireDescriptorBundleType(descriptor, bundleType, "import");
     return {
       kind: "bundle.import",
       payload: {
         request_id: flags["request-id"] ?? `adapter-import-${Date.now()}`,
         client: CLIENT,
         staged_bundle_id: requireFlag(flags, "staged-bundle-id"),
-        expected_bundle_type: requireKnownType(requireFlag(flags, "type")),
+        expected_bundle_type: bundleType,
         conflict_strategy: requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
       }
     };
@@ -753,6 +771,7 @@ function buildWorkflow(flags) {
           step: "send",
           request: buildRequest("send", {
             "request-id": sendRequestId,
+            descriptor: flags.descriptor,
             "bundle-root": bundleRoot,
             "target-device-id": requireFlag(flags, "target-device-id"),
             type: requireKnownType(requireFlag(flags, "type")),
@@ -785,6 +804,7 @@ function buildWorkflow(flags) {
           step: "import",
           request: buildRequest("import", {
             "request-id": importRequestId,
+            descriptor: flags.descriptor,
             "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
             type: requireKnownType(requireFlag(flags, "type")),
             "conflict-strategy": flags["conflict-strategy"] ?? "reject"
@@ -875,6 +895,7 @@ function buildWorkflow(flags) {
       step: "send",
       request: buildRequest("send", {
         "request-id": sendRequestId,
+        descriptor: flags.descriptor,
         "bundle-root": requireFlag(flags, "bundle-root"),
         "target-device-id": requireFlag(flags, "target-device-id"),
         type: requireKnownType(requireFlag(flags, "type")),
@@ -901,6 +922,7 @@ function buildWorkflow(flags) {
       step: "import",
       request: buildRequest("import", {
         "request-id": importRequestId,
+        descriptor: flags.descriptor,
         "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
         type: requireKnownType(requireFlag(flags, "type")),
         "conflict-strategy": flags["conflict-strategy"] ?? "reject"
