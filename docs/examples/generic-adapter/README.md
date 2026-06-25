@@ -211,6 +211,20 @@ node docs/examples/generic-adapter/generic-adapter.mjs action-state \
 - `result`：动作已有终态结果
 - `missing`：当前 client 查不到这个动作，可能是 request id 不对、权限不够、动作属于别的 client，或结果已被清理
 
+`action-state` 还会给一条 `next_action`，给 adapter 一个最直白的下一步提示：
+
+- `wait_for_action_update`
+- `choose_import_conflict_strategy`
+- `query_receipt_or_request_rollback`
+- `query_receipt_state`
+- `query_rollback_status`
+- `query_after_rollback`
+- `show_failure_reason`
+- `show_rollback_blocking_reason`
+- `pair_or_select_trusted_device`
+- `retry_or_cancel_flow`
+- `check_request_id_permission_or_retry_later`
+
 导入后再用 `bundle.detail` 响应推导 receipt 状态：
 
 ```bash
