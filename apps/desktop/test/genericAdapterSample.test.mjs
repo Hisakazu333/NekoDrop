@@ -973,6 +973,50 @@ test("generic adapter sample prints a full export send import rollback loop", ()
   assert.equal(workflow.steps[15].command.at(2), "receipt-state");
   assert.match(workflow.notes.join("\n"), /Rollback only removes files imported into NekoDrop/);
   assert.match(workflow.notes.join("\n"), /Sensitive bundle types require trusted authenticated targets/);
+  assert.match(workflow.notes.join("\n"), /retry the same action kind with the same request_id/);
+});
+
+test("generic adapter sample keeps action request ids stable for retry and result lookup", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "full-loop",
+      "--source",
+      "/tmp/source",
+      "--output",
+      "/tmp/out",
+      "--bundle-id",
+      "bundle_workspace_demo",
+      "--name",
+      "Workspace demo",
+      "--target-device-id",
+      "device-a",
+      "--staged-bundle-id",
+      "bundle_workspace_demo",
+      "--type",
+      "workspace",
+      "--send-request-id",
+      "stable-send-request",
+      "--import-request-id",
+      "stable-import-request",
+      "--rollback-request-id",
+      "stable-rollback-request"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+  const byStep = Object.fromEntries(workflow.steps.map((step) => [step.step, step]));
+
+  assert.equal(byStep.send.request.payload.request_id, "stable-send-request");
+  assert.equal(byStep.send_action_state.request.payload.action_request_id, "stable-send-request");
+  assert.equal(byStep.import.request.payload.request_id, "stable-import-request");
+  assert.equal(byStep.import_action_state.request.payload.action_request_id, "stable-import-request");
+  assert.equal(byStep.rollback.request.payload.request_id, "stable-rollback-request");
+  assert.equal(byStep.rollback_action_state.request.payload.action_request_id, "stable-rollback-request");
 });
 
 test("generic adapter sample derives the next event cursor", () => {

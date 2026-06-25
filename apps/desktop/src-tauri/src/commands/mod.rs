@@ -2229,7 +2229,10 @@ fn local_bridge_pending_actions_are_same_request(
     local_bridge_pending_action_kind(left) == local_bridge_pending_action_kind(right)
         && local_bridge_pending_action_request_id(left)
             == local_bridge_pending_action_request_id(right)
-        && local_bridge_pending_action_client(left) == local_bridge_pending_action_client(right)
+        && local_bridge_client_identity_matches(
+            local_bridge_pending_action_client(left),
+            local_bridge_pending_action_client(right),
+        )
 }
 
 fn local_bridge_pending_action_kind(action: &LocalBridgePendingAction) -> &'static str {
@@ -3565,9 +3568,15 @@ fn local_bridge_pending_action_matches_client(
     client: &LocalBridgeClientIdentity,
 ) -> bool {
     match action {
-        LocalBridgePendingAction::SendBundle(action) => action.client == *client,
-        LocalBridgePendingAction::ImportBundle(action) => action.client == *client,
-        LocalBridgePendingAction::RollbackBundleImport(action) => action.client == *client,
+        LocalBridgePendingAction::SendBundle(action) => {
+            local_bridge_client_identity_matches(&action.client, client)
+        }
+        LocalBridgePendingAction::ImportBundle(action) => {
+            local_bridge_client_identity_matches(&action.client, client)
+        }
+        LocalBridgePendingAction::RollbackBundleImport(action) => {
+            local_bridge_client_identity_matches(&action.client, client)
+        }
     }
 }
 
@@ -3765,6 +3774,13 @@ fn local_bridge_authorization_matches_client(
     client: &LocalBridgeClientIdentity,
 ) -> bool {
     record.client_id == client.client_id && record.app_kind == client.app_kind
+}
+
+fn local_bridge_client_identity_matches(
+    left: &LocalBridgeClientIdentity,
+    right: &LocalBridgeClientIdentity,
+) -> bool {
+    left.client_id == right.client_id && left.app_kind == right.app_kind
 }
 
 fn sort_local_bridge_authorizations(records: &mut [LocalBridgeAuthorizationRecord]) {
@@ -6712,6 +6728,175 @@ mod tests {
             runtime.authorizations.lock().unwrap()[0].last_used_at_ms,
             1_700
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_mutation_retry_matches_identity_not_display_name() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-dedupe-client-display-name");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        let import_request = |display_name: &str, staged_bundle_id: &str| {
+            serde_json::json!({
+                "kind": "bundle.import",
+                "payload": {
+                    "request_id": "bridge-request-import",
+                    "client": {
+                        "client_id": "local-agent-app",
+                        "display_name": display_name,
+                        "app_kind": "agent"
+                    },
+                    "staged_bundle_id": staged_bundle_id,
+                    "expected_bundle_type": "skill",
+                    "conflict_strategy": "rename"
+                }
+            })
+            .to_string()
+        };
+
+        handle_local_bridge_request_with_runtime_at(
+            &import_request("Local Agent App", "bundle_first"),
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+        handle_local_bridge_request_with_runtime_at(
+            &import_request("Renamed Agent App", "bundle_second"),
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_700,
+        )
+        .unwrap();
+
+        let actions = runtime.pending_actions.lock().unwrap();
+        assert_eq!(actions.len(), 1);
+        match &actions[0] {
+            crate::app_state::LocalBridgePendingAction::ImportBundle(action) => {
+                assert_eq!(action.request_id, "bridge-request-import");
+                assert_eq!(action.client.display_name, "Renamed Agent App");
+                assert_eq!(action.staged_bundle_id, "bundle_second");
+                assert_eq!(action.requested_at_ms, 1_700);
+            }
+            other => panic!("expected import bundle action, got {other:?}"),
+        }
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_mutations_do_not_dedupe_different_action_kinds() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-dedupe-action-kind");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[
+                    LocalBridgePermissionScope::BundleSend,
+                    LocalBridgePermissionScope::BundleImportRequest,
+                ],
+                1_000,
+                5_000,
+            ));
+        let send_request = serde_json::json!({
+            "kind": "bundle.send",
+            "payload": {
+                "request_id": "bridge-shared-request",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "target_device_id": "device-a",
+                "bundle_root": "bundle",
+                "bundle_type": "skill",
+                "require_trusted_device": true
+            }
+        })
+        .to_string();
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-shared-request",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill",
+                "conflict_strategy": "reject"
+            }
+        })
+        .to_string();
+
+        handle_local_bridge_request_with_runtime_at(
+            &send_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_500,
+        )
+        .unwrap();
+        handle_local_bridge_request_with_runtime_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            1_700,
+        )
+        .unwrap();
+
+        let actions = runtime.pending_actions.lock().unwrap();
+        assert_eq!(actions.len(), 2);
+        assert!(matches!(
+            actions[0],
+            crate::app_state::LocalBridgePendingAction::SendBundle(_)
+        ));
+        assert!(matches!(
+            actions[1],
+            crate::app_state::LocalBridgePendingAction::ImportBundle(_)
+        ));
+        drop(actions);
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+        assert_eq!(results.len(), 2);
+        assert!(results
+            .iter()
+            .any(|result| result.action_kind == "bundle.send"));
+        assert!(results
+            .iter()
+            .any(|result| result.action_kind == "bundle.import"));
 
         fs::remove_dir_all(dir).unwrap();
     }
