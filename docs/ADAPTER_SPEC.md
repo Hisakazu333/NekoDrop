@@ -134,6 +134,8 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 如果同一个 `request_id` 已经有终态结果，重复请求不应再次入队，而应直接返回已有结果快照。adapter 侧可以把这理解为“同一动作已经做完了，继续查结果，不要重新发一遍”。
 
+如果同一个 `request_id` 但 payload 已经变了，比如换了 `staged_bundle_id`、`bundle_root`、`bundle_type` 或 `conflict_strategy`，runtime 会直接拒绝这次请求，不当成 retry。`request_id` 只允许复用在同一份动作语义上。
+
 `bundle.import` 动作只导入到 NekoDrop 本机导入区，不直接写第三方应用目录。默认策略是 `reject`：同名或文件冲突时停止，并在 `actions.results` 里返回 `bundle_import_conflict`。调用方也可以传 `conflict_strategy`：
 
 - `reject`：默认，不覆盖，冲突时停止
