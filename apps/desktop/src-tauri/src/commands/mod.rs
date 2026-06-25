@@ -3508,7 +3508,7 @@ fn local_bridge_action_results_for_client(
         LocalBridgeActionLifecycleStatus::Queued,
         None,
         "local bridge action is queued for the desktop runtime",
-        None,
+        local_bridge_pending_action_bundle_id(pending_action),
         local_bridge_pending_action_bundle_type(pending_action),
         local_bridge_pending_action_target_device_id(pending_action),
         local_bridge_pending_action_requested_at_ms(pending_action),
@@ -3557,6 +3557,14 @@ fn local_bridge_pending_action_bundle_type(
         LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
         LocalBridgePendingAction::ImportBundle(action) => action.expected_bundle_type,
         LocalBridgePendingAction::RollbackBundleImport(_) => None,
+    }
+}
+
+fn local_bridge_pending_action_bundle_id(action: &LocalBridgePendingAction) -> Option<&str> {
+    match action {
+        LocalBridgePendingAction::SendBundle(_) => None,
+        LocalBridgePendingAction::ImportBundle(action) => Some(action.staged_bundle_id.as_str()),
+        LocalBridgePendingAction::RollbackBundleImport(action) => Some(action.bundle_id.as_str()),
     }
 }
 
@@ -8556,7 +8564,10 @@ mod tests {
         runtime.authorizations.lock().unwrap().extend([
             local_bridge_authorization(
                 "local-agent-app",
-                &[LocalBridgePermissionScope::BundleSend],
+                &[
+                    LocalBridgePermissionScope::BundleSend,
+                    LocalBridgePermissionScope::BundleImportRequest,
+                ],
                 1_000,
                 5_000,
             ),
@@ -8600,6 +8611,30 @@ mod tests {
                 require_trusted_device: true,
                 requested_at_ms: 1_600,
             }),
+            LocalBridgePendingAction::ImportBundle(LocalBridgePendingImportBundleAction {
+                request_id: "bridge-import-pending".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                staged_bundle_id: "bundle_pending_import".to_string(),
+                expected_bundle_type: Some(BundleType::Workspace),
+                conflict_strategy: "rename".to_string(),
+                requested_at_ms: 1_700,
+            }),
+            LocalBridgePendingAction::RollbackBundleImport(
+                LocalBridgePendingRollbackBundleImportAction {
+                    request_id: "bridge-rollback-pending".to_string(),
+                    client: LocalBridgeClientIdentity {
+                        client_id: "local-agent-app".to_string(),
+                        display_name: "Local Agent App".to_string(),
+                        app_kind: Some("agent".to_string()),
+                    },
+                    bundle_id: "bundle_pending_rollback".to_string(),
+                    requested_at_ms: 1_800,
+                },
+            ),
         ]);
         let request = serde_json::json!({
             "kind": "actions.results",
@@ -8647,6 +8682,103 @@ mod tests {
             Some("device-a")
         );
         assert!(response.action_results[0].bundle_root.is_none());
+
+        let import_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-import-pending",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-import-pending",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let import_response = handle_local_bridge_request_with_runtime_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+        assert_eq!(import_response.status, "ok");
+        assert_eq!(import_response.action_results.len(), 1);
+        assert_eq!(
+            import_response.action_results[0].request_id,
+            "bridge-import-pending"
+        );
+        assert_eq!(
+            import_response.action_results[0].action_kind,
+            "bundle.import"
+        );
+        assert_eq!(import_response.action_results[0].status, "queued");
+        assert_eq!(
+            import_response.action_results[0].bundle_id.as_deref(),
+            Some("bundle_pending_import")
+        );
+        assert_eq!(
+            import_response.action_results[0].bundle_type.as_deref(),
+            Some("workspace")
+        );
+        assert_eq!(
+            import_response.action_results[0]
+                .conflict_strategy
+                .as_deref(),
+            Some("rename")
+        );
+        assert!(import_response.action_results[0]
+            .import_receipt_path
+            .is_none());
+
+        let rollback_request = serde_json::json!({
+            "kind": "actions.results",
+            "payload": {
+                "request_id": "bridge-results-rollback-pending",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Local Agent App",
+                    "app_kind": "agent"
+                },
+                "action_request_id": "bridge-rollback-pending",
+                "after_claimed_at_ms": null,
+                "limit": 10
+            }
+        })
+        .to_string();
+        let rollback_response = handle_local_bridge_request_with_runtime_at(
+            &rollback_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+        assert_eq!(rollback_response.status, "ok");
+        assert_eq!(rollback_response.action_results.len(), 1);
+        assert_eq!(
+            rollback_response.action_results[0].request_id,
+            "bridge-rollback-pending"
+        );
+        assert_eq!(
+            rollback_response.action_results[0].action_kind,
+            "bundle.rollback"
+        );
+        assert_eq!(rollback_response.action_results[0].status, "queued");
+        assert_eq!(
+            rollback_response.action_results[0].bundle_id.as_deref(),
+            Some("bundle_pending_rollback")
+        );
 
         let other_client_request = serde_json::json!({
             "kind": "actions.results",
