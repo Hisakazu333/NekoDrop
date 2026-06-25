@@ -409,6 +409,14 @@ test("generic adapter sample derives action state from precise result lookups", 
         message: "local bridge bundle import is running"
       },
       {
+        request_id: "adapter-import-conflict-001",
+        action_kind: "bundle.import",
+        status: "failed",
+        lifecycle_status: "conflict",
+        reason: "bundle_import_conflict",
+        message: "conflict detected"
+      },
+      {
         request_id: "adapter-rollback-001",
         action_kind: "bundle.rollback",
         status: "completed",
@@ -417,6 +425,15 @@ test("generic adapter sample derives action state from precise result lookups", 
         message: "rollback completed",
         bundle_id: "bundle_received_1",
         can_request_rollback: false
+      },
+      {
+        request_id: "adapter-rollback-failed-001",
+        action_kind: "bundle.rollback",
+        status: "failed",
+        lifecycle_status: "failed",
+        reason: "bundle_rollback_blocked",
+        message: "rollback blocked",
+        rollback_blocking_reason: "destination_missing"
       }
     ]
   }));
@@ -436,6 +453,16 @@ test("generic adapter sample derives action state from precise result lookups", 
     [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-rollback-001"],
     { encoding: "utf8" }
   ));
+  const conflict = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-import-conflict-001"],
+    { encoding: "utf8" }
+  ));
+  const rollbackFailed = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-rollback-failed-001"],
+    { encoding: "utf8" }
+  ));
   const missing = JSON.parse(execFileSync(
     process.execPath,
     [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-missing-001"],
@@ -450,6 +477,10 @@ test("generic adapter sample derives action state from precise result lookups", 
   assert.equal(result.final, true);
   assert.equal(result.lifecycle_status, "succeeded");
   assert.equal(result.bundle_id, "bundle_received_1");
+  assert.equal(result.next_action, "query_rollback_status");
+  assert.equal(conflict.state, "result");
+  assert.equal(conflict.next_action, "choose_import_conflict_strategy");
+  assert.equal(rollbackFailed.next_action, "show_rollback_blocking_reason");
   assert.equal(missing.state, "missing");
   assert.equal(missing.final, false);
 

@@ -588,41 +588,84 @@ function actionStateFromResultsResponse(flags) {
     return {
       action_request_id: actionRequestId,
       state: "missing",
-      final: false
+      final: false,
+      next_action: "check_request_id_permission_or_retry_later"
     };
   }
   const lifecycle = result.lifecycle_status ?? result.status;
+  const common = actionResultSummary(actionRequestId, result, lifecycle);
   if (lifecycle === "queued") {
     return {
-      action_request_id: actionRequestId,
+      ...common,
       state: "pending",
       final: false,
-      action_kind: result.action_kind,
-      message: result.message
+      next_action: "wait_for_action_update"
     };
   }
   if (lifecycle === "running") {
     return {
-      action_request_id: actionRequestId,
+      ...common,
       state: "running",
       final: false,
-      action_kind: result.action_kind,
-      message: result.message
+      next_action: "wait_for_action_update"
     };
   }
   return {
-    action_request_id: actionRequestId,
+    ...common,
     state: "result",
     final: true,
+    next_action: nextActionForActionResult(result, lifecycle)
+  };
+}
+
+function actionResultSummary(actionRequestId, result, lifecycle) {
+  return {
+    action_request_id: actionRequestId,
     action_kind: result.action_kind,
     lifecycle_status: lifecycle,
     status: result.status,
     reason: result.reason ?? null,
     message: result.message,
     bundle_id: result.bundle_id ?? null,
+    bundle_type: result.bundle_type ?? null,
+    target_device_id: result.target_device_id ?? null,
+    require_trusted_device: result.require_trusted_device ?? null,
+    conflict_strategy: result.conflict_strategy ?? null,
+    skipped_file_count: Number(result.skipped_file_count ?? 0),
+    has_import_receipt: Boolean(result.has_import_receipt),
+    rollback_file_count: Number(result.rollback_file_count ?? 0),
     can_request_rollback: Boolean(result.can_request_rollback),
-    rollback_blocking_reason: result.rollback_blocking_reason ?? null
+    rollback_blocking_reason: result.rollback_blocking_reason ?? null,
+    rolled_back_file_count: Number(result.rolled_back_file_count ?? 0)
   };
+}
+
+function nextActionForActionResult(result, lifecycle) {
+  if (lifecycle === "conflict" || result.reason === "bundle_import_conflict") {
+    return "choose_import_conflict_strategy";
+  }
+  if (lifecycle === "failed") {
+    if (result.reason === "trusted_target_missing") {
+      return "pair_or_select_trusted_device";
+    }
+    if (result.reason === "bundle_rollback_blocked") {
+      return "show_rollback_blocking_reason";
+    }
+    return "show_failure_reason";
+  }
+  if (lifecycle === "cancelled") {
+    return "retry_or_cancel_flow";
+  }
+  if (result.action_kind === "bundle.import") {
+    return result.can_request_rollback ? "query_receipt_or_request_rollback" : "query_receipt_state";
+  }
+  if (result.action_kind === "bundle.rollback") {
+    return Number(result.rolled_back_file_count ?? 0) > 0 ? "query_after_rollback" : "query_rollback_status";
+  }
+  if (result.action_kind === "bundle.send") {
+    return "observe_receiver_or_transfer_status";
+  }
+  return "done";
 }
 
 function receiptStateFromDetailResponse(flags) {
