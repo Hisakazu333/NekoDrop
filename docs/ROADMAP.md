@@ -50,7 +50,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - iroh runtime
 - relay server
 - Agent command
-- 上层应用自动导出 / 导入 skills、session、workspace
+- 真实上层应用自动导出 / 导入 skills、session、workspace
 - 手机端互通
 
 ## 已完成：Encrypted File Stream 接收端 streaming 解密
@@ -97,7 +97,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
-规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理和导入到 NekoDrop 本机导入区；自动导出、导入计划预览和上层应用真实导入还没有完成。
+规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；真实上层应用 adapter 还没有接入。
 
 候选包类型：
 
@@ -152,8 +152,8 @@ local application
 
 - 更完整的事件订阅，不只依赖短等待轮询
 - 本机接入 UI 对待授权、待执行和失败原因的展示
-- 通用 adapter 样例，让上层应用知道怎么导出和导入 bundle
-- 导入计划和冲突策略
+- 真实上层应用 adapter，让应用按通用样例导出、发送、接收、导入和回滚
+- 导入到第三方应用后的事务、冲突和回滚契约
 
 不做：
 
