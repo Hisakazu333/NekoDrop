@@ -73,6 +73,10 @@ async function main() {
     printJson(nextCursorFromResponse(parseFlags(args)));
     return;
   }
+  if (command === "event-state") {
+    printJson(eventStateFromEventsResponse(parseFlags(args)));
+    return;
+  }
   if (command === "action-state") {
     printJson(actionStateFromResultsResponse(parseFlags(args)));
     return;
@@ -877,6 +881,69 @@ function nextCursorFromResponse(flags) {
   };
 }
 
+function eventStateFromEventsResponse(flags) {
+  const responsePath = requireFlag(flags, "response");
+  const actionRequestId = flags["action-request-id"] ?? null;
+  const response = JSON.parse(readFileSync(responsePath, "utf8"));
+  const events = Array.isArray(response.events) ? response.events : [];
+  const actionEvents = events
+    .filter((event) => event.kind === "action.updated" && event.payload)
+    .map((event) => event.payload)
+    .filter((event) => !actionRequestId || event.request_id === actionRequestId);
+  const transferEvents = events
+    .filter((event) => event.kind === "transfer.updated" && event.payload)
+    .map((event) => event.payload);
+  const bundleEvents = events
+    .filter((event) => event.kind === "bundle.received" && event.payload)
+    .map((event) => event.payload);
+  const latestAction = actionEvents.at(-1) ?? null;
+  return {
+    cursor: nextCursorFromResponse(flags),
+    event_count: events.length,
+    has_more: Boolean(response.events_has_more),
+    should_poll_again: Boolean(response.events_has_more) || response.events_cursor_state === "missing",
+    action_request_id: actionRequestId,
+    action_state: latestAction ? actionEventState(latestAction) : null,
+    action_events: actionEvents.map(actionEventState),
+    transfer_event_count: transferEvents.length,
+    bundle_event_count: bundleEvents.length,
+    received_bundle_ids: bundleEvents
+      .map((event) => event.bundle_id)
+      .filter((bundleId) => typeof bundleId === "string")
+  };
+}
+
+function actionEventState(event) {
+  const lifecycle = event.status ?? "unknown";
+  return {
+    request_id: event.request_id,
+    action_kind: event.action_kind,
+    lifecycle_status: lifecycle,
+    reason: event.reason ?? null,
+    bundle_id: event.bundle_id ?? null,
+    bundle_type: event.bundle_type ?? null,
+    target_device_id: event.target_device_id ?? null,
+    final: ["succeeded", "failed", "conflict", "cancelled"].includes(lifecycle),
+    next_action: nextActionForActionEvent(event, lifecycle)
+  };
+}
+
+function nextActionForActionEvent(event, lifecycle) {
+  if (lifecycle === "queued" || lifecycle === "running") {
+    return "wait_for_action_update";
+  }
+  if (lifecycle === "conflict" || event.reason === "bundle_import_conflict") {
+    return "query_result_and_choose_import_conflict_strategy";
+  }
+  if (lifecycle === "failed") {
+    return "query_result_and_show_failure_reason";
+  }
+  if (lifecycle === "cancelled") {
+    return "query_result_and_decide_retry";
+  }
+  return "query_action_result";
+}
+
 function actionStateFromResultsResponse(flags) {
   const responsePath = requireFlag(flags, "response");
   const actionRequestId = requireFlag(flags, "action-request-id");
@@ -1170,6 +1237,7 @@ function usage() {
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
   node generic-adapter.mjs cursor --response bridge-events-response.json
+  node generic-adapter.mjs event-state --response bridge-events-response.json --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs action-state --response bridge-results-response.json --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs receipt-state --response bridge-detail-response.json --bundle-id ID
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);

@@ -331,6 +331,16 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
   --response bridge-events-response.json
 ```
 
+也可以把一次事件响应归纳成 adapter watch loop 更容易消费的状态：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs event-state \
+  --response bridge-events-response.json \
+  --action-request-id adapter-import-001
+```
+
+`event-state` 会返回下一次 cursor、是否应立即继续拉取、匹配的 `action.updated` 摘要、收到的 bundle id 数组和 transfer 事件数量。它不会替代 `actions.results`；终态事件出现后仍应按 `action_request_id` 精确查询结果。
+
 事件处理建议：
 
 - `action.updated` 里的 `request_id` 是最稳定的关联键。

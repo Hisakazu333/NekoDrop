@@ -645,6 +645,79 @@ test("generic adapter sample derives the next event cursor", () => {
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample summarizes event poll responses for a watch loop", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-event-state-"));
+  const responsePath = join(tempRoot, "events-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    events_next_after_id: "bridge-event-45",
+    events_cursor_state: "ok",
+    events_has_more: true,
+    events: [
+      {
+        kind: "action.updated",
+        payload: {
+          request_id: "adapter-import-001",
+          action_kind: "bundle.import",
+          status: "running",
+          reason: null,
+          bundle_id: "bundle_workspace_demo",
+          bundle_type: "workspace"
+        }
+      },
+      {
+        kind: "action.updated",
+        payload: {
+          request_id: "adapter-import-001",
+          action_kind: "bundle.import",
+          status: "conflict",
+          reason: "bundle_import_conflict",
+          bundle_id: "bundle_workspace_demo",
+          bundle_type: "workspace"
+        }
+      },
+      {
+        kind: "bundle.received",
+        payload: {
+          bundle_id: "bundle_workspace_demo"
+        }
+      },
+      {
+        kind: "transfer.updated",
+        payload: {
+          transfer_id: "transfer-1",
+          phase: "completed"
+        }
+      }
+    ]
+  }));
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "event-state",
+      "--response",
+      responsePath,
+      "--action-request-id",
+      "adapter-import-001"
+    ],
+    { encoding: "utf8" }
+  );
+  const state = JSON.parse(stdout);
+
+  assert.equal(state.cursor.after_event_id, "bridge-event-45");
+  assert.equal(state.has_more, true);
+  assert.equal(state.should_poll_again, true);
+  assert.equal(state.action_events.length, 2);
+  assert.equal(state.action_state.lifecycle_status, "conflict");
+  assert.equal(state.action_state.final, true);
+  assert.equal(state.action_state.next_action, "query_result_and_choose_import_conflict_strategy");
+  assert.deepEqual(state.received_bundle_ids, ["bundle_workspace_demo"]);
+  assert.equal(state.transfer_event_count, 1);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample derives action state from precise result lookups", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-action-state-"));
   const responsePath = join(tempRoot, "results-response.json");
