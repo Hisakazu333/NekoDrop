@@ -495,6 +495,7 @@ function buildAdapterDescriptor(flags) {
     ? toArray(flags.type).map(requireKnownType)
     : Object.keys(TYPE_CONFIG);
   const uniqueTypes = [...new Set(bundleTypes)];
+  const capability = requireDescriptorCapability(flags.capability ?? "both");
   const bridgeScopes = toArray(flags.scope).length > 0
     ? toArray(flags.scope)
     : FULL_LOOP_BRIDGE_SCOPES;
@@ -510,8 +511,8 @@ function buildAdapterDescriptor(flags) {
     },
     bundle_types: uniqueTypes.map((type) => ({
       bundle_type: type,
-      can_export: true,
-      can_import: true,
+      can_export: capability !== "import",
+      can_import: capability !== "export",
       permission_scope: TYPE_CONFIG[type].scope,
       write_target: TYPE_CONFIG[type].target,
       sensitive: SENSITIVE_BUNDLE_TYPES.has(type),
@@ -1377,6 +1378,11 @@ function requireConflictStrategy(strategy) {
   throw new Error("--conflict-strategy must be reject, rename, or skip_conflicts");
 }
 
+function requireDescriptorCapability(capability) {
+  if (["export", "import", "both"].includes(capability)) return capability;
+  throw new Error("--capability must be export, import, or both");
+}
+
 function assertSafeBundleId(bundleId) {
   if (!/^[A-Za-z0-9._-]+$/.test(bundleId) || bundleId.includes("..")) {
     throw new Error(`unsafe bundle id: ${bundleId}`);
@@ -1429,7 +1435,7 @@ function usage() {
   node generic-adapter.mjs request rollback --bundle-id ID
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results --action-request-id ACTION_REQUEST_ID
-  node generic-adapter.mjs descriptor --type session --type workspace
+  node generic-adapter.mjs descriptor --type session --type workspace --capability both
   node generic-adapter.mjs validate-descriptor --descriptor adapter.json
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
