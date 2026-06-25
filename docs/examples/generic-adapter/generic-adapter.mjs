@@ -890,6 +890,7 @@ function buildWorkflow(flags) {
         "Run export on the sending device.",
         "POST bridge requests on the device that owns that phase.",
         "After each action request, observe action.updated events, then query actions.results with the same action_request_id.",
+        "If a local bridge POST times out before a final result, retry the same action kind with the same request_id; do not mint a new request_id for the same user action.",
         "After import or rollback, query bundle.detail and derive receipt state from has_import_receipt, can_request_rollback, rollback_file_count, rolled_back_file_count, and rollback_blocking_reason.",
         "Treat queued as pending, running as in-progress, and succeeded / failed / conflict / cancelled as final results.",
         "Sensitive bundle types require trusted authenticated targets; this sample refuses --require-trusted-device false for skill, session, workspace, and agent_profile.",
