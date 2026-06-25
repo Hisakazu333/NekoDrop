@@ -2202,9 +2202,9 @@ fn push_local_bridge_pending_action_queued(
         LocalBridgeActionLifecycleStatus::Queued,
         None,
         "local bridge action is queued for the desktop runtime",
-        None,
-        None,
-        None,
+        local_bridge_pending_action_bundle_id(&action),
+        local_bridge_pending_action_bundle_type(&action),
+        local_bridge_pending_action_target_device_id(&action),
         now_ms,
     );
     let mut actions = runtime
@@ -6524,6 +6524,8 @@ mod tests {
         assert_eq!(results[0].request_id, "bridge-request-send");
         assert_eq!(results[0].status, "queued");
         assert_eq!(results[0].lifecycle_status.as_deref(), Some("queued"));
+        assert_eq!(results[0].bundle_type.as_deref(), Some("skill"));
+        assert_eq!(results[0].target_device_id.as_deref(), Some("device-a"));
         assert!(results[0].bundle_root.is_none());
         let events = runtime.events.lock().unwrap();
         assert_eq!(events.len(), 1);
@@ -6534,6 +6536,7 @@ mod tests {
                     event.status,
                     nekolink_protocol::LocalBridgeActionLifecycleStatus::Queued
                 );
+                assert_eq!(event.bundle_type, Some(BundleType::Skill));
                 assert_eq!(event.target_device_id.as_deref(), Some("device-a"));
             }
             other => panic!("expected action.updated event, got {other:?}"),
@@ -6657,6 +6660,24 @@ mod tests {
             }
             other => panic!("expected import bundle action, got {other:?}"),
         }
+        drop(actions);
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-request-import");
+        assert_eq!(results[0].status, "queued");
+        assert_eq!(results[0].bundle_id.as_deref(), Some("bundle_1234567890"));
+        assert_eq!(results[0].bundle_type.as_deref(), Some("skill"));
+        assert!(results[0].import_receipt_path.is_none());
+        let events = runtime.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => {
+                assert_eq!(event.request_id, "bridge-request-import");
+                assert_eq!(event.bundle_id.as_deref(), Some("bundle_1234567890"));
+                assert_eq!(event.bundle_type, Some(BundleType::Skill));
+            }
+            other => panic!("expected action.updated event, got {other:?}"),
+        }
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -6714,6 +6735,22 @@ mod tests {
                 assert_eq!(action.requested_at_ms, 1_500);
             }
             other => panic!("expected rollback bundle action, got {other:?}"),
+        }
+        drop(actions);
+        let results = list_local_bridge_pending_action_results_at(&runtime).unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].request_id, "bridge-request-rollback");
+        assert_eq!(results[0].status, "queued");
+        assert_eq!(results[0].bundle_id.as_deref(), Some("bundle_1234567890"));
+        let events = runtime.events.lock().unwrap();
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(event) => {
+                assert_eq!(event.request_id, "bridge-request-rollback");
+                assert_eq!(event.bundle_id.as_deref(), Some("bundle_1234567890"));
+                assert_eq!(event.bundle_type, None);
+            }
+            other => panic!("expected action.updated event, got {other:?}"),
         }
 
         fs::remove_dir_all(dir).unwrap();
