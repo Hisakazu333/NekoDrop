@@ -7877,6 +7877,103 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_event_poll_treats_hidden_cursor_as_missing() {
+        let dir = unique_bundle_temp_dir("local-bridge-hidden-event-cursor");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.authorizations.lock().unwrap().extend([
+            local_bridge_authorization(
+                "sender-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ),
+            local_bridge_authorization(
+                "importer-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ),
+        ]);
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-import-hidden".to_string(),
+                    request_id: "bridge-import-1".to_string(),
+                    action_kind: "bundle.import".to_string(),
+                    client_id: "importer-app".to_string(),
+                    client_app_kind: Some("agent".to_string()),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "import running".to_string(),
+                    bundle_id: Some("bundle_1234567890".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: None,
+                    updated_at_ms: 2_000,
+                },
+            ),
+        )
+        .unwrap();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-send-visible".to_string(),
+                    request_id: "bridge-send-1".to_string(),
+                    action_kind: "bundle.send".to_string(),
+                    client_id: "sender-app".to_string(),
+                    client_app_kind: Some("agent".to_string()),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "send running".to_string(),
+                    bundle_id: Some("bundle_send".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: Some("device-a".to_string()),
+                    updated_at_ms: 2_100,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-hidden-cursor",
+                "client": {
+                    "client_id": "sender-app",
+                    "display_name": "Sender App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": "bridge-action-import-hidden",
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert!(response.events.is_empty());
+        assert_eq!(response.events_cursor_state, "missing");
+        assert_eq!(response.events_last_id, None);
+        assert_eq!(response.events_next_after_id, None);
+        assert!(!response.events_has_more);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
     fn authorized_local_bridge_client_can_poll_runtime_events() {
         let dir = unique_bundle_temp_dir("local-bridge-events-poll");
         let staging_root = dir.join("bundle_staging");
