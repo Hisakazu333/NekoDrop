@@ -2049,13 +2049,27 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleSend,
             now_ms,
         ) {
-            push_local_bridge_pending_action_queued(
-                runtime,
-                LocalBridgePendingAction::SendBundle(
-                    local_bridge_pending_send_action_from_request(request, now_ms)?,
-                ),
-                now_ms,
-            )?;
+            let action = LocalBridgePendingAction::SendBundle(
+                local_bridge_pending_send_action_from_request(request, now_ms)?,
+            );
+            if let Some(result) = local_bridge_existing_action_result_for_retry(
+                &pending_actions,
+                &action_results,
+                &action,
+            ) {
+                mark_local_bridge_authorization_used(
+                    runtime,
+                    request.client.as_ref(),
+                    LocalBridgePermissionScope::BundleSend,
+                    now_ms,
+                )?;
+                return Ok(local_bridge_action_results_response(
+                    request.request_id.clone(),
+                    request.client.clone(),
+                    vec![result],
+                ));
+            }
+            push_local_bridge_pending_action_queued(runtime, action, now_ms)?;
             mark_local_bridge_authorization_used(
                 runtime,
                 request.client.as_ref(),
@@ -2077,13 +2091,27 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleImportRequest,
             now_ms,
         ) {
-            push_local_bridge_pending_action_queued(
-                runtime,
-                LocalBridgePendingAction::ImportBundle(
-                    local_bridge_pending_import_action_from_request(request, now_ms)?,
-                ),
-                now_ms,
-            )?;
+            let action = LocalBridgePendingAction::ImportBundle(
+                local_bridge_pending_import_action_from_request(request, now_ms)?,
+            );
+            if let Some(result) = local_bridge_existing_action_result_for_retry(
+                &pending_actions,
+                &action_results,
+                &action,
+            ) {
+                mark_local_bridge_authorization_used(
+                    runtime,
+                    request.client.as_ref(),
+                    LocalBridgePermissionScope::BundleImportRequest,
+                    now_ms,
+                )?;
+                return Ok(local_bridge_action_results_response(
+                    request.request_id.clone(),
+                    request.client.clone(),
+                    vec![result],
+                ));
+            }
+            push_local_bridge_pending_action_queued(runtime, action, now_ms)?;
             mark_local_bridge_authorization_used(
                 runtime,
                 request.client.as_ref(),
@@ -2105,13 +2133,27 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleImportRequest,
             now_ms,
         ) {
-            push_local_bridge_pending_action_queued(
-                runtime,
-                LocalBridgePendingAction::RollbackBundleImport(
-                    local_bridge_pending_rollback_action_from_request(request, now_ms)?,
-                ),
-                now_ms,
-            )?;
+            let action = LocalBridgePendingAction::RollbackBundleImport(
+                local_bridge_pending_rollback_action_from_request(request, now_ms)?,
+            );
+            if let Some(result) = local_bridge_existing_action_result_for_retry(
+                &pending_actions,
+                &action_results,
+                &action,
+            ) {
+                mark_local_bridge_authorization_used(
+                    runtime,
+                    request.client.as_ref(),
+                    LocalBridgePermissionScope::BundleImportRequest,
+                    now_ms,
+                )?;
+                return Ok(local_bridge_action_results_response(
+                    request.request_id.clone(),
+                    request.client.clone(),
+                    vec![result],
+                ));
+            }
+            push_local_bridge_pending_action_queued(runtime, action, now_ms)?;
             mark_local_bridge_authorization_used(
                 runtime,
                 request.client.as_ref(),
@@ -2220,6 +2262,24 @@ fn push_local_bridge_pending_action_queued(
     runtime.pending_actions_signal.notify_one();
     push_local_bridge_action_lifecycle_result(runtime, result)?;
     Ok(())
+}
+
+fn local_bridge_existing_action_result_for_retry(
+    pending_actions: &[LocalBridgePendingAction],
+    action_results: &[LocalBridgePendingActionResult],
+    action: &LocalBridgePendingAction,
+) -> Option<LocalBridgePendingActionResultDto> {
+    if pending_actions
+        .iter()
+        .any(|pending_action| local_bridge_pending_actions_are_same_request(pending_action, action))
+    {
+        return None;
+    }
+    action_results
+        .iter()
+        .rev()
+        .find(|result| local_bridge_action_result_matches_action(result, action))
+        .map(|result| local_bridge_pending_action_result_to_dto(result, false))
 }
 
 fn local_bridge_pending_actions_are_same_request(
@@ -3561,6 +3621,16 @@ fn local_bridge_action_result_matches_client(
     client: &LocalBridgeClientIdentity,
 ) -> bool {
     result.client_id == client.client_id && result.client_app_kind == client.app_kind
+}
+
+fn local_bridge_action_result_matches_action(
+    result: &LocalBridgePendingActionResult,
+    action: &LocalBridgePendingAction,
+) -> bool {
+    result.request_id == local_bridge_pending_action_request_id(action)
+        && result.action_kind == local_bridge_pending_action_kind(action)
+        && result.client_id == local_bridge_pending_action_client(action).client_id
+        && result.client_app_kind == local_bridge_pending_action_client(action).app_kind
 }
 
 fn local_bridge_pending_action_matches_client(
@@ -6897,6 +6967,109 @@ mod tests {
         assert!(results
             .iter()
             .any(|result| result.action_kind == "bundle.import"));
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authorized_local_bridge_mutation_retry_returns_existing_terminal_result() {
+        let dir = unique_bundle_temp_dir("local-bridge-runtime-terminal-retry");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "local-agent-app",
+                &[LocalBridgePermissionScope::BundleImportRequest],
+                1_000,
+                5_000,
+            ));
+        runtime
+            .pending_action_results
+            .lock()
+            .unwrap()
+            .push(LocalBridgePendingActionResult {
+                request_id: "bridge-request-import".to_string(),
+                action_kind: "bundle.import".to_string(),
+                client_id: "local-agent-app".to_string(),
+                client_display_name: "Local Agent App".to_string(),
+                client_app_kind: Some("agent".to_string()),
+                status: "completed".to_string(),
+                lifecycle_status: Some("succeeded".to_string()),
+                reason: None,
+                message: "local bridge bundle was imported by the desktop runtime".to_string(),
+                bundle_id: Some("bundle_1234567890".to_string()),
+                bundle_type: Some("skill".to_string()),
+                bundle_root: None,
+                target_device_id: None,
+                require_trusted_device: None,
+                conflict_strategy: Some("rename".to_string()),
+                skipped_file_count: 0,
+                import_receipt_path: Some(
+                    "/private/local/nekodrop/imports/bundle_1234567890/receipt.json".to_string(),
+                ),
+                rollback_file_count: 2,
+                rollback_blocking_reason: None,
+                rolled_back_file_count: 0,
+                requested_at_ms: 1_500,
+                claimed_at_ms: 2_000,
+            });
+        let import_request = serde_json::json!({
+            "kind": "bundle.import",
+            "payload": {
+                "request_id": "bridge-request-import",
+                "client": {
+                    "client_id": "local-agent-app",
+                    "display_name": "Renamed Agent App",
+                    "app_kind": "agent"
+                },
+                "staged_bundle_id": "bundle_1234567890",
+                "expected_bundle_type": "skill",
+                "conflict_strategy": "rename"
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &import_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.message, "local bridge action result snapshot");
+        assert!(runtime.pending_actions.lock().unwrap().is_empty());
+        assert_eq!(response.action_results.len(), 1);
+        assert_eq!(
+            response.action_results[0].request_id,
+            "bridge-request-import"
+        );
+        assert_eq!(response.action_results[0].action_kind, "bundle.import");
+        assert_eq!(response.action_results[0].status, "completed");
+        assert_eq!(
+            response.action_results[0].lifecycle_status.as_deref(),
+            Some("succeeded")
+        );
+        assert_eq!(
+            response.action_results[0].bundle_id.as_deref(),
+            Some("bundle_1234567890")
+        );
+        assert!(response.action_results[0].import_receipt_path.is_none());
+        assert!(response.action_results[0].has_import_receipt);
+        assert!(response.action_results[0].can_request_rollback);
+        assert_eq!(
+            runtime.authorizations.lock().unwrap()[0].last_used_at_ms,
+            2_500
+        );
 
         fs::remove_dir_all(dir).unwrap();
     }
