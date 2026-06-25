@@ -14,11 +14,11 @@ NekoLink 安全层已经进入桌面传输主线：
 - encrypted session 路径的文件 payload 已经切成加密 file frames
 - `nekolink-protocol` 已有 session identity binding 的 canonical payload hash
 
-这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。但还有三个边界没有收口：
+这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。bundle、local bridge 和通用 adapter 的基础闭环也已经接入，但还有三个边界没有收口：
 
-- session 还没有长期设备身份密钥签名和桌面主线校验
 - legacy plain file stream 仍然保留，需要迁移或拒绝策略
-- bundle/local bridge 还没有形成“上层应用请求、用户确认、导入回滚”的完整闭环
+- 真实上层应用 adapter 还没有接入，当前只有通用样例
+- local bridge 还是事件轮询和短等待，还没有真正长连接订阅
 
 所以现在不应该直接跳到 iroh、跨公网或 Agent 上层能力。跨网络 transport 解决的是“怎么连”，不能替代加密、权限和导入边界。
 
@@ -57,13 +57,13 @@ NekoLink 安全层已经进入桌面传输主线：
 
 bundle 要解决的是“上层数据怎么传”，不是“网络怎么连”。skills、session、workspace、agent profile 不能当普通散文件发，因为接收端需要知道它们是什么、能不能导入、会改哪些本机状态。
 
-仓库里已经有 bundle manifest、checksums、permissions、staging 和手动创建入口。下一阶段要补的是闭环：
+仓库里已经有 bundle manifest、checksums、permissions、staging、手动创建入口、导入计划、冲突策略、NekoDrop 本机导入区、import receipt 和保守撤回。通用 adapter 样例已经演示导出、bridge 请求、adapter-owned 导入和 adapter 私有 receipt 回滚。下一阶段要补的是把这些样例接到真实上层应用：
 
-- staging 生命周期：列表、删除、过期清理
-- 收件预览：可导入、仅保存、不可导入原因
-- 导入确认：必须由用户或授权上层应用触发
-- 失败回滚：导入失败不能留下半套配置
-- 样例 bundle：session、skill、workspace、agent_profile
+- 应用自己的导出入口
+- 应用自己的导入确认和事务写入
+- 应用自己的冲突策略
+- 应用自己的回滚记录
+- 上层数据版本迁移
 
 主要风险：
 
@@ -92,15 +92,12 @@ local application
   -> paired device
 ```
 
-仓库里已经有 `LocalBridgeRequest` / `LocalBridgeEvent` 模型、权限 scope 和内部只读 handler skeleton。下一阶段要补的是 runtime 和授权：
+仓库里已经有 `LocalBridgeRequest` / `LocalBridgeEvent` 模型、权限 scope、localhost runtime、授权码、持久化授权、待执行队列、后台 worker、动作结果和 `events.poll`。下一阶段要补的是更稳定的订阅和真实应用接入：
 
-- localhost 或本机 IPC runtime
-- 授权请求和确认 UI
-- 授权码或短期 token
-- 持久化授权记录
-- bundle 发送入口
-- staged bundle 导入请求
-- transfer status 订阅
+- 事件订阅或更低成本的长轮询
+- 上层 adapter 对动作结果、receipt 和回滚状态的持续观察
+- 本机接入 UI 的授权、待执行、结果和失败原因收口
+- 真实应用 adapter 的最小接入样例
 
 暂不开放：
 
