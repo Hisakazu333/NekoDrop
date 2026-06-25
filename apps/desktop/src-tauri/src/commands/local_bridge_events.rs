@@ -52,7 +52,7 @@ pub(super) fn local_bridge_events_after(
         let event_id = local_bridge_event_id(event).to_string();
         if output.len() >= limit {
             has_more = true;
-            break;
+            continue;
         }
         output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
         last_event_id = Some(event_id.clone());
