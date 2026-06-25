@@ -543,6 +543,7 @@ function buildRequest(kind, flags) {
         request_id: flags["request-id"] ?? `adapter-events-${Date.now()}`,
         client: CLIENT,
         after_event_id: flags["after-event-id"] ?? null,
+        action_request_id: flags["action-request-id"] ?? null,
         limit: Number(flags.limit ?? 20),
         timeout_ms: flags["timeout-ms"] === undefined ? undefined : Number(flags["timeout-ms"])
       }
@@ -897,14 +898,16 @@ function eventStateFromEventsResponse(flags) {
     .filter((event) => event.kind === "bundle.received" && event.payload)
     .map((event) => event.payload);
   const latestAction = actionEvents.at(-1) ?? null;
+  const latestActionState = latestAction ? actionEventState(latestAction) : null;
   return {
     cursor: nextCursorFromResponse(flags),
     event_count: events.length,
     has_more: Boolean(response.events_has_more),
     should_poll_again: Boolean(response.events_has_more) || response.events_cursor_state === "missing",
     action_request_id: actionRequestId,
-    action_state: latestAction ? actionEventState(latestAction) : null,
+    action_state: latestActionState,
     action_events: actionEvents.map(actionEventState),
+    should_query_result: Boolean(latestActionState?.final),
     transfer_event_count: transferEvents.length,
     bundle_event_count: bundleEvents.length,
     received_bundle_ids: bundleEvents

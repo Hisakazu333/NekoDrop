@@ -6,6 +6,7 @@ pub(super) fn local_bridge_events_after(
     events: &[LocalBridgeEvent],
     client: Option<&LocalBridgeClientIdentity>,
     after_event_id: Option<&str>,
+    action_request_id: Option<&str>,
     limit: usize,
     can_read_bundles: bool,
     can_read_transfers: bool,
@@ -26,6 +27,7 @@ pub(super) fn local_bridge_events_after(
             can_send_bundles,
             can_import_bundles,
             client,
+            action_request_id,
         );
         if !after_cursor {
             after_cursor =
@@ -79,7 +81,21 @@ fn local_bridge_event_is_allowed(
     can_send_bundles: bool,
     can_import_bundles: bool,
     client: Option<&LocalBridgeClientIdentity>,
+    action_request_id: Option<&str>,
 ) -> bool {
+    if let Some(action_request_id) = action_request_id {
+        return match event {
+            LocalBridgeEvent::ActionUpdated(event) if event.request_id == action_request_id => {
+                local_bridge_action_event_is_allowed(
+                    event,
+                    can_send_bundles,
+                    can_import_bundles,
+                    client,
+                )
+            }
+            _ => false,
+        };
+    }
     match event {
         LocalBridgeEvent::BundleReceived(_) => can_read_bundles,
         LocalBridgeEvent::BundleSendPreflight(event) => {
@@ -88,23 +104,35 @@ fn local_bridge_event_is_allowed(
                     event.client_id == client.client_id && event.client_app_kind == client.app_kind
                 })
         }
-        LocalBridgeEvent::ActionUpdated(event) => match event.action_kind.as_str() {
-            "bundle.send" => {
-                can_send_bundles
-                    && client.is_some_and(|client| {
-                        event.client_id == client.client_id
-                            && event.client_app_kind == client.app_kind
-                    })
-            }
-            "bundle.import" | "bundle.rollback" => {
-                can_import_bundles
-                    && client.is_some_and(|client| {
-                        event.client_id == client.client_id
-                            && event.client_app_kind == client.app_kind
-                    })
-            }
-            _ => false,
-        },
+        LocalBridgeEvent::ActionUpdated(event) => local_bridge_action_event_is_allowed(
+            event,
+            can_send_bundles,
+            can_import_bundles,
+            client,
+        ),
         LocalBridgeEvent::TransferUpdated(_) => can_read_transfers,
+    }
+}
+
+fn local_bridge_action_event_is_allowed(
+    event: &nekolink_protocol::LocalBridgeActionUpdatedEvent,
+    can_send_bundles: bool,
+    can_import_bundles: bool,
+    client: Option<&LocalBridgeClientIdentity>,
+) -> bool {
+    match event.action_kind.as_str() {
+        "bundle.send" => {
+            can_send_bundles
+                && client.is_some_and(|client| {
+                    event.client_id == client.client_id && event.client_app_kind == client.app_kind
+                })
+        }
+        "bundle.import" | "bundle.rollback" => {
+            can_import_bundles
+                && client.is_some_and(|client| {
+                    event.client_id == client.client_id && event.client_app_kind == client.app_kind
+                })
+        }
+        _ => false,
     }
 }
