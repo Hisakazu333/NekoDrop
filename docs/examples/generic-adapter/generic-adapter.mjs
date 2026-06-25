@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync
 } from "node:fs";
-import { basename, dirname, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 const BUNDLE_SCHEMA = "nekolink.bundle.v1";
 const CHECKSUM_ALGORITHM = "sha256";
@@ -49,6 +49,10 @@ async function main() {
   }
   if (command === "import-target") {
     printJson(importBundleIntoAdapterTarget(parseFlags(args)));
+    return;
+  }
+  if (command === "rollback-target") {
+    printJson(rollbackAdapterTargetImport(parseFlags(args)));
     return;
   }
   if (command === "request") {
@@ -249,11 +253,19 @@ function importBundleIntoAdapterTarget(flags) {
     target_path: target,
     conflict_strategy: strategy,
     imported_manifest_paths: imported,
+    imported_files: files
+      .filter((file) => imported.includes(file.manifest_path))
+      .map((file) => ({
+        manifest_path: file.manifest_path,
+        size: file.size,
+        sha256: manifest.files.find((manifestFile) => manifestFile.path === file.manifest_path)?.sha256 ?? null
+      })),
     skipped_manifest_paths: skipped,
     imported_at: new Date().toISOString()
   };
-  const receiptPath = join(target, ".generic-adapter-import-receipt.json");
+  const receiptPath = adapterImportReceiptPath(target, manifest.bundle_id, strategy);
   writeJson(receiptPath, receipt);
+  writeJson(join(target, ".generic-adapter-latest-import-receipt.json"), receipt);
   return {
     bundle_id: manifest.bundle_id,
     bundle_type: manifest.bundle_type,
@@ -268,6 +280,140 @@ function importBundleIntoAdapterTarget(flags) {
     conflicts: conflicts.map((file) => file.manifest_path),
     receipt_path: receiptPath
   };
+}
+
+function rollbackAdapterTargetImport(flags) {
+  const receiptPath = requireFlag(flags, "receipt");
+  if (!existsSync(receiptPath) || !statSync(receiptPath).isFile()) {
+    throw new Error(`--receipt must be an import receipt file: ${receiptPath}`);
+  }
+  const receipt = readJson(receiptPath);
+  validateAdapterImportReceipt(receipt);
+  const target = receipt.target_path;
+  const resolvedTarget = resolve(target);
+  if (!pathIsInside(resolve(receiptPath), resolvedTarget)) {
+    throw new Error("adapter import receipt must live inside its target_path");
+  }
+  if (!existsSync(target) || !statSync(target).isDirectory()) {
+    return {
+      bundle_id: receipt.bundle_id,
+      bundle_type: receipt.bundle_type,
+      target_path: target,
+      status: "blocked",
+      reason: "target_missing",
+      removed_file_count: 0,
+      removed_manifest_paths: [],
+      skipped_manifest_paths: receipt.skipped_manifest_paths
+    };
+  }
+
+  const receiptFiles = adapterReceiptImportedFiles(receipt);
+  const removed = [];
+  const blocked = [];
+  for (const file of receiptFiles) {
+    const relativePath = file.manifest_path.replace(/^files\//, "");
+    const destination = join(target, relativePath);
+    if (!pathIsInside(resolve(destination), resolvedTarget)) {
+      blocked.push(file.manifest_path);
+      continue;
+    }
+    if (!existsSync(destination)) {
+      blocked.push(file.manifest_path);
+      continue;
+    }
+    if (!statSync(destination).isFile()) {
+      blocked.push(file.manifest_path);
+      continue;
+    }
+    const bytes = readFileSync(destination);
+    if (file.size !== null && bytes.byteLength !== file.size) {
+      blocked.push(file.manifest_path);
+      continue;
+    }
+    if (file.sha256 !== null && sha256(bytes) !== file.sha256) {
+      blocked.push(file.manifest_path);
+      continue;
+    }
+  }
+  if (blocked.length > 0) {
+    return {
+      bundle_id: receipt.bundle_id,
+      bundle_type: receipt.bundle_type,
+      target_path: target,
+      status: "blocked",
+      reason: "imported_file_missing_changed_or_not_file",
+      removed_file_count: 0,
+      removed_manifest_paths: [],
+      skipped_manifest_paths: receipt.skipped_manifest_paths,
+      blocked_manifest_paths: blocked
+    };
+  }
+
+  for (const file of receiptFiles) {
+    const relativePath = file.manifest_path.replace(/^files\//, "");
+    const destination = join(target, relativePath);
+    if (!pathIsInside(resolve(destination), resolvedTarget)) {
+      throw new Error(`rollback destination escaped target: ${file.manifest_path}`);
+    }
+    rmSync(destination);
+    removed.push(file.manifest_path);
+  }
+  const rollbackReceipt = {
+    ...receipt,
+    rolled_back_at: new Date().toISOString(),
+    removed_manifest_paths: removed
+  };
+  writeJson(join(target, ".generic-adapter-rollback-receipt.json"), rollbackReceipt);
+  return {
+    bundle_id: receipt.bundle_id,
+    bundle_type: receipt.bundle_type,
+    target_path: target,
+    status: "rolled_back",
+    reason: null,
+    removed_file_count: removed.length,
+    removed_manifest_paths: removed,
+    skipped_manifest_paths: receipt.skipped_manifest_paths
+  };
+}
+
+function validateAdapterImportReceipt(receipt) {
+  if (receipt.schema !== "generic.adapter.import_receipt.v1") {
+    throw new Error(`unsupported adapter import receipt schema: ${receipt.schema}`);
+  }
+  assertSafeBundleId(receipt.bundle_id);
+  requireKnownType(receipt.bundle_type);
+  if (typeof receipt.target_path !== "string" || receipt.target_path.trim() === "") {
+    throw new Error("adapter import receipt target_path is required");
+  }
+  if (!Array.isArray(receipt.imported_manifest_paths) || !Array.isArray(receipt.skipped_manifest_paths)) {
+    throw new Error("adapter import receipt must include imported and skipped manifest paths");
+  }
+  for (const manifestPath of [
+    ...receipt.imported_manifest_paths,
+    ...receipt.skipped_manifest_paths
+  ]) {
+    assertSafeBundlePath(manifestPath);
+  }
+}
+
+function adapterReceiptImportedFiles(receipt) {
+  if (Array.isArray(receipt.imported_files)) {
+    return receipt.imported_files.map((file) => {
+      assertSafeBundlePath(file.manifest_path);
+      return {
+        manifest_path: file.manifest_path,
+        size: Number.isFinite(file.size) ? Number(file.size) : null,
+        sha256: typeof file.sha256 === "string" && /^[a-f0-9]{64}$/.test(file.sha256)
+          ? file.sha256
+          : null
+      };
+    });
+  }
+  return receipt.imported_manifest_paths.map((manifestPath) => ({
+    manifest_path: manifestPath,
+    size: null,
+    sha256: null
+  }));
 }
 
 function validateImportableBundle(manifest, checksums, permissions, expectedType) {
@@ -310,6 +456,19 @@ function adapterTargetPath(targetRoot, manifest, strategy) {
     if (!existsSync(candidate)) return candidate;
   }
   throw new Error(`could not choose a renamed target for ${manifest.bundle_id}`);
+}
+
+function adapterImportReceiptPath(target, bundleId, strategy) {
+  const prefix = `.generic-adapter-import-receipt-${bundleId}-${strategy}-${Date.now()}`;
+  let candidate = join(target, `${prefix}.json`);
+  for (let index = 2; existsSync(candidate); index += 1) {
+    candidate = join(target, `${prefix}-${index}.json`);
+  }
+  return candidate;
+}
+
+function pathIsInside(child, parent) {
+  return child === parent || child.startsWith(`${parent}${sep}`);
 }
 
 function buildRequest(kind, flags) {
@@ -999,6 +1158,7 @@ function usage() {
   console.log(`Usage:
   node generic-adapter.mjs export --source DIR --output DIR --bundle-id ID --type session --name NAME
   node generic-adapter.mjs import-target --bundle-root DIR --target-root DIR --type session --conflict-strategy reject
+  node generic-adapter.mjs rollback-target --receipt PATH
   node generic-adapter.mjs request auth
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
   node generic-adapter.mjs request detail --staged-bundle-id ID
