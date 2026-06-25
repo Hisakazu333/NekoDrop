@@ -15,7 +15,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs
 ```bash
 node docs/examples/generic-adapter/generic-adapter.mjs descriptor \
   --type session \
-  --type workspace > adapter.json
+  --type workspace \
+  --capability both > adapter.json
 
 node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
   --descriptor adapter.json
@@ -30,7 +31,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth \
   --descriptor adapter.json
 ```
 
-传了 `--descriptor` 后，`request send` 和 `request import` 也会检查 descriptor 是否声明了对应 `bundle_type`，避免实际请求和能力声明分叉。
+传了 `--descriptor` 后，`request send` 和 `request import` 会检查 descriptor 是否声明了对应 `bundle_type`，也会检查 `can_export` / `can_import`。只会导入的 adapter 不能发起发送请求，只会导出的 adapter 不能发起导入请求。
 
 ## 导出
 

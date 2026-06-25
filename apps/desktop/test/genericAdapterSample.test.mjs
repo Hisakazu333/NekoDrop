@@ -541,6 +541,107 @@ test("generic adapter sample gates send and import types by descriptor", () => {
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample gates send and import capabilities by descriptor", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-capabilities-"));
+  const importOnlyDescriptorPath = join(tempRoot, "import-only.json");
+  const exportOnlyDescriptorPath = join(tempRoot, "export-only.json");
+  const importOnlyDescriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "descriptor", "--type", "workspace", "--capability", "import"],
+    { encoding: "utf8" }
+  ));
+  const exportOnlyDescriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "descriptor", "--type", "workspace", "--capability", "export"],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(importOnlyDescriptorPath, JSON.stringify(importOnlyDescriptor));
+  writeFileSync(exportOnlyDescriptorPath, JSON.stringify(exportOnlyDescriptor));
+
+  assert.equal(importOnlyDescriptor.bundle_types[0].can_export, false);
+  assert.equal(importOnlyDescriptor.bundle_types[0].can_import, true);
+  assert.equal(exportOnlyDescriptor.bundle_types[0].can_export, true);
+  assert.equal(exportOnlyDescriptor.bundle_types[0].can_import, false);
+
+  const allowedImport = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "import",
+      "--descriptor",
+      importOnlyDescriptorPath,
+      "--staged-bundle-id",
+      "bundle_workspace",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(allowedImport.payload.expected_bundle_type, "workspace");
+
+  const allowedSend = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "send",
+      "--descriptor",
+      exportOnlyDescriptorPath,
+      "--bundle-root",
+      "/tmp/bundle_workspace",
+      "--target-device-id",
+      "neko-device-target",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(allowedSend.payload.bundle_type, "workspace");
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "request",
+        "send",
+        "--descriptor",
+        importOnlyDescriptorPath,
+        "--bundle-root",
+        "/tmp/bundle_workspace",
+        "--target-device-id",
+        "neko-device-target",
+        "--type",
+        "workspace"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /descriptor does not allow exporting workspace/
+  );
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "request",
+        "import",
+        "--descriptor",
+        exportOnlyDescriptorPath,
+        "--staged-bundle-id",
+        "bundle_workspace",
+        "--type",
+        "workspace"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /descriptor does not allow importing workspace/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample rejects unsafe adapter descriptors", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-invalid-"));
   const descriptorPath = join(tempRoot, "adapter.json");
