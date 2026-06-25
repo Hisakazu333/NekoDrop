@@ -8,6 +8,21 @@
 node docs/examples/generic-adapter/generic-adapter.mjs
 ```
 
+## Descriptor
+
+真实 adapter 接入前先声明自己能处理什么。descriptor 不绑定具体应用目录，只说明 client identity、bridge scope、bundle 类型和安全边界。
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs descriptor \
+  --type session \
+  --type workspace > adapter.json
+
+node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
+  --descriptor adapter.json
+```
+
+敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：

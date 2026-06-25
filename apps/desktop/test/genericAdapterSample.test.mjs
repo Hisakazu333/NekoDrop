@@ -373,6 +373,72 @@ test("generic adapter sample defaults auth to the smallest read scope", () => {
   assert.deepEqual(request.payload.requested_scopes, ["bundle.read"]);
 });
 
+test("generic adapter sample prints and validates an adapter descriptor", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-"));
+  const descriptorPath = join(tempRoot, "adapter.json");
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "descriptor",
+      "--type",
+      "session",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  );
+  writeFileSync(descriptorPath, stdout);
+
+  const descriptor = JSON.parse(stdout);
+  assert.equal(descriptor.schema, "nekolink.adapter.v1");
+  assert.equal(descriptor.client.client_id, "generic.adapter.sample");
+  assert.deepEqual(
+    descriptor.bridge.requested_scopes,
+    ["bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"]
+  );
+  assert.deepEqual(
+    descriptor.bundle_types.map((entry) => entry.bundle_type),
+    ["session", "workspace"]
+  );
+  assert.equal(descriptor.bundle_types[0].sensitive, true);
+  assert.equal(descriptor.bundle_types[0].requires_trusted_device, true);
+
+  const validation = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+    { encoding: "utf8" }
+  ));
+  assert.equal(validation.schema, "nekolink.adapter.v1");
+  assert.equal(validation.bundle_type_count, 2);
+  assert.deepEqual(validation.sensitive_bundle_types, ["session", "workspace"]);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample rejects unsafe adapter descriptors", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-invalid-"));
+  const descriptorPath = join(tempRoot, "adapter.json");
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "descriptor", "--type", "session"],
+    { encoding: "utf8" }
+  ));
+  descriptor.bundle_types[0].requires_trusted_device = false;
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /session descriptor must mark sensitive and require trusted device/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample rejects untrusted sends for sensitive bundle types", () => {
   assert.throws(
     () => execFileSync(
