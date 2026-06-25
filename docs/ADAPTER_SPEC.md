@@ -55,6 +55,55 @@ adapter 导入时只接收 NekoDrop 已经校验并暂存的 bundle。
 
 adapter 不应该从任意路径读取 bundle。真实导入入口应来自 NekoDrop staging 或授权 local bridge。
 
+## Adapter Descriptor
+
+真实应用接入前应该提供一个 adapter descriptor。它描述这个 adapter 支持哪些 bundle 类型、需要哪些 local bridge scope、哪些类型必须走可信认证设备。descriptor 不写本机绝对路径，也不声明某个应用的内部目录。
+
+最小形状：
+
+```json
+{
+  "schema": "nekolink.adapter.v1",
+  "adapter_id": "generic.adapter.sample",
+  "display_name": "Generic Adapter Sample",
+  "app_kind": "generic",
+  "client": {
+    "client_id": "generic.adapter.sample",
+    "display_name": "Generic Adapter Sample",
+    "app_kind": "generic"
+  },
+  "bridge": {
+    "requested_scopes": [
+      "bundle.read",
+      "bundle.send",
+      "bundle.import.request",
+      "transfer.status.read"
+    ],
+    "default_ttl_seconds": 3600
+  },
+  "bundle_types": [
+    {
+      "bundle_type": "session",
+      "can_export": true,
+      "can_import": true,
+      "permission_scope": "session.import",
+      "write_target": "adapter.session",
+      "sensitive": true,
+      "requires_trusted_device": true,
+      "conflict_strategies": ["reject", "rename", "skip_conflicts"]
+    }
+  ],
+  "security": {
+    "rejects_contains_secrets": true,
+    "strips_local_paths": true,
+    "requires_authenticated_encrypted_session_for_sensitive_bundles": true,
+    "refuses_untrusted_sensitive_send": true
+  }
+}
+```
+
+`skill`、`session`、`workspace` 和 `agent_profile` 必须标记为 `sensitive=true`，并且 `requires_trusted_device=true`。`bridge.requested_scopes` 只能使用 NekoDrop 已定义的 local bridge scope。descriptor 只是能力声明；真实导出、导入和回滚仍由 adapter 自己执行。
+
 ## Local Bridge 请求
 
 本机应用通过 local bridge 请求发送 bundle 时，只提交请求：

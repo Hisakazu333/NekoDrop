@@ -28,6 +28,13 @@ const TYPE_CONFIG = {
   config_snapshot: { scope: "config.import", target: "adapter.config" }
 };
 const SENSITIVE_BUNDLE_TYPES = new Set(["skill", "session", "workspace", "agent_profile"]);
+const ADAPTER_DESCRIPTOR_SCHEMA = "nekolink.adapter.v1";
+const BRIDGE_SCOPE_ALLOWLIST = new Set([
+  "bundle.read",
+  "bundle.send",
+  "bundle.import.request",
+  "transfer.status.read"
+]);
 const DEFAULT_BRIDGE_SCOPES = ["bundle.read"];
 const FULL_LOOP_BRIDGE_SCOPES = [
   "bundle.read",
@@ -58,6 +65,14 @@ async function main() {
   if (command === "request") {
     const [kind, ...rest] = args;
     printJson(buildRequest(kind, parseFlags(rest)));
+    return;
+  }
+  if (command === "descriptor") {
+    printJson(buildAdapterDescriptor(parseFlags(args)));
+    return;
+  }
+  if (command === "validate-descriptor") {
+    printJson(validateAdapterDescriptorFile(parseFlags(args)));
     return;
   }
   if (command === "workflow") {
@@ -473,6 +488,141 @@ function adapterImportReceiptPath(target, bundleId, strategy) {
 
 function pathIsInside(child, parent) {
   return child === parent || child.startsWith(`${parent}${sep}`);
+}
+
+function buildAdapterDescriptor(flags) {
+  const bundleTypes = toArray(flags.type).length > 0
+    ? toArray(flags.type).map(requireKnownType)
+    : Object.keys(TYPE_CONFIG);
+  const uniqueTypes = [...new Set(bundleTypes)];
+  const bridgeScopes = toArray(flags.scope).length > 0
+    ? toArray(flags.scope)
+    : FULL_LOOP_BRIDGE_SCOPES;
+  const descriptor = {
+    schema: ADAPTER_DESCRIPTOR_SCHEMA,
+    adapter_id: flags["adapter-id"] ?? CLIENT.client_id,
+    display_name: flags.name ?? CLIENT.display_name,
+    app_kind: flags["app-kind"] ?? CLIENT.app_kind,
+    client: CLIENT,
+    bridge: {
+      requested_scopes: bridgeScopes,
+      default_ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
+    },
+    bundle_types: uniqueTypes.map((type) => ({
+      bundle_type: type,
+      can_export: true,
+      can_import: true,
+      permission_scope: TYPE_CONFIG[type].scope,
+      write_target: TYPE_CONFIG[type].target,
+      sensitive: SENSITIVE_BUNDLE_TYPES.has(type),
+      requires_trusted_device: SENSITIVE_BUNDLE_TYPES.has(type),
+      conflict_strategies: ["reject", "rename", "skip_conflicts"]
+    })),
+    security: {
+      rejects_contains_secrets: true,
+      strips_local_paths: true,
+      requires_authenticated_encrypted_session_for_sensitive_bundles: true,
+      refuses_untrusted_sensitive_send: true
+    }
+  };
+  validateAdapterDescriptor(descriptor);
+  return descriptor;
+}
+
+function validateAdapterDescriptorFile(flags) {
+  const descriptorPath = requireFlag(flags, "descriptor");
+  const descriptor = readJson(descriptorPath);
+  validateAdapterDescriptor(descriptor);
+  return {
+    schema: descriptor.schema,
+    adapter_id: descriptor.adapter_id,
+    bundle_type_count: descriptor.bundle_types.length,
+    requested_scopes: descriptor.bridge.requested_scopes,
+    sensitive_bundle_types: descriptor.bundle_types
+      .filter((entry) => entry.sensitive)
+      .map((entry) => entry.bundle_type)
+  };
+}
+
+function validateAdapterDescriptor(descriptor) {
+  if (descriptor.schema !== ADAPTER_DESCRIPTOR_SCHEMA) {
+    throw new Error(`unsupported adapter descriptor schema: ${descriptor.schema}`);
+  }
+  for (const [field, value] of [
+    ["adapter_id", descriptor.adapter_id],
+    ["display_name", descriptor.display_name],
+    ["app_kind", descriptor.app_kind]
+  ]) {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`adapter descriptor ${field} is required`);
+    }
+  }
+  validateDescriptorClient(descriptor.client);
+  if (!descriptor.bridge || !Array.isArray(descriptor.bridge.requested_scopes)) {
+    throw new Error("adapter descriptor bridge.requested_scopes is required");
+  }
+  for (const scope of descriptor.bridge.requested_scopes) {
+    if (!BRIDGE_SCOPE_ALLOWLIST.has(scope)) {
+      throw new Error(`unsupported bridge scope in descriptor: ${scope}`);
+    }
+  }
+  if (!Number.isInteger(descriptor.bridge.default_ttl_seconds) || descriptor.bridge.default_ttl_seconds <= 0) {
+    throw new Error("adapter descriptor bridge.default_ttl_seconds must be positive");
+  }
+  if (!Array.isArray(descriptor.bundle_types) || descriptor.bundle_types.length === 0) {
+    throw new Error("adapter descriptor bundle_types is required");
+  }
+  const seenTypes = new Set();
+  for (const entry of descriptor.bundle_types) {
+    validateDescriptorBundleType(entry, seenTypes);
+  }
+  const security = descriptor.security ?? {};
+  if (security.rejects_contains_secrets !== true) {
+    throw new Error("adapter descriptor must reject contains_secrets bundles");
+  }
+  if (security.requires_authenticated_encrypted_session_for_sensitive_bundles !== true) {
+    throw new Error("adapter descriptor must require authenticated encrypted session for sensitive bundles");
+  }
+  return true;
+}
+
+function validateDescriptorClient(client) {
+  if (!client || typeof client !== "object") {
+    throw new Error("adapter descriptor client is required");
+  }
+  for (const field of ["client_id", "display_name", "app_kind"]) {
+    if (typeof client[field] !== "string" || client[field].trim() === "") {
+      throw new Error(`adapter descriptor client.${field} is required`);
+    }
+  }
+}
+
+function validateDescriptorBundleType(entry, seenTypes) {
+  const type = requireKnownType(entry.bundle_type);
+  if (seenTypes.has(type)) {
+    throw new Error(`duplicate adapter descriptor bundle_type: ${type}`);
+  }
+  seenTypes.add(type);
+  if (entry.permission_scope !== TYPE_CONFIG[type].scope) {
+    throw new Error(`descriptor permission_scope mismatch for ${type}`);
+  }
+  if (entry.write_target !== TYPE_CONFIG[type].target) {
+    throw new Error(`descriptor write_target mismatch for ${type}`);
+  }
+  if (entry.can_export !== true && entry.can_import !== true) {
+    throw new Error(`descriptor ${type} must support export or import`);
+  }
+  if (!Array.isArray(entry.conflict_strategies) || entry.conflict_strategies.length === 0) {
+    throw new Error(`descriptor ${type} conflict_strategies is required`);
+  }
+  for (const strategy of entry.conflict_strategies) {
+    requireConflictStrategy(strategy);
+  }
+  if (SENSITIVE_BUNDLE_TYPES.has(type)) {
+    if (entry.sensitive !== true || entry.requires_trusted_device !== true) {
+      throw new Error(`${type} descriptor must mark sensitive and require trusted device`);
+    }
+  }
 }
 
 function buildRequest(kind, flags) {
@@ -1247,6 +1397,8 @@ function usage() {
   node generic-adapter.mjs request rollback --bundle-id ID
   node generic-adapter.mjs request events --timeout-ms 15000
   node generic-adapter.mjs request results --action-request-id ACTION_REQUEST_ID
+  node generic-adapter.mjs descriptor --type session --type workspace
+  node generic-adapter.mjs validate-descriptor --descriptor adapter.json
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
