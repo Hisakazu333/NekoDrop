@@ -212,7 +212,7 @@ Current desktop behavior:
 - accepts only `POST /bridge/request`
 - rejects oversized request bodies
 - keeps read requests scoped: `devices.list` requires `device.read`; staged bundle summaries and `bundle.detail` require `bundle.read`; `transfer.status` requires `transfer.status.read`
-- lets local apps request scopes with a short authorization code
+- lets local apps request non-duplicated scopes with a short authorization code
 - persists confirmed authorizations locally, restores only unexpired records on restart, and tracks last-used time only for scopes used by a successful response
 - matches authorization by `client_id`, `app_kind`, requested scope, and expiration
 - lets the user list, revoke, and prune local bridge authorizations from Settings
