@@ -708,6 +708,7 @@ test("generic adapter sample summarizes event poll responses for a watch loop", 
   assert.equal(state.cursor.after_event_id, "bridge-event-45");
   assert.equal(state.has_more, true);
   assert.equal(state.should_poll_again, true);
+  assert.equal(state.should_query_result, true);
   assert.equal(state.action_events.length, 2);
   assert.equal(state.action_state.lifecycle_status, "conflict");
   assert.equal(state.action_state.final, true);
@@ -716,6 +717,32 @@ test("generic adapter sample summarizes event poll responses for a watch loop", 
   assert.equal(state.transfer_event_count, 1);
 
   rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample can build action-scoped event poll requests", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "events",
+      "--request-id",
+      "adapter-events-1",
+      "--after-event-id",
+      "bridge-event-1",
+      "--action-request-id",
+      "adapter-send-001",
+      "--timeout-ms",
+      "250"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const request = JSON.parse(stdout);
+  assert.equal(request.kind, "events.poll");
+  assert.equal(request.payload.after_event_id, "bridge-event-1");
+  assert.equal(request.payload.action_request_id, "adapter-send-001");
+  assert.equal(request.payload.timeout_ms, 250);
 });
 
 test("generic adapter sample derives action state from precise result lookups", () => {

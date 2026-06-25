@@ -2017,6 +2017,8 @@ pub struct LocalBridgePollEventsRequest {
     #[serde(default)]
     pub after_event_id: Option<String>,
     #[serde(default)]
+    pub action_request_id: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -2241,6 +2243,7 @@ impl LocalBridgePollEventsRequest {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
         validate_optional_non_empty("after_event_id", self.after_event_id.as_deref())?;
+        validate_optional_non_empty("action_request_id", self.action_request_id.as_deref())?;
         if let Some(limit) = self.limit {
             if limit == 0 || limit > 100 {
                 return Err(ProtocolError::new(
@@ -5123,6 +5126,7 @@ mod tests {
                 app_kind: Some("agent".to_string()),
             }),
             after_event_id: Some("bridge-event-1".to_string()),
+            action_request_id: Some("bridge-send-1".to_string()),
             limit: Some(10),
             timeout_ms: Some(30_000),
         });
@@ -5133,6 +5137,7 @@ mod tests {
         assert_eq!(json["kind"], "events.poll");
         assert_eq!(json["payload"]["request_id"], "bridge-events-1");
         assert_eq!(json["payload"]["after_event_id"], "bridge-event-1");
+        assert_eq!(json["payload"]["action_request_id"], "bridge-send-1");
         assert_eq!(json["payload"]["limit"], 10);
         assert_eq!(json["payload"]["timeout_ms"], 30_000);
         assert_eq!(

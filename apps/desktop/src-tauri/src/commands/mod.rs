@@ -3244,6 +3244,7 @@ fn handle_validated_local_bridge_request_with_auth_at(
                 events,
                 request.client.as_ref(),
                 request.after_event_id.as_deref(),
+                request.action_request_id.as_deref(),
                 request.limit.unwrap_or(50),
                 can_read_bundles,
                 can_read_transfers,
@@ -7969,6 +7970,119 @@ mod tests {
         assert_eq!(response.events_last_id, None);
         assert_eq!(response.events_next_after_id, None);
         assert!(!response.events_has_more);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_can_filter_action_updates_by_request_id() {
+        let dir = unique_bundle_temp_dir("local-bridge-action-event-filter");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "sender-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ));
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-send-a-running".to_string(),
+                    request_id: "bridge-send-a".to_string(),
+                    action_kind: "bundle.send".to_string(),
+                    client_id: "sender-app".to_string(),
+                    client_app_kind: Some("agent".to_string()),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "send a running".to_string(),
+                    bundle_id: Some("bundle_a".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: Some("device-a".to_string()),
+                    updated_at_ms: 2_000,
+                },
+            ),
+        )
+        .unwrap();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::TransferUpdated(
+                nekolink_protocol::LocalBridgeTransferUpdatedEvent {
+                    event_id: "bridge-transfer-noise".to_string(),
+                    transfer_id: "transfer-1".to_string(),
+                    phase: nekolink_protocol::LocalBridgeTransferPhase::Sending,
+                    bytes_transferred: 10,
+                    total_bytes: 100,
+                },
+            ),
+        )
+        .unwrap();
+        push_local_bridge_runtime_event(
+            &runtime,
+            nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                    event_id: "bridge-action-send-b-running".to_string(),
+                    request_id: "bridge-send-b".to_string(),
+                    action_kind: "bundle.send".to_string(),
+                    client_id: "sender-app".to_string(),
+                    client_app_kind: Some("agent".to_string()),
+                    status: nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                    reason: None,
+                    message: "send b running".to_string(),
+                    bundle_id: Some("bundle_b".to_string()),
+                    bundle_type: Some(BundleType::Skill),
+                    target_device_id: Some("device-b".to_string()),
+                    updated_at_ms: 2_100,
+                },
+            ),
+        )
+        .unwrap();
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-filter-action",
+                "client": {
+                    "client_id": "sender-app",
+                    "display_name": "Sender App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "action_request_id": "bridge-send-b",
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 1);
+        assert_eq!(response.events[0]["kind"].as_str(), Some("action.updated"));
+        assert_eq!(
+            response.events[0]["payload"]["request_id"].as_str(),
+            Some("bridge-send-b")
+        );
+        assert_eq!(
+            response.events_last_id.as_deref(),
+            Some("bridge-action-send-b-running")
+        );
+        assert_eq!(response.events_cursor_state, "ok");
 
         fs::remove_dir_all(dir).unwrap();
     }
