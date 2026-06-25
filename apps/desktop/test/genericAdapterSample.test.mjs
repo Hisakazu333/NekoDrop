@@ -73,6 +73,173 @@ test("generic adapter sample exports a valid sanitized bundle", () => {
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample imports a checked bundle into an adapter-owned target", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-import-target-"));
+  const source = join(tempRoot, "source");
+  const output = join(tempRoot, "out");
+  const targetRoot = join(tempRoot, "adapter-data");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "workspace.json"), JSON.stringify({ name: "demo workspace" }));
+  writeFileSync(join(source, "notes.md"), "import me\n");
+
+  execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "export",
+      "--source",
+      source,
+      "--output",
+      output,
+      "--bundle-id",
+      "bundle_workspace_import",
+      "--type",
+      "workspace",
+      "--name",
+      "Workspace import"
+    ],
+    { encoding: "utf8" }
+  );
+  const bundleRoot = join(output, "bundle_workspace_import");
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  );
+  const imported = JSON.parse(stdout);
+  const targetPath = join(targetRoot, "workspace", "bundle_workspace_import");
+
+  assert.equal(imported.status, "imported");
+  assert.equal(imported.target_path, targetPath);
+  assert.equal(imported.imported_file_count, 2);
+  assert.equal(imported.skipped_file_count, 0);
+  assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "import me\n");
+  assert.equal(readJson(join(targetPath, ".generic-adapter-import-receipt.json")).schema, "generic.adapter.import_receipt.v1");
+
+  const conflictStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "reject"
+    ],
+    { encoding: "utf8" }
+  );
+  const conflict = JSON.parse(conflictStdout);
+  assert.equal(conflict.status, "conflict");
+  assert.equal(conflict.imported_file_count, 0);
+  assert.equal(conflict.receipt_path, null);
+
+  const renameStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "rename"
+    ],
+    { encoding: "utf8" }
+  );
+  const renamed = JSON.parse(renameStdout);
+  assert.equal(renamed.status, "imported");
+  assert.equal(renamed.target_path, `${targetPath}-2`);
+
+  writeFileSync(join(targetPath, "notes.md"), "keep existing\n");
+  const skipStdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "skip_conflicts"
+    ],
+    { encoding: "utf8" }
+  );
+  const skipped = JSON.parse(skipStdout);
+  assert.equal(skipped.status, "imported");
+  assert.equal(skipped.skipped_file_count, 2);
+  assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "keep existing\n");
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample refuses to import bundles marked as containing secrets", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-import-secret-"));
+  const source = join(tempRoot, "source");
+  const output = join(tempRoot, "out");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "session.json"), JSON.stringify({ token: "secret" }));
+  execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "export",
+      "--source",
+      source,
+      "--output",
+      output,
+      "--bundle-id",
+      "bundle_secret_session",
+      "--type",
+      "session",
+      "--name",
+      "Secret session",
+      "--contains-secrets",
+      "true"
+    ],
+    { encoding: "utf8" }
+  );
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "import-target",
+        "--bundle-root",
+        join(output, "bundle_secret_session"),
+        "--target-root",
+        join(tempRoot, "adapter-data"),
+        "--type",
+        "session"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /bundle contains secrets and must not be imported automatically/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample prints local bridge request envelopes", () => {
   const stdout = execFileSync(
     process.execPath,

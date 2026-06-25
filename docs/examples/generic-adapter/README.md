@@ -392,6 +392,24 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 
 导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径。NekoDrop 可以用它生成回滚计划，也可以执行保守撤回：只删除本次 import receipt 记录的导入文件，`skip_conflicts` 跳过的既有文件不会被删除。
 
+如果要演示“上层应用自己的导入”，可以用示例脚本把已校验 bundle 导入到 adapter 自己的数据目录：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs import-target \
+  --bundle-root /absolute/path/to/checked-bundle \
+  --target-root ./adapter-data \
+  --type workspace \
+  --conflict-strategy reject
+```
+
+`import-target` 会重新校验 manifest、checksums 和 permissions，把 payload 写到：
+
+```text
+adapter-data/<bundle_type>/<bundle_id>/
+```
+
+并写入 `.generic-adapter-import-receipt.json`。冲突策略和 bridge import 保持一致：`reject`、`rename`、`skip_conflicts`。如果 bundle 标记了 `contains_secrets=true`，示例会拒绝自动导入。
+
 生成撤回请求：
 
 ```bash
