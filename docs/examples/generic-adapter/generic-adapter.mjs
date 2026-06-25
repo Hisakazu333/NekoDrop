@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync
 } from "node:fs";
-import { basename, join, relative, sep } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 
 const BUNDLE_SCHEMA = "nekolink.bundle.v1";
 const CHECKSUM_ALGORITHM = "sha256";
@@ -45,6 +45,10 @@ async function main() {
   const [command, ...args] = process.argv.slice(2);
   if (command === "export") {
     printJson(exportBundle(parseFlags(args)));
+    return;
+  }
+  if (command === "import-target") {
+    printJson(importBundleIntoAdapterTarget(parseFlags(args)));
     return;
   }
   if (command === "request") {
@@ -169,6 +173,143 @@ function exportBundle(flags) {
     file_count: payloadFiles.length,
     total_bytes: manifest.summary.total_bytes
   };
+}
+
+function importBundleIntoAdapterTarget(flags) {
+  const bundleRoot = requireFlag(flags, "bundle-root");
+  const targetRoot = requireFlag(flags, "target-root");
+  const expectedType = requireKnownType(requireFlag(flags, "type"));
+  const strategy = requireConflictStrategy(flags["conflict-strategy"] ?? "reject");
+  if (!existsSync(bundleRoot) || !statSync(bundleRoot).isDirectory()) {
+    throw new Error(`--bundle-root must be a directory: ${bundleRoot}`);
+  }
+
+  const manifest = readJson(join(bundleRoot, "bundle.json"));
+  const checksums = readJson(join(bundleRoot, "checksums.json"));
+  const permissions = existsSync(join(bundleRoot, "permissions.json"))
+    ? readJson(join(bundleRoot, "permissions.json"))
+    : null;
+  validateImportableBundle(manifest, checksums, permissions, expectedType);
+
+  const target = adapterTargetPath(targetRoot, manifest, strategy);
+  const files = manifest.files.map((file) => {
+    const source = join(bundleRoot, file.path);
+    const destination = join(target, file.path.replace(/^files\//, ""));
+    const bytes = readFileSync(source);
+    if (bytes.byteLength !== file.size) {
+      throw new Error(`size mismatch: ${file.path}`);
+    }
+    if (sha256(bytes) !== file.sha256 || checksums.files[file.path] !== file.sha256) {
+      throw new Error(`checksum mismatch: ${file.path}`);
+    }
+    return {
+      manifest_path: file.path,
+      destination,
+      size: file.size,
+      destination_exists: existsSync(destination)
+    };
+  });
+  const conflicts = files.filter((file) => file.destination_exists);
+  if ((existsSync(target) || conflicts.length > 0) && strategy === "reject") {
+    return {
+      bundle_id: manifest.bundle_id,
+      bundle_type: manifest.bundle_type,
+      display_name: manifest.display_name,
+      target_root: targetRoot,
+      target_path: target,
+      status: "conflict",
+      conflict_strategy: strategy,
+      imported_file_count: 0,
+      skipped_file_count: 0,
+      conflict_count: Math.max(conflicts.length, existsSync(target) ? 1 : 0),
+      conflicts: conflicts.map((file) => file.manifest_path),
+      receipt_path: null
+    };
+  }
+
+  mkdirSync(target, { recursive: true });
+  const imported = [];
+  const skipped = [];
+  for (const file of files) {
+    if (file.destination_exists && strategy === "skip_conflicts") {
+      skipped.push(file.manifest_path);
+      continue;
+    }
+    mkdirSync(dirname(file.destination), { recursive: true });
+    copyFileSync(join(bundleRoot, file.manifest_path), file.destination);
+    imported.push(file.manifest_path);
+  }
+
+  const receipt = {
+    schema: "generic.adapter.import_receipt.v1",
+    bundle_id: manifest.bundle_id,
+    bundle_type: manifest.bundle_type,
+    display_name: manifest.display_name,
+    source_app: manifest.source_app,
+    target_path: target,
+    conflict_strategy: strategy,
+    imported_manifest_paths: imported,
+    skipped_manifest_paths: skipped,
+    imported_at: new Date().toISOString()
+  };
+  const receiptPath = join(target, ".generic-adapter-import-receipt.json");
+  writeJson(receiptPath, receipt);
+  return {
+    bundle_id: manifest.bundle_id,
+    bundle_type: manifest.bundle_type,
+    display_name: manifest.display_name,
+    target_root: targetRoot,
+    target_path: target,
+    status: "imported",
+    conflict_strategy: strategy,
+    imported_file_count: imported.length,
+    skipped_file_count: skipped.length,
+    conflict_count: conflicts.length,
+    conflicts: conflicts.map((file) => file.manifest_path),
+    receipt_path: receiptPath
+  };
+}
+
+function validateImportableBundle(manifest, checksums, permissions, expectedType) {
+  if (manifest.schema !== BUNDLE_SCHEMA) {
+    throw new Error(`unsupported bundle schema: ${manifest.schema}`);
+  }
+  if (manifest.bundle_type !== expectedType) {
+    throw new Error(`bundle type mismatch: expected ${expectedType}, got ${manifest.bundle_type}`);
+  }
+  if (!permissions || !Array.isArray(permissions.writes)) {
+    throw new Error("permissions.json with writes is required");
+  }
+  if (permissions?.secrets?.contains_secrets === true) {
+    throw new Error("bundle contains secrets and must not be imported automatically");
+  }
+  if (!checksums || checksums.algorithm !== CHECKSUM_ALGORITHM || !checksums.files) {
+    throw new Error("checksums.json must use sha256");
+  }
+  if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
+    throw new Error("bundle must contain files");
+  }
+  for (const file of manifest.files) {
+    assertSafeBundlePath(file.path);
+    if (!/^[a-f0-9]{64}$/.test(file.sha256)) {
+      throw new Error(`invalid sha256 for ${file.path}`);
+    }
+    if (checksums.files[file.path] !== file.sha256) {
+      throw new Error(`checksums.json mismatch for ${file.path}`);
+    }
+  }
+}
+
+function adapterTargetPath(targetRoot, manifest, strategy) {
+  const base = join(targetRoot, manifest.bundle_type, manifest.bundle_id);
+  if (strategy !== "rename" || !existsSync(base)) {
+    return base;
+  }
+  for (let index = 2; index < 1000; index += 1) {
+    const candidate = `${base}-${index}`;
+    if (!existsSync(candidate)) return candidate;
+  }
+  throw new Error(`could not choose a renamed target for ${manifest.bundle_id}`);
 }
 
 function buildRequest(kind, flags) {
@@ -820,6 +961,15 @@ function assertSafeBundleId(bundleId) {
   }
 }
 
+function assertSafeBundlePath(path) {
+  if (typeof path !== "string" || !path.startsWith("files/")) {
+    throw new Error(`bundle file path must be under files/: ${path}`);
+  }
+  if (path.includes("\\") || path.split("/").some((part) => part === "" || part === "." || part === "..")) {
+    throw new Error(`unsafe bundle file path: ${path}`);
+  }
+}
+
 function normalizePath(path) {
   return path.split(sep).join("/");
 }
@@ -837,6 +987,10 @@ function writeJson(path, value) {
   writeFileSync(path, `${JSON.stringify(value, null, 2)}\n`);
 }
 
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
 function printJson(value) {
   console.log(JSON.stringify(value, null, 2));
 }
@@ -844,6 +998,7 @@ function printJson(value) {
 function usage() {
   console.log(`Usage:
   node generic-adapter.mjs export --source DIR --output DIR --bundle-id ID --type session --name NAME
+  node generic-adapter.mjs import-target --bundle-root DIR --target-root DIR --type session --conflict-strategy reject
   node generic-adapter.mjs request auth
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
   node generic-adapter.mjs request detail --staged-bundle-id ID
