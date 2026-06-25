@@ -628,7 +628,10 @@ test("generic adapter sample derives the next event cursor", () => {
   const responsePath = join(tempRoot, "events-response.json");
   writeFileSync(responsePath, JSON.stringify({
     events_next_after_id: "bridge-event-42",
-    events_cursor_state: "ok"
+    events_cursor_state: "ok",
+    events_visible_first_id: "bridge-event-1",
+    events_visible_last_id: "bridge-event-42",
+    events_visible_count: 42
   }));
 
   const stdout = execFileSync(
@@ -641,6 +644,9 @@ test("generic adapter sample derives the next event cursor", () => {
   assert.equal(cursor.after_event_id, "bridge-event-42");
   assert.equal(cursor.cursor_state, "ok");
   assert.equal(cursor.reset_required, false);
+  assert.equal(cursor.visible_first_event_id, "bridge-event-1");
+  assert.equal(cursor.visible_last_event_id, "bridge-event-42");
+  assert.equal(cursor.visible_event_count, 42);
 
   rmSync(tempRoot, { recursive: true, force: true });
 });
@@ -652,6 +658,9 @@ test("generic adapter sample summarizes event poll responses for a watch loop", 
     events_next_after_id: "bridge-event-45",
     events_cursor_state: "ok",
     events_has_more: true,
+    events_visible_first_id: "bridge-event-40",
+    events_visible_last_id: "bridge-event-45",
+    events_visible_count: 6,
     events: [
       {
         kind: "action.updated",
@@ -706,6 +715,9 @@ test("generic adapter sample summarizes event poll responses for a watch loop", 
   const state = JSON.parse(stdout);
 
   assert.equal(state.cursor.after_event_id, "bridge-event-45");
+  assert.equal(state.stream_window.visible_first_event_id, "bridge-event-40");
+  assert.equal(state.stream_window.visible_last_event_id, "bridge-event-45");
+  assert.equal(state.stream_window.visible_event_count, 6);
   assert.equal(state.has_more, true);
   assert.equal(state.should_poll_again, true);
   assert.equal(state.should_query_result, true);
@@ -915,7 +927,10 @@ test("generic adapter sample resets missing event cursors", () => {
   const responsePath = join(tempRoot, "events-response.json");
   writeFileSync(responsePath, JSON.stringify({
     events_next_after_id: null,
-    events_cursor_state: "missing"
+    events_cursor_state: "missing",
+    events_visible_first_id: "bridge-event-100",
+    events_visible_last_id: "bridge-event-120",
+    events_visible_count: 21
   }));
 
   const stdout = execFileSync(
@@ -928,6 +943,9 @@ test("generic adapter sample resets missing event cursors", () => {
   assert.equal(cursor.after_event_id, null);
   assert.equal(cursor.cursor_state, "missing");
   assert.equal(cursor.reset_required, true);
+  assert.equal(cursor.visible_first_event_id, "bridge-event-100");
+  assert.equal(cursor.visible_last_event_id, "bridge-event-120");
+  assert.equal(cursor.visible_event_count, 21);
 
   rmSync(tempRoot, { recursive: true, force: true });
 });

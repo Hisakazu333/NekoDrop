@@ -15,6 +15,9 @@ pub(super) struct LocalBridgeEventPage {
     pub(super) next_after_event_id: Option<String>,
     pub(super) has_more: bool,
     pub(super) cursor_state: &'static str,
+    pub(super) visible_first_event_id: Option<String>,
+    pub(super) visible_last_event_id: Option<String>,
+    pub(super) visible_event_count: usize,
 }
 
 pub(super) fn local_bridge_read_only_response(
@@ -52,6 +55,9 @@ pub(super) fn local_bridge_read_only_response(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 
@@ -104,6 +110,9 @@ pub(super) fn local_bridge_read_only_unsupported_response(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 
@@ -135,6 +144,9 @@ pub(super) fn local_bridge_pending_confirmation_response(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 
@@ -167,6 +179,9 @@ pub(super) fn local_bridge_authorized_runtime_pending_response(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 
@@ -199,6 +214,9 @@ pub(super) fn local_bridge_events_response(
         events_next_after_id: page.next_after_event_id,
         events_has_more: page.has_more,
         events_cursor_state: page.cursor_state.to_string(),
+        events_visible_first_id: page.visible_first_event_id,
+        events_visible_last_id: page.visible_last_event_id,
+        events_visible_count: page.visible_event_count,
     }
 }
 
@@ -231,6 +249,9 @@ pub(super) fn local_bridge_action_results_response(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 
@@ -272,6 +293,9 @@ pub(super) fn local_bridge_pending_authorization_response_from_pending(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 

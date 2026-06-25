@@ -872,13 +872,19 @@ function nextCursorFromResponse(flags) {
     return {
       after_event_id: null,
       cursor_state: cursorState,
-      reset_required: true
+      reset_required: true,
+      visible_first_event_id: response.events_visible_first_id ?? null,
+      visible_last_event_id: response.events_visible_last_id ?? null,
+      visible_event_count: Number(response.events_visible_count ?? 0)
     };
   }
   return {
     after_event_id: response.events_next_after_id ?? null,
     cursor_state: cursorState,
-    reset_required: false
+    reset_required: false,
+    visible_first_event_id: response.events_visible_first_id ?? null,
+    visible_last_event_id: response.events_visible_last_id ?? null,
+    visible_event_count: Number(response.events_visible_count ?? 0)
   };
 }
 
@@ -901,6 +907,11 @@ function eventStateFromEventsResponse(flags) {
   const latestActionState = latestAction ? actionEventState(latestAction) : null;
   return {
     cursor: nextCursorFromResponse(flags),
+    stream_window: {
+      visible_first_event_id: response.events_visible_first_id ?? null,
+      visible_last_event_id: response.events_visible_last_id ?? null,
+      visible_event_count: Number(response.events_visible_count ?? 0)
+    },
     event_count: events.length,
     has_more: Boolean(response.events_has_more),
     should_poll_again: Boolean(response.events_has_more) || response.events_cursor_state === "missing",

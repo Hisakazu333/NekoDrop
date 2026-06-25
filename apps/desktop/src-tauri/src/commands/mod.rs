@@ -4087,6 +4087,9 @@ fn local_bridge_pending_authorization_response(
         events_next_after_id: None,
         events_has_more: false,
         events_cursor_state: "empty".to_string(),
+        events_visible_first_id: None,
+        events_visible_last_id: None,
+        events_visible_count: 0,
     }
 }
 
@@ -7970,6 +7973,15 @@ mod tests {
         assert_eq!(response.events_last_id, None);
         assert_eq!(response.events_next_after_id, None);
         assert!(!response.events_has_more);
+        assert_eq!(
+            response.events_visible_first_id.as_deref(),
+            Some("bridge-action-send-visible")
+        );
+        assert_eq!(
+            response.events_visible_last_id.as_deref(),
+            Some("bridge-action-send-visible")
+        );
+        assert_eq!(response.events_visible_count, 1);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -8083,6 +8095,15 @@ mod tests {
             Some("bridge-action-send-b-running")
         );
         assert_eq!(response.events_cursor_state, "ok");
+        assert_eq!(
+            response.events_visible_first_id.as_deref(),
+            Some("bridge-action-send-b-running")
+        );
+        assert_eq!(
+            response.events_visible_last_id.as_deref(),
+            Some("bridge-action-send-b-running")
+        );
+        assert_eq!(response.events_visible_count, 1);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -9049,6 +9070,15 @@ mod tests {
         );
         assert!(first_page.events_has_more);
         assert_eq!(first_page.events_cursor_state, "ok");
+        assert_eq!(
+            first_page.events_visible_first_id.as_deref(),
+            Some("bridge-event-1")
+        );
+        assert_eq!(
+            first_page.events_visible_last_id.as_deref(),
+            Some("bridge-event-3")
+        );
+        assert_eq!(first_page.events_visible_count, 3);
         assert_eq!(second_page.events.len(), 2);
         assert_eq!(
             second_page.events[0]["payload"]["event_id"].as_str(),
@@ -9060,6 +9090,15 @@ mod tests {
         );
         assert!(!second_page.events_has_more);
         assert_eq!(second_page.events_cursor_state, "ok");
+        assert_eq!(
+            second_page.events_visible_first_id.as_deref(),
+            Some("bridge-event-1")
+        );
+        assert_eq!(
+            second_page.events_visible_last_id.as_deref(),
+            Some("bridge-event-3")
+        );
+        assert_eq!(second_page.events_visible_count, 3);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -9126,6 +9165,15 @@ mod tests {
         assert_eq!(response.events_last_id, None);
         assert_eq!(response.events_next_after_id, None);
         assert!(!response.events_has_more);
+        assert_eq!(
+            response.events_visible_first_id.as_deref(),
+            Some("bridge-event-current")
+        );
+        assert_eq!(
+            response.events_visible_last_id.as_deref(),
+            Some("bridge-event-current")
+        );
+        assert_eq!(response.events_visible_count, 1);
 
         fs::remove_dir_all(dir).unwrap();
     }
