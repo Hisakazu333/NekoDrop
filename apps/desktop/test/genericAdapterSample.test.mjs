@@ -642,6 +642,66 @@ test("generic adapter sample gates send and import capabilities by descriptor", 
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample gates import conflict strategies by descriptor", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-conflict-"));
+  const descriptorPath = join(tempRoot, "adapter.json");
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "descriptor",
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "reject"
+    ],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+
+  assert.deepEqual(descriptor.bundle_types[0].conflict_strategies, ["reject"]);
+
+  const allowedImport = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "import",
+      "--descriptor",
+      descriptorPath,
+      "--staged-bundle-id",
+      "bundle_workspace",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(allowedImport.payload.conflict_strategy, "reject");
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "request",
+        "import",
+        "--descriptor",
+        descriptorPath,
+        "--staged-bundle-id",
+        "bundle_workspace",
+        "--type",
+        "workspace",
+        "--conflict-strategy",
+        "rename"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /descriptor does not allow rename imports for workspace/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample rejects unsafe adapter descriptors", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-invalid-"));
   const descriptorPath = join(tempRoot, "adapter.json");
