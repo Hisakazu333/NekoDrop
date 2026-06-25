@@ -100,6 +100,23 @@ test("generic adapter sample prints local bridge request envelopes", () => {
   assert.equal(request.payload.require_trusted_device, true);
 });
 
+test("generic adapter sample defaults auth to the smallest read scope", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "request",
+      "auth"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const request = JSON.parse(stdout);
+
+  assert.equal(request.kind, "authorization.request");
+  assert.deepEqual(request.payload.requested_scopes, ["bundle.read"]);
+});
+
 test("generic adapter sample rejects untrusted sends for sensitive bundle types", () => {
   assert.throws(
     () => execFileSync(
@@ -263,6 +280,12 @@ test("generic adapter sample prints a generic roundtrip workflow", () => {
     "import",
     "inspect_after_import",
     "results"
+  ]);
+  assert.deepEqual(workflow.steps[0].request.payload.requested_scopes, [
+    "bundle.read",
+    "bundle.send",
+    "bundle.import.request",
+    "transfer.status.read"
   ]);
   assert.equal(workflow.steps[1].request.kind, "bundle.send");
   assert.equal(workflow.steps[3].request.kind, "bundle.detail");

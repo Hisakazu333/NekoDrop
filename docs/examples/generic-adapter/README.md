@@ -56,13 +56,9 @@ node docs/examples/generic-adapter/generic-adapter.mjs export \
       "app_kind": "agent"
     },
     "requested_scopes": [
-      "device.read",
-      "bundle.read",
-      "bundle.send",
-      "bundle.import.request",
-      "transfer.status.read"
+      "bundle.read"
     ],
-    "reason": "Send and import user-selected bundles",
+    "reason": "Inspect a staged bundle before import",
     "ttl_seconds": 3600
   }
 }
@@ -75,6 +71,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth
 ```
 
 NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。授权绑定 `client_id`、`app_kind`、scope 和过期时间；adapter 后续请求必须保持同一个 client identity，不能换 `app_kind` 复用授权。
+
+默认 `request auth` 只申请 `bundle.read`。需要发送、导入、撤回或观察传输状态时，adapter 必须显式申请对应 scope，例如 `bundle.send`、`bundle.import.request`、`transfer.status.read`。不要为了省事默认申请全部权限。
 
 如果只想看完整接入顺序，可以让脚本生成一组通用请求：
 

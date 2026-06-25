@@ -28,6 +28,13 @@ const TYPE_CONFIG = {
   config_snapshot: { scope: "config.import", target: "adapter.config" }
 };
 const SENSITIVE_BUNDLE_TYPES = new Set(["skill", "session", "workspace", "agent_profile"]);
+const DEFAULT_BRIDGE_SCOPES = ["bundle.read"];
+const FULL_LOOP_BRIDGE_SCOPES = [
+  "bundle.read",
+  "bundle.send",
+  "bundle.import.request",
+  "transfer.status.read"
+];
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -173,7 +180,7 @@ function buildRequest(kind, flags) {
         client: CLIENT,
         requested_scopes: toArray(flags.scope).length > 0
           ? toArray(flags.scope)
-          : ["device.read", "bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
+          : DEFAULT_BRIDGE_SCOPES,
         reason: flags.reason ?? "Send and import user-selected bundles",
         ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
       }
@@ -274,7 +281,7 @@ function buildWorkflow(flags) {
         {
           step: "authorize",
           request: buildRequest("auth", {
-            scope: ["device.read", "bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
+            scope: FULL_LOOP_BRIDGE_SCOPES,
             reason: flags.reason ?? "Send and import user-selected bundles"
           })
         },
@@ -394,7 +401,7 @@ function buildWorkflow(flags) {
   steps.push({
     step: "authorize",
     request: buildRequest("auth", {
-      scope: ["device.read", "bundle.read", "bundle.send", "bundle.import.request", "transfer.status.read"],
+      scope: scopesForWorkflowMode(mode),
       reason: flags.reason ?? "Send and import user-selected bundles"
     })
   });
@@ -478,6 +485,22 @@ function buildWorkflow(flags) {
     mode,
     steps
   };
+}
+
+function scopesForWorkflowMode(mode) {
+  if (mode === "send") {
+    return ["bundle.send", "transfer.status.read"];
+  }
+  if (mode === "import") {
+    return ["bundle.read", "bundle.import.request"];
+  }
+  if (mode === "rollback") {
+    return ["bundle.read", "bundle.import.request"];
+  }
+  if (mode === "roundtrip") {
+    return FULL_LOOP_BRIDGE_SCOPES;
+  }
+  return DEFAULT_BRIDGE_SCOPES;
 }
 
 function buildExportCommand(flags) {
