@@ -19,6 +19,9 @@ pub(super) fn local_bridge_events_after(
     let mut last_event_id = None;
     let mut next_after_event_id = None;
     let mut has_more = false;
+    let mut visible_first_event_id = None;
+    let mut visible_last_event_id = None;
+    let mut visible_event_count = 0;
     for event in events {
         let is_allowed = local_bridge_event_is_allowed(
             event,
@@ -29,6 +32,12 @@ pub(super) fn local_bridge_events_after(
             client,
             action_request_id,
         );
+        if is_allowed {
+            let event_id = local_bridge_event_id(event).to_string();
+            visible_first_event_id.get_or_insert_with(|| event_id.clone());
+            visible_last_event_id = Some(event_id);
+            visible_event_count += 1;
+        }
         if !after_cursor {
             after_cursor =
                 is_allowed && local_bridge_event_id(event) == after_event_id.unwrap_or_default();
@@ -62,6 +71,9 @@ pub(super) fn local_bridge_events_after(
         next_after_event_id,
         has_more,
         cursor_state,
+        visible_first_event_id,
+        visible_last_event_id,
+        visible_event_count,
     })
 }
 
