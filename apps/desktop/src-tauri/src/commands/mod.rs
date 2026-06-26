@@ -2049,12 +2049,16 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleSend,
             now_ms,
         ) {
-            if let Some(conflict_response) = local_bridge_reject_mismatched_send_retry_payload(
-                request,
-                &pending_actions,
-                &action_results,
-            ) {
-                return Ok(conflict_response);
+            if let Some(retry_response) =
+                local_bridge_retry_send_response(request, &pending_actions, &action_results)
+            {
+                mark_local_bridge_authorization_used(
+                    runtime,
+                    request.client.as_ref(),
+                    LocalBridgePermissionScope::BundleSend,
+                    now_ms,
+                )?;
+                return Ok(retry_response);
             }
             let action = LocalBridgePendingAction::SendBundle(
                 local_bridge_pending_send_action_from_request(request, now_ms)?,
@@ -2098,12 +2102,16 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleImportRequest,
             now_ms,
         ) {
-            if let Some(conflict_response) = local_bridge_reject_mismatched_import_retry_payload(
-                request,
-                &pending_actions,
-                &action_results,
-            ) {
-                return Ok(conflict_response);
+            if let Some(retry_response) =
+                local_bridge_retry_import_response(request, &pending_actions, &action_results)
+            {
+                mark_local_bridge_authorization_used(
+                    runtime,
+                    request.client.as_ref(),
+                    LocalBridgePermissionScope::BundleImportRequest,
+                    now_ms,
+                )?;
+                return Ok(retry_response);
             }
             let action = LocalBridgePendingAction::ImportBundle(
                 local_bridge_pending_import_action_from_request(request, now_ms)?,
@@ -2147,12 +2155,16 @@ fn handle_local_bridge_request_with_runtime_at(
             LocalBridgePermissionScope::BundleImportRequest,
             now_ms,
         ) {
-            if let Some(conflict_response) = local_bridge_reject_mismatched_rollback_retry_payload(
-                request,
-                &pending_actions,
-                &action_results,
-            ) {
-                return Ok(conflict_response);
+            if let Some(retry_response) =
+                local_bridge_retry_rollback_response(request, &pending_actions, &action_results)
+            {
+                mark_local_bridge_authorization_used(
+                    runtime,
+                    request.client.as_ref(),
+                    LocalBridgePermissionScope::BundleImportRequest,
+                    now_ms,
+                )?;
+                return Ok(retry_response);
             }
             let action = LocalBridgePendingAction::RollbackBundleImport(
                 local_bridge_pending_rollback_action_from_request(request, now_ms)?,
@@ -2285,7 +2297,7 @@ fn push_local_bridge_pending_action_queued(
     Ok(())
 }
 
-fn local_bridge_reject_mismatched_send_retry_payload(
+fn local_bridge_retry_send_response(
     request: &nekolink_protocol::LocalBridgeSendBundleRequest,
     pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
@@ -2296,19 +2308,25 @@ fn local_bridge_reject_mismatched_send_retry_payload(
     let request_kind = "bundle.send";
     let request_id = request.request_id.as_str();
 
-    if pending_actions.iter().any(|pending_action| {
+    if let Some(pending_action) = pending_actions.iter().find(|pending_action| {
         local_bridge_pending_action_request_id(pending_action) == request_id
             && local_bridge_pending_action_kind(pending_action) == request_kind
             && local_bridge_pending_action_client(pending_action).client_id
                 == request_client.client_id
             && local_bridge_pending_action_client(pending_action).app_kind
                 == request_client.app_kind
-            && !local_bridge_send_request_matches_pending_action(request, pending_action)
     }) {
+        if local_bridge_send_request_matches_pending_action(request, pending_action) {
+            return Some(local_bridge_pending_action_retry_response(
+                request_id,
+                Some(request_client.clone()),
+                pending_action,
+            ));
+        }
         return Some(local_bridge_retry_payload_conflict_response(
             request_id,
             Some(request_client.clone()),
-            None,
+            pending_action,
         ));
     }
 
@@ -2325,7 +2343,7 @@ fn local_bridge_reject_mismatched_send_retry_payload(
                 && result.client_id == request_client.client_id
                 && result.client_app_kind == request_client.app_kind
         }) {
-            return Some(local_bridge_retry_payload_conflict_response(
+            return Some(local_bridge_retry_result_payload_conflict_response(
                 request_id,
                 Some(request_client.clone()),
                 action_results.iter().rev().find(|result| {
@@ -2333,7 +2351,7 @@ fn local_bridge_reject_mismatched_send_retry_payload(
                         && result.action_kind == request_kind
                         && result.client_id == request_client.client_id
                         && result.client_app_kind == request_client.app_kind
-                }),
+                })?,
             ));
         }
         return None;
@@ -2349,7 +2367,7 @@ fn local_bridge_reject_mismatched_send_retry_payload(
     ))
 }
 
-fn local_bridge_reject_mismatched_import_retry_payload(
+fn local_bridge_retry_import_response(
     request: &nekolink_protocol::LocalBridgeImportBundleRequest,
     pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
@@ -2360,19 +2378,25 @@ fn local_bridge_reject_mismatched_import_retry_payload(
     let request_kind = "bundle.import";
     let request_id = request.request_id.as_str();
 
-    if pending_actions.iter().any(|pending_action| {
+    if let Some(pending_action) = pending_actions.iter().find(|pending_action| {
         local_bridge_pending_action_request_id(pending_action) == request_id
             && local_bridge_pending_action_kind(pending_action) == request_kind
             && local_bridge_pending_action_client(pending_action).client_id
                 == request_client.client_id
             && local_bridge_pending_action_client(pending_action).app_kind
                 == request_client.app_kind
-            && !local_bridge_import_request_matches_pending_action(request, pending_action)
     }) {
+        if local_bridge_import_request_matches_pending_action(request, pending_action) {
+            return Some(local_bridge_pending_action_retry_response(
+                request_id,
+                Some(request_client.clone()),
+                pending_action,
+            ));
+        }
         return Some(local_bridge_retry_payload_conflict_response(
             request_id,
             Some(request_client.clone()),
-            None,
+            pending_action,
         ));
     }
 
@@ -2389,7 +2413,7 @@ fn local_bridge_reject_mismatched_import_retry_payload(
                 && result.client_id == request_client.client_id
                 && result.client_app_kind == request_client.app_kind
         }) {
-            return Some(local_bridge_retry_payload_conflict_response(
+            return Some(local_bridge_retry_result_payload_conflict_response(
                 request_id,
                 Some(request_client.clone()),
                 action_results.iter().rev().find(|result| {
@@ -2397,7 +2421,7 @@ fn local_bridge_reject_mismatched_import_retry_payload(
                         && result.action_kind == request_kind
                         && result.client_id == request_client.client_id
                         && result.client_app_kind == request_client.app_kind
-                }),
+                })?,
             ));
         }
         return None;
@@ -2413,7 +2437,7 @@ fn local_bridge_reject_mismatched_import_retry_payload(
     ))
 }
 
-fn local_bridge_reject_mismatched_rollback_retry_payload(
+fn local_bridge_retry_rollback_response(
     request: &nekolink_protocol::LocalBridgeRollbackBundleImportRequest,
     pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
@@ -2424,19 +2448,25 @@ fn local_bridge_reject_mismatched_rollback_retry_payload(
     let request_kind = "bundle.rollback";
     let request_id = request.request_id.as_str();
 
-    if pending_actions.iter().any(|pending_action| {
+    if let Some(pending_action) = pending_actions.iter().find(|pending_action| {
         local_bridge_pending_action_request_id(pending_action) == request_id
             && local_bridge_pending_action_kind(pending_action) == request_kind
             && local_bridge_pending_action_client(pending_action).client_id
                 == request_client.client_id
             && local_bridge_pending_action_client(pending_action).app_kind
                 == request_client.app_kind
-            && !local_bridge_rollback_request_matches_pending_action(request, pending_action)
     }) {
+        if local_bridge_rollback_request_matches_pending_action(request, pending_action) {
+            return Some(local_bridge_pending_action_retry_response(
+                request_id,
+                Some(request_client.clone()),
+                pending_action,
+            ));
+        }
         return Some(local_bridge_retry_payload_conflict_response(
             request_id,
             Some(request_client.clone()),
-            None,
+            pending_action,
         ));
     }
 
@@ -2453,7 +2483,7 @@ fn local_bridge_reject_mismatched_rollback_retry_payload(
                 && result.client_id == request_client.client_id
                 && result.client_app_kind == request_client.app_kind
         }) {
-            return Some(local_bridge_retry_payload_conflict_response(
+            return Some(local_bridge_retry_result_payload_conflict_response(
                 request_id,
                 Some(request_client.clone()),
                 action_results.iter().rev().find(|result| {
@@ -2461,7 +2491,7 @@ fn local_bridge_reject_mismatched_rollback_retry_payload(
                         && result.action_kind == request_kind
                         && result.client_id == request_client.client_id
                         && result.client_app_kind == request_client.app_kind
-                }),
+                })?,
             ));
         }
         return None;
@@ -2498,16 +2528,67 @@ fn local_bridge_existing_action_result_for_retry(
 fn local_bridge_retry_payload_conflict_response(
     request_id: &str,
     client: Option<LocalBridgeClientIdentity>,
-    existing_result: Option<&LocalBridgePendingActionResult>,
+    existing_action: &LocalBridgePendingAction,
 ) -> LocalBridgeResponseDto {
-    let action_results = existing_result
-        .map(|result| vec![local_bridge_pending_action_result_to_dto(result, false)])
-        .unwrap_or_default();
+    let action_results = vec![local_bridge_pending_action_result_to_dto(
+        &local_bridge_queued_result_for_pending_action(existing_action),
+        false,
+    )];
     let mut response =
         local_bridge_action_results_response(request_id.to_string(), client, action_results);
     response.status = "conflict".to_string();
     response.message = "local bridge request_id already belongs to a different payload".to_string();
     response
+}
+
+fn local_bridge_retry_result_payload_conflict_response(
+    request_id: &str,
+    client: Option<LocalBridgeClientIdentity>,
+    existing_result: &LocalBridgePendingActionResult,
+) -> LocalBridgeResponseDto {
+    let mut response = local_bridge_action_results_response(
+        request_id.to_string(),
+        client,
+        vec![local_bridge_pending_action_result_to_dto(
+            existing_result,
+            false,
+        )],
+    );
+    response.status = "conflict".to_string();
+    response.message = "local bridge request_id already belongs to a different payload".to_string();
+    response
+}
+
+fn local_bridge_pending_action_retry_response(
+    request_id: &str,
+    client: Option<LocalBridgeClientIdentity>,
+    pending_action: &LocalBridgePendingAction,
+) -> LocalBridgeResponseDto {
+    let mut response = local_bridge_authorized_runtime_pending_response(
+        request_id.to_string(),
+        client,
+        "local bridge action is already queued for the desktop runtime",
+    );
+    response.action_results = vec![local_bridge_pending_action_result_to_dto(
+        &local_bridge_queued_result_for_pending_action(pending_action),
+        false,
+    )];
+    response
+}
+
+fn local_bridge_queued_result_for_pending_action(
+    pending_action: &LocalBridgePendingAction,
+) -> LocalBridgePendingActionResult {
+    local_bridge_action_lifecycle_result(
+        pending_action,
+        LocalBridgeActionLifecycleStatus::Queued,
+        None,
+        "local bridge action is queued for the desktop runtime",
+        local_bridge_pending_action_bundle_id(pending_action),
+        local_bridge_pending_action_bundle_type(pending_action),
+        local_bridge_pending_action_target_device_id(pending_action),
+        local_bridge_pending_action_requested_at_ms(pending_action),
+    )
 }
 
 fn local_bridge_pending_actions_are_same_request(
@@ -7125,7 +7206,7 @@ mod tests {
     }
 
     #[test]
-    fn authorized_local_bridge_mutation_replaces_duplicate_pending_action() {
+    fn authorized_local_bridge_mutation_reuses_duplicate_pending_action() {
         let dir = unique_bundle_temp_dir("local-bridge-runtime-dedupe-pending-action");
         let staging_root = dir.join("bundle_staging");
         let import_root = dir.join("bundle_imports");
@@ -7188,7 +7269,7 @@ mod tests {
                 assert_eq!(action.request_id, "bridge-request-import");
                 assert_eq!(action.staged_bundle_id, "bundle_1234567890");
                 assert_eq!(action.conflict_strategy, "rename");
-                assert_eq!(action.requested_at_ms, 1_700);
+                assert_eq!(action.requested_at_ms, 1_500);
             }
             other => panic!("expected import bundle action, got {other:?}"),
         }
@@ -7198,7 +7279,7 @@ mod tests {
         assert_eq!(results[0].request_id, "bridge-request-import");
         assert_eq!(results[0].status, "queued");
         assert_eq!(results[0].bundle_id.as_deref(), Some("bundle_1234567890"));
-        assert_eq!(results[0].claimed_at_ms, 1_700);
+        assert_eq!(results[0].claimed_at_ms, 1_500);
         assert_eq!(
             runtime.authorizations.lock().unwrap()[0].last_used_at_ms,
             1_700
@@ -7252,7 +7333,7 @@ mod tests {
             1_500,
         )
         .unwrap();
-        handle_local_bridge_request_with_runtime_at(
+        let second_response = handle_local_bridge_request_with_runtime_at(
             &import_request("Renamed Agent App", "bundle_second"),
             &[],
             None,
@@ -7264,14 +7345,20 @@ mod tests {
         )
         .unwrap();
 
+        assert_eq!(second_response.status, "conflict");
+        assert_eq!(
+            second_response.message,
+            "local bridge request_id already belongs to a different payload"
+        );
+
         let actions = runtime.pending_actions.lock().unwrap();
         assert_eq!(actions.len(), 1);
         match &actions[0] {
             crate::app_state::LocalBridgePendingAction::ImportBundle(action) => {
                 assert_eq!(action.request_id, "bridge-request-import");
-                assert_eq!(action.client.display_name, "Renamed Agent App");
-                assert_eq!(action.staged_bundle_id, "bundle_second");
-                assert_eq!(action.requested_at_ms, 1_700);
+                assert_eq!(action.client.display_name, "Local Agent App");
+                assert_eq!(action.staged_bundle_id, "bundle_first");
+                assert_eq!(action.requested_at_ms, 1_500);
             }
             other => panic!("expected import bundle action, got {other:?}"),
         }
