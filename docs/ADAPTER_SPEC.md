@@ -159,6 +159,57 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 `skill`、`session`、`workspace` 和 `agent_profile` 必须标记为 `sensitive=true`，并且 `requires_trusted_device=true`。`bridge.requested_scopes` 只能使用 NekoDrop 已定义的 local bridge scope。adapter 可以用 descriptor 生成授权请求，避免声明的 scope 和实际申请的 scope 分叉。descriptor 只是能力声明；真实导出、导入和回滚仍由 adapter 自己执行。
 
+## App Manifest
+
+descriptor 描述 adapter 能力。上层应用还应该提供一个 app manifest，描述自己有哪些逻辑资源可以交给 adapter。这个 manifest 不绑定某个第三方项目，也不写本机目录。
+
+示例形状：
+
+```json
+{
+  "schema": "nekolink.adapter.app_manifest.v1",
+  "app_id": "generic.app",
+  "display_name": "Generic App",
+  "app_kind": "generic",
+  "adapter_id": "generic.adapter.sample",
+  "resources": [
+    {
+      "resource_id": "workspace.default",
+      "bundle_type": "workspace",
+      "display_name": "Workspace",
+      "direction": "both",
+      "logical_source": "app.workspace.selected",
+      "logical_target": "adapter.workspace",
+      "permission_scope": "workspace.import",
+      "export_action": "export_bundle",
+      "import_action": "import_bundle",
+      "rollback_action": "rollback_import",
+      "sensitive": true,
+      "requires_trusted_device": true,
+      "conflict_strategies": ["reject", "rename", "skip_conflicts"],
+      "migration_policy": "manual_only"
+    }
+  ],
+  "safety": {
+    "never_include": [
+      "provider tokens",
+      "cookies",
+      "private keys",
+      "machine local absolute paths",
+      "keychain or credential-manager references"
+    ],
+    "require_user_selected_source": true,
+    "require_dry_run_before_import": true,
+    "require_receipt_for_import": true,
+    "require_authenticated_encrypted_session_for_sensitive_bundles": true
+  }
+}
+```
+
+`logical_source` 和 `logical_target` 必须是逻辑名，不能是 `/Users/...`、`C:\...` 或 `~/...` 这类本机路径。真实路径由上层应用自己的权限和导出/导入流程处理。NekoDrop 只看 bundle、local bridge 授权、staging、导入状态和 receipt，不直接理解第三方应用数据库。
+
+app manifest 可以用来生成某个资源的 action plan：导出时先跑 adapter 的 `export_bundle`，再请求 `bundle.send`；导入时先查 `bundle.detail`，再请求 `bundle.import`；撤回时先查 receipt 状态，再请求 `bundle.rollback` 或走 adapter 自己的回滚逻辑。
+
 ## Local Bridge 请求
 
 本机应用通过 local bridge 请求发送 bundle 时，只提交请求：
