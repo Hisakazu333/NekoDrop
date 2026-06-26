@@ -39,6 +39,85 @@ node docs/examples/generic-adapter/generic-adapter.mjs request auth \
 
 传了 `--descriptor` 后，`request send` 和 `request import` 会检查 descriptor 是否声明了对应 `bundle_type`，也会检查 `can_export` / `can_import` 和 `conflict_strategies`。只会导入的 adapter 不能发起发送请求，只会导出的 adapter 不能发起导入请求；只声明 `reject` 的 adapter 不能发起 `rename` 导入。
 
+## App Manifest
+
+descriptor 说明 adapter 有什么能力。app manifest 说明某个上层应用把哪些“逻辑资源”交给 adapter。
+
+它仍然不写真实目录。不要把用户目录、配置目录、数据库路径写进 manifest。只写逻辑资源名，例如 `app.session.selected`、`app.workspace.selected`。真实路径由应用自己在导出/导入时处理，并且必须由用户选择或由应用自己的权限系统确认。
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs app-manifest \
+  --descriptor adapter.json \
+  --app-id generic.app \
+  --name "Generic App" > app-manifest.json
+
+node docs/examples/generic-adapter/generic-adapter.mjs validate-app-manifest \
+  --manifest app-manifest.json \
+  --descriptor adapter.json
+```
+
+manifest 里每个 resource 会声明：
+
+- `bundle_type`
+- `permission_scope`
+- `logical_source`
+- `logical_target`
+- `export_action`
+- `import_action`
+- `rollback_action`
+- `conflict_strategies`
+- `migration_policy`
+- 是否敏感、是否要求可信设备
+
+敏感资源仍按同一条边界处理：`skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。
+
+可以从 manifest 生成某个资源的下一步计划：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs resource-plan \
+  --manifest app-manifest.json \
+  --resource-id workspace.default \
+  --action export \
+  --bundle-id bundle_workspace_demo
+```
+
+这个计划只告诉 adapter 下一步该跑哪个 runtime action、需要哪个 bridge scope。它不读取本机文件，也不代表 NekoDrop 能直接写第三方应用目录。
+
+workflow 也可以直接引用 manifest resource。这样真实 adapter 不需要在每个请求里重复写 bundle type：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs workflow \
+  --mode full-loop \
+  --app-manifest app-manifest.json \
+  --resource-id workspace.default \
+  --source ./sample-workspace \
+  --output ./out \
+  --bundle-id bundle_workspace_demo \
+  --name "Workspace demo" \
+  --target-device-id neko-device-target \
+  --staged-bundle-id bundle_workspace_demo
+```
+
+如果资源只支持导入或只支持导出，示例会拒绝不匹配的 workflow。比如 import-only resource 不能生成发送流程，export-only resource 不能生成导入或撤回流程。
+
+如果要把“上层应用自己的导入/回滚”也画进流程，可以显式传应用选择的目标目录和 adapter receipt：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs workflow \
+  --mode full-loop \
+  --source ./sample-workspace \
+  --output ./out \
+  --bundle-id bundle_workspace_demo \
+  --name "Workspace demo" \
+  --target-device-id neko-device-target \
+  --staged-bundle-id bundle_workspace_demo \
+  --type workspace \
+  --target-root ./adapter-data \
+  --adapter-receipt ./adapter-data/workspace/bundle_workspace_demo/.generic-adapter-latest-import-receipt.json
+```
+
+输出里的 `adapter_import_target` 和 `adapter_rollback_target` 是应用侧步骤，不是 NekoDrop 自动写第三方目录。真实 adapter 应把目标目录选择、dry-run、receipt 和失败回滚放在自己的权限边界里。
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：
