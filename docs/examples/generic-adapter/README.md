@@ -100,6 +100,24 @@ node docs/examples/generic-adapter/generic-adapter.mjs workflow \
 
 如果资源只支持导入或只支持导出，示例会拒绝不匹配的 workflow。比如 import-only resource 不能生成发送流程，export-only resource 不能生成导入或撤回流程。
 
+如果要把“上层应用自己的导入/回滚”也画进流程，可以显式传应用选择的目标目录和 adapter receipt：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs workflow \
+  --mode full-loop \
+  --source ./sample-workspace \
+  --output ./out \
+  --bundle-id bundle_workspace_demo \
+  --name "Workspace demo" \
+  --target-device-id neko-device-target \
+  --staged-bundle-id bundle_workspace_demo \
+  --type workspace \
+  --target-root ./adapter-data \
+  --adapter-receipt ./adapter-data/workspace/bundle_workspace_demo/.generic-adapter-latest-import-receipt.json
+```
+
+输出里的 `adapter_import_target` 和 `adapter_rollback_target` 是应用侧步骤，不是 NekoDrop 自动写第三方目录。真实 adapter 应把目标目录选择、dry-run、receipt 和失败回滚放在自己的权限边界里。
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：
