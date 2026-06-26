@@ -287,7 +287,11 @@ test("generic adapter sample dry-runs adapter-owned imports before writing", () 
   ));
   assert.equal(dryRun.status, "would_import");
   assert.equal(dryRun.dry_run, true);
+  assert.equal(dryRun.plan.schema, "generic.adapter.import_plan.v1");
+  assert.equal(dryRun.plan.state, "would_import");
+  assert.equal(dryRun.plan.next_action, "confirm_import_then_run_import_target");
   assert.equal(dryRun.would_import_file_count, 2);
+  assert.deepEqual(dryRun.plan.would_import_paths, ["files/notes.md", "files/workspace.json"]);
   assert.equal(dryRun.receipt_path, null);
   assert.equal(readFileMaybe(join(targetPath, "notes.md")), null);
 
@@ -325,6 +329,8 @@ test("generic adapter sample dry-runs adapter-owned imports before writing", () 
     { encoding: "utf8" }
   ));
   assert.equal(conflictDryRun.status, "would_conflict");
+  assert.equal(conflictDryRun.plan.state, "would_conflict");
+  assert.equal(conflictDryRun.plan.next_action, "choose_rename_or_skip_conflicts_or_cancel");
   assert.equal(conflictDryRun.conflict_count, 2);
   assert.equal(conflictDryRun.would_import_file_count, 2);
 
@@ -346,7 +352,9 @@ test("generic adapter sample dry-runs adapter-owned imports before writing", () 
     ],
     { encoding: "utf8" }
   ));
-  assert.equal(skipDryRun.status, "would_conflict");
+  assert.equal(skipDryRun.status, "would_skip");
+  assert.equal(skipDryRun.plan.state, "would_skip");
+  assert.equal(skipDryRun.plan.next_action, "confirm_import_then_run_import_target");
   assert.equal(skipDryRun.conflict_count, 2);
   assert.equal(skipDryRun.would_import_file_count, 0);
   assert.equal(skipDryRun.would_skip_file_count, 2);
@@ -1638,6 +1646,8 @@ test("generic adapter sample full loop can include app-owned import and rollback
   ]);
   assert.equal(byStep.adapter_import_dry_run.command.at(-2), "--dry-run");
   assert.equal(byStep.adapter_import_dry_run.command.at(-1), "true");
+  assert.equal(byStep.adapter_import_confirm.requires, "user_or_app_confirmation_after_adapter_import_dry_run");
+  assert.deepEqual(byStep.adapter_import_confirm.accepts_plan_states, ["would_import", "would_skip"]);
   assert.deepEqual(byStep.adapter_import_target.command.slice(0, 4), [
     "node",
     "docs/examples/generic-adapter/generic-adapter.mjs",
@@ -1682,6 +1692,7 @@ test("generic adapter sample does not add app-owned target steps without explici
 
   const workflow = JSON.parse(stdout);
   assert.equal(workflow.steps.some((step) => step.step === "adapter_import_dry_run"), false);
+  assert.equal(workflow.steps.some((step) => step.step === "adapter_import_confirm"), false);
   assert.equal(workflow.steps.some((step) => step.step === "adapter_import_target"), false);
   assert.equal(workflow.steps.some((step) => step.step === "adapter_rollback_target"), false);
 });

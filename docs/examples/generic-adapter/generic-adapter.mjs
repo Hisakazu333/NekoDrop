@@ -256,27 +256,7 @@ function importBundleIntoAdapterTarget(flags) {
   });
   const conflicts = files.filter((file) => file.destination_exists);
   if (dryRun) {
-    const skipped = strategy === "skip_conflicts"
-      ? conflicts.map((file) => file.manifest_path)
-      : [];
-    const wouldImport = files
-      .map((file) => file.manifest_path)
-      .filter((manifestPath) => !skipped.includes(manifestPath));
-    return {
-      bundle_id: manifest.bundle_id,
-      bundle_type: manifest.bundle_type,
-      display_name: manifest.display_name,
-      target_root: targetRoot,
-      target_path: target,
-      status: conflicts.length > 0 || existsSync(target) ? "would_conflict" : "would_import",
-      dry_run: true,
-      conflict_strategy: strategy,
-      would_import_file_count: wouldImport.length,
-      would_skip_file_count: skipped.length,
-      conflict_count: Math.max(conflicts.length, existsSync(target) ? 1 : 0),
-      conflicts: conflicts.map((file) => file.manifest_path),
-      receipt_path: null
-    };
+    return adapterImportPlan(manifest, targetRoot, target, files, conflicts, strategy);
   }
 
   if ((existsSync(target) || conflicts.length > 0) && strategy === "reject") {
@@ -345,6 +325,78 @@ function importBundleIntoAdapterTarget(flags) {
     conflicts: conflicts.map((file) => file.manifest_path),
     receipt_path: receiptPath
   };
+}
+
+function adapterImportPlan(manifest, targetRoot, target, files, conflicts, strategy) {
+  const skipped = strategy === "skip_conflicts"
+    ? conflicts.map((file) => file.manifest_path)
+    : [];
+  const wouldImport = files
+    .map((file) => file.manifest_path)
+    .filter((manifestPath) => !skipped.includes(manifestPath));
+  const conflictCount = Math.max(conflicts.length, existsSync(target) ? 1 : 0);
+  const planState = adapterImportPlanState(strategy, conflictCount, wouldImport.length, skipped.length);
+  const nextAction = nextActionForAdapterImportPlan(planState);
+  const plan = {
+    schema: "generic.adapter.import_plan.v1",
+    state: planState,
+    next_action: nextAction,
+    bundle_id: manifest.bundle_id,
+    bundle_type: manifest.bundle_type,
+    display_name: manifest.display_name,
+    conflict_strategy: strategy,
+    target_root: targetRoot,
+    target_path: target,
+    file_count: files.length,
+    would_import_file_count: wouldImport.length,
+    would_skip_file_count: skipped.length,
+    conflict_count: conflictCount,
+    conflicts: conflicts.map((file) => file.manifest_path),
+    would_import_paths: wouldImport,
+    would_skip_paths: skipped
+  };
+  return {
+    bundle_id: manifest.bundle_id,
+    bundle_type: manifest.bundle_type,
+    display_name: manifest.display_name,
+    target_root: targetRoot,
+    target_path: target,
+    status: planState,
+    dry_run: true,
+    conflict_strategy: strategy,
+    would_import_file_count: wouldImport.length,
+    would_skip_file_count: skipped.length,
+    conflict_count: conflictCount,
+    conflicts: plan.conflicts,
+    receipt_path: null,
+    plan
+  };
+}
+
+function adapterImportPlanState(strategy, conflictCount, wouldImportCount, skippedCount) {
+  if (conflictCount === 0) {
+    return "would_import";
+  }
+  if (strategy === "reject") {
+    return "would_conflict";
+  }
+  if (strategy === "skip_conflicts" && wouldImportCount === 0 && skippedCount > 0) {
+    return "would_skip";
+  }
+  if (strategy === "skip_conflicts" || strategy === "rename") {
+    return "would_import";
+  }
+  return "cannot_import";
+}
+
+function nextActionForAdapterImportPlan(state) {
+  if (state === "would_import" || state === "would_skip") {
+    return "confirm_import_then_run_import_target";
+  }
+  if (state === "would_conflict") {
+    return "choose_rename_or_skip_conflicts_or_cancel";
+  }
+  return "cancel_import";
 }
 
 function rollbackAdapterTargetImport(flags) {
@@ -1351,6 +1403,11 @@ function buildWorkflow(flags) {
             command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot, "dry-run": "true" })
           },
           {
+            step: "adapter_import_confirm",
+            requires: "user_or_app_confirmation_after_adapter_import_dry_run",
+            accepts_plan_states: ["would_import", "would_skip"]
+          },
+          {
             step: "adapter_import_target",
             command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot })
           }
@@ -1406,6 +1463,8 @@ function buildWorkflow(flags) {
         "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
         "If resource_plan is present, use it as the app-level mapping from logical resource to runtime action and bridge scope.",
         "NekoDrop rollback only removes files imported into NekoDrop's local import area.",
+        "adapter_import_dry_run must return would_import, would_conflict, would_skip, or cannot_import before an app writes data.",
+        "adapter_import_confirm is an app-owned confirmation step between dry-run and import-target.",
         "adapter_import_target and adapter_rollback_target are application-owned steps; they require an app-selected target root or adapter receipt and do not run inside NekoDrop."
       ]
     };

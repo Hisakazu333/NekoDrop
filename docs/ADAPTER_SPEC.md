@@ -256,7 +256,7 @@ adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.res
 
 通用 adapter 示例会把这些结果再归纳成一个 `next_action` 提示，方便上层决定下一步是继续等、换冲突策略、查 receipt、请求回滚，还是直接报错。这个提示只属于示例层，不是协议字段。
 
-示例里还提供了 `import-target` 和 `rollback-target` 命令，用来演示上层应用如何把已校验 bundle 导入自己的数据目录，再按 adapter 私有 receipt 保守撤回。导入前会重新校验 manifest / checksums / permissions；撤回只删除 receipt 记录里本次导入且未被改写的文件。这个样例只说明“上层应用自己的导入流程应该怎么写”，不代表 NekoDrop 负责写第三方应用目录。
+示例里还提供了 `import-target` 和 `rollback-target` 命令，用来演示上层应用如何把已校验 bundle 导入自己的数据目录，再按 adapter 私有 receipt 保守撤回。`import-target --dry-run true` 会先返回 `generic.adapter.import_plan.v1`，稳定状态只允许 `would_import`、`would_conflict`、`would_skip` 或 `cannot_import`。真实 adapter 应在 dry-run 和实际写入之间做用户确认或应用确认；`would_conflict` 不能直接写，必须换成 `rename`、`skip_conflicts` 或取消。导入前会重新校验 manifest / checksums / permissions；撤回只删除 receipt 记录里本次导入且未被改写的文件。这个样例只说明“上层应用自己的导入流程应该怎么写”，不代表 NekoDrop 负责写第三方应用目录。
 
 示例里的 `event-state` 会把一次 `events.poll` response 归纳成 watch loop 可用的 cursor、action 摘要和下一步提示。它是 adapter 侧辅助，不是新的 bridge 协议；终态事件出现后仍应调用 `actions.results` 做精确结果查询。
 
