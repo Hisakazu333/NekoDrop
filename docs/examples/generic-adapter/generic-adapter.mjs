@@ -596,6 +596,9 @@ function validateAdapterDescriptor(descriptor) {
   if (security.requires_authenticated_encrypted_session_for_sensitive_bundles !== true) {
     throw new Error("adapter descriptor must require authenticated encrypted session for sensitive bundles");
   }
+  if (security.refuses_untrusted_sensitive_send !== true) {
+    throw new Error("adapter descriptor must refuse untrusted sensitive sends");
+  }
   return true;
 }
 

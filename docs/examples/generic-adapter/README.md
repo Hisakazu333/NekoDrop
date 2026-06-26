@@ -24,7 +24,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
   --descriptor adapter.json
 ```
 
-敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
+敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 也必须声明拒绝不可信敏感发送，避免 adapter 自己绕过 NekoDrop 的兜底校验。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
 
 生成请求时也可以直接引用 descriptor：
 
