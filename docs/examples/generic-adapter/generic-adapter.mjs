@@ -29,6 +29,7 @@ const TYPE_CONFIG = {
 };
 const SENSITIVE_BUNDLE_TYPES = new Set(["skill", "session", "workspace", "agent_profile"]);
 const ADAPTER_DESCRIPTOR_SCHEMA = "nekolink.adapter.v1";
+const APP_MANIFEST_SCHEMA = "nekolink.adapter.app_manifest.v1";
 const BRIDGE_SCOPE_ALLOWLIST = new Set([
   "bundle.read",
   "bundle.send",
@@ -45,6 +46,7 @@ const FULL_LOOP_BRIDGE_SCOPES = [
 const ADAPTER_RUNTIME_ACTIONS = new Set(["export_bundle", "import_bundle", "rollback_import"]);
 const UNSAFE_RUNTIME_COMMANDS = new Set(["sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
 const ADAPTER_MIGRATION_POLICIES = new Set(["manual_only", "adapter_managed"]);
+const APP_RESOURCE_DIRECTIONS = new Set(["export", "import", "both"]);
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -76,6 +78,18 @@ async function main() {
   }
   if (command === "validate-descriptor") {
     printJson(validateAdapterDescriptorFile(parseFlags(args)));
+    return;
+  }
+  if (command === "app-manifest") {
+    printJson(buildAppManifest(parseFlags(args)));
+    return;
+  }
+  if (command === "validate-app-manifest") {
+    printJson(validateAppManifestFile(parseFlags(args)));
+    return;
+  }
+  if (command === "resource-plan") {
+    printJson(buildResourcePlan(parseFlags(args)));
     return;
   }
   if (command === "workflow") {
@@ -497,6 +511,16 @@ function pathIsInside(child, parent) {
   return child === parent || child.startsWith(`${parent}${sep}`);
 }
 
+function looksLikePath(value) {
+  return (
+    value.startsWith("/") ||
+    value.startsWith("~") ||
+    /^[A-Za-z]:[\\/]/.test(value) ||
+    value.includes("/") ||
+    value.includes("\\")
+  );
+}
+
 function buildAdapterDescriptor(flags) {
   const bundleTypes = toArray(flags.type).length > 0
     ? toArray(flags.type).map(requireKnownType)
@@ -609,6 +633,299 @@ function validateAdapterDescriptor(descriptor) {
     throw new Error("adapter descriptor must refuse untrusted sensitive sends");
   }
   return true;
+}
+
+function buildAppManifest(flags) {
+  const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
+  const bundleTypes = toArray(flags.type).length > 0
+    ? toArray(flags.type).map(requireKnownType)
+    : descriptor
+      ? descriptor.bundle_types.map((entry) => entry.bundle_type)
+      : ["session", "skill", "workspace", "agent_profile"];
+  const uniqueTypes = [...new Set(bundleTypes)];
+  const manifest = {
+    schema: APP_MANIFEST_SCHEMA,
+    app_id: flags["app-id"] ?? descriptor?.adapter_id ?? "generic.app",
+    display_name: flags.name ?? descriptor?.display_name ?? "Generic App",
+    app_kind: flags["app-kind"] ?? descriptor?.app_kind ?? "generic",
+    adapter_id: descriptor?.adapter_id ?? flags["adapter-id"] ?? CLIENT.client_id,
+    resources: uniqueTypes.map((bundleType) => appResourceForType(bundleType, flags)),
+    safety: {
+      never_include: [
+        "provider tokens",
+        "cookies",
+        "private keys",
+        "machine local absolute paths",
+        "keychain or credential-manager references"
+      ],
+      require_user_selected_source: true,
+      require_dry_run_before_import: true,
+      require_receipt_for_import: true,
+      require_authenticated_encrypted_session_for_sensitive_bundles: true
+    }
+  };
+  validateAppManifest(manifest, descriptor);
+  return manifest;
+}
+
+function appResourceForType(bundleType, flags) {
+  const type = requireKnownType(bundleType);
+  const direction = requireAppResourceDirection(flags.direction ?? "both");
+  return {
+    resource_id: flags["resource-id"] ?? `${type}.default`,
+    bundle_type: type,
+    display_name: flags["resource-name"] ?? displayNameForBundleType(type),
+    direction,
+    logical_source: flags["logical-source"] ?? `app.${type}.selected`,
+    logical_target: flags["logical-target"] ?? TYPE_CONFIG[type].target,
+    permission_scope: TYPE_CONFIG[type].scope,
+    export_action: direction === "import" ? null : "export_bundle",
+    import_action: direction === "export" ? null : "import_bundle",
+    rollback_action: direction === "export" ? null : "rollback_import",
+    sensitive: SENSITIVE_BUNDLE_TYPES.has(type),
+    requires_trusted_device: SENSITIVE_BUNDLE_TYPES.has(type),
+    conflict_strategies: ["reject", "rename", "skip_conflicts"],
+    migration_policy: flags["migration-policy"] ?? "manual_only"
+  };
+}
+
+function displayNameForBundleType(type) {
+  return {
+    skill: "Skill",
+    session: "Session",
+    workspace: "Workspace",
+    agent_profile: "Agent profile",
+    config_snapshot: "Config snapshot"
+  }[type] ?? type;
+}
+
+function validateAppManifestFile(flags) {
+  const manifestPath = requireFlag(flags, "manifest");
+  const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
+  const manifest = loadAppManifest(manifestPath, descriptor);
+  return {
+    schema: manifest.schema,
+    app_id: manifest.app_id,
+    adapter_id: manifest.adapter_id,
+    resource_count: manifest.resources.length,
+    bundle_types: manifest.resources.map((resource) => resource.bundle_type),
+    sensitive_resources: manifest.resources
+      .filter((resource) => resource.sensitive)
+      .map((resource) => resource.resource_id),
+    directions: manifest.resources.map((resource) => resource.direction)
+  };
+}
+
+function loadAppManifest(manifestPath, descriptor = null) {
+  const manifest = readJson(manifestPath);
+  validateAppManifest(manifest, descriptor);
+  return manifest;
+}
+
+function validateAppManifest(manifest, descriptor = null) {
+  if (manifest.schema !== APP_MANIFEST_SCHEMA) {
+    throw new Error(`unsupported app manifest schema: ${manifest.schema}`);
+  }
+  for (const [field, value] of [
+    ["app_id", manifest.app_id],
+    ["display_name", manifest.display_name],
+    ["app_kind", manifest.app_kind],
+    ["adapter_id", manifest.adapter_id]
+  ]) {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`app manifest ${field} is required`);
+    }
+    if (looksLikePath(value)) {
+      throw new Error(`app manifest ${field} must be an id or name, not a path`);
+    }
+  }
+  if (!Array.isArray(manifest.resources) || manifest.resources.length === 0) {
+    throw new Error("app manifest resources is required");
+  }
+  const seenResourceIds = new Set();
+  for (const resource of manifest.resources) {
+    validateAppResource(resource, seenResourceIds, descriptor);
+  }
+  validateAppManifestSafety(manifest.safety);
+  return true;
+}
+
+function validateAppResource(resource, seenResourceIds, descriptor) {
+  if (!resource || typeof resource !== "object") {
+    throw new Error("app manifest resource must be an object");
+  }
+  if (typeof resource.resource_id !== "string" || resource.resource_id.trim() === "") {
+    throw new Error("app manifest resource_id is required");
+  }
+  if (seenResourceIds.has(resource.resource_id)) {
+    throw new Error(`duplicate app manifest resource_id: ${resource.resource_id}`);
+  }
+  seenResourceIds.add(resource.resource_id);
+  if (looksLikePath(resource.resource_id)) {
+    throw new Error("app manifest resource_id must not be a path");
+  }
+  const type = requireKnownType(resource.bundle_type);
+  const direction = requireAppResourceDirection(resource.direction);
+  if (resource.permission_scope !== TYPE_CONFIG[type].scope) {
+    throw new Error(`app manifest permission_scope mismatch for ${type}`);
+  }
+  if (resource.logical_target !== TYPE_CONFIG[type].target) {
+    throw new Error(`app manifest logical_target mismatch for ${type}`);
+  }
+  for (const field of ["logical_source", "logical_target"]) {
+    if (typeof resource[field] !== "string" || resource[field].trim() === "") {
+      throw new Error(`app manifest ${field} is required`);
+    }
+    if (looksLikePath(resource[field])) {
+      throw new Error(`app manifest ${field} must be logical, not a filesystem path`);
+    }
+  }
+  if (direction === "import" && resource.export_action !== null) {
+    throw new Error("import-only app resource must not declare export_action");
+  }
+  if (direction === "export") {
+    if (resource.import_action !== null || resource.rollback_action !== null) {
+      throw new Error("export-only app resource must not declare import or rollback actions");
+    }
+  }
+  validateResourceAction(resource.export_action, "export_action", direction === "import");
+  validateResourceAction(resource.import_action, "import_action", direction === "export");
+  validateResourceAction(resource.rollback_action, "rollback_action", direction === "export");
+  if (!Array.isArray(resource.conflict_strategies) || resource.conflict_strategies.length === 0) {
+    throw new Error(`app manifest ${type} conflict_strategies is required`);
+  }
+  for (const strategy of resource.conflict_strategies) {
+    requireConflictStrategy(strategy);
+  }
+  if (!ADAPTER_MIGRATION_POLICIES.has(resource.migration_policy)) {
+    throw new Error(`unsupported app manifest migration_policy: ${resource.migration_policy}`);
+  }
+  if (SENSITIVE_BUNDLE_TYPES.has(type)) {
+    if (resource.sensitive !== true || resource.requires_trusted_device !== true) {
+      throw new Error(`${type} app resource must mark sensitive and require trusted device`);
+    }
+  }
+  if (descriptor) {
+    const descriptorEntry = requireDescriptorBundleType(
+      descriptor,
+      type,
+      direction === "export" ? "export" : direction === "import" ? "import" : "export"
+    );
+    if (direction === "both") {
+      requireDescriptorBundleType(descriptor, type, "import");
+    }
+    for (const strategy of resource.conflict_strategies) {
+      requireDescriptorConflictStrategy(descriptorEntry, strategy);
+    }
+  }
+}
+
+function validateResourceAction(action, field, nullable) {
+  if (action === null && nullable) return;
+  if (typeof action !== "string" || action.trim() === "") {
+    throw new Error(`app manifest ${field} is required`);
+  }
+  if (!ADAPTER_RUNTIME_ACTIONS.has(action)) {
+    throw new Error(`unsupported app manifest ${field}: ${action}`);
+  }
+}
+
+function validateAppManifestSafety(safety) {
+  if (!safety || typeof safety !== "object") {
+    throw new Error("app manifest safety is required");
+  }
+  if (!Array.isArray(safety.never_include) || safety.never_include.length === 0) {
+    throw new Error("app manifest safety.never_include is required");
+  }
+  for (const value of safety.never_include) {
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error("app manifest safety.never_include entries must be strings");
+    }
+  }
+  for (const field of [
+    "require_user_selected_source",
+    "require_dry_run_before_import",
+    "require_receipt_for_import",
+    "require_authenticated_encrypted_session_for_sensitive_bundles"
+  ]) {
+    if (safety[field] !== true) {
+      throw new Error(`app manifest safety.${field} must be true`);
+    }
+  }
+}
+
+function buildResourcePlan(flags) {
+  const manifest = loadAppManifest(requireFlag(flags, "manifest"), flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null);
+  const resource = manifest.resources.find((entry) => entry.resource_id === requireFlag(flags, "resource-id"));
+  if (!resource) {
+    throw new Error(`app manifest does not declare resource: ${requireFlag(flags, "resource-id")}`);
+  }
+  const action = requireAppResourceAction(flags.action ?? "export");
+  validateResourceSupportsAction(resource, action);
+  const bundleId = flags["bundle-id"] ?? `${resource.bundle_type}_${Date.now()}`;
+  const plan = {
+    app_id: manifest.app_id,
+    adapter_id: manifest.adapter_id,
+    resource_id: resource.resource_id,
+    action,
+    bundle_type: resource.bundle_type,
+    permission_scope: resource.permission_scope,
+    sensitive: resource.sensitive,
+    requires_trusted_device: resource.requires_trusted_device,
+    migration_policy: resource.migration_policy,
+    conflict_strategies: resource.conflict_strategies,
+    next_bridge_scope: bridgeScopeForResourceAction(action),
+    runtime_action: runtimeActionForResourceAction(resource, action),
+    bundle_id: bundleId,
+    logical_source: resource.logical_source,
+    logical_target: resource.logical_target
+  };
+  if (action === "export") {
+    return {
+      ...plan,
+      next_step: "run_adapter_export_then_request_bundle_send"
+    };
+  }
+  if (action === "import") {
+    return {
+      ...plan,
+      next_step: "query_bundle_detail_then_request_bundle_import"
+    };
+  }
+  return {
+    ...plan,
+    next_step: "query_receipt_state_then_request_bundle_rollback"
+  };
+}
+
+function requireAppResourceDirection(direction) {
+  if (APP_RESOURCE_DIRECTIONS.has(direction)) return direction;
+  throw new Error("--direction must be export, import, or both");
+}
+
+function requireAppResourceAction(action) {
+  if (["export", "import", "rollback"].includes(action)) return action;
+  throw new Error("--action must be export, import, or rollback");
+}
+
+function validateResourceSupportsAction(resource, action) {
+  if (action === "export" && resource.direction === "import") {
+    throw new Error(`resource ${resource.resource_id} does not support export`);
+  }
+  if ((action === "import" || action === "rollback") && resource.direction === "export") {
+    throw new Error(`resource ${resource.resource_id} does not support ${action}`);
+  }
+}
+
+function runtimeActionForResourceAction(resource, action) {
+  if (action === "export") return resource.export_action;
+  if (action === "import") return resource.import_action;
+  return resource.rollback_action;
+}
+
+function bridgeScopeForResourceAction(action) {
+  if (action === "export") return "bundle.send";
+  return "bundle.import.request";
 }
 
 function validateDescriptorClient(client) {
@@ -1719,6 +2036,9 @@ function usage() {
   node generic-adapter.mjs request results --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs descriptor --type session --type workspace --capability both --conflict-strategy reject
   node generic-adapter.mjs validate-descriptor --descriptor adapter.json
+  node generic-adapter.mjs app-manifest --descriptor adapter.json --app-id generic.app --name "Generic App"
+  node generic-adapter.mjs validate-app-manifest --manifest app-manifest.json --descriptor adapter.json
+  node generic-adapter.mjs resource-plan --manifest app-manifest.json --resource-id workspace.default --action export --bundle-id ID
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID

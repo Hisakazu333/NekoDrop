@@ -454,6 +454,218 @@ test("generic adapter sample can declare adapter-managed migrations", () => {
   assert.equal(descriptor.transactions.migration_policy, "adapter_managed");
 });
 
+test("generic adapter sample prints and validates a generic app manifest", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-app-manifest-"));
+  const descriptorPath = join(tempRoot, "adapter.json");
+  const manifestPath = join(tempRoot, "app-manifest.json");
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "descriptor",
+      "--type",
+      "session",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "app-manifest",
+      "--descriptor",
+      descriptorPath,
+      "--name",
+      "Generic App",
+      "--app-id",
+      "generic.app"
+    ],
+    { encoding: "utf8" }
+  );
+  writeFileSync(manifestPath, stdout);
+
+  const manifest = JSON.parse(stdout);
+  assert.equal(manifest.schema, "nekolink.adapter.app_manifest.v1");
+  assert.equal(manifest.app_id, "generic.app");
+  assert.equal(manifest.adapter_id, "generic.adapter.sample");
+  assert.deepEqual(
+    manifest.resources.map((resource) => resource.bundle_type),
+    ["session", "workspace"]
+  );
+  assert.equal(manifest.resources[0].logical_source, "app.session.selected");
+  assert.equal(manifest.resources[0].logical_target, "adapter.session");
+  assert.equal(manifest.resources[0].sensitive, true);
+  assert.equal(manifest.resources[0].requires_trusted_device, true);
+  assert.deepEqual(manifest.resources[0].conflict_strategies, ["reject", "rename", "skip_conflicts"]);
+  assert.equal(manifest.safety.require_user_selected_source, true);
+  assert.equal(manifest.safety.require_receipt_for_import, true);
+
+  const validation = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "validate-app-manifest",
+      "--manifest",
+      manifestPath,
+      "--descriptor",
+      descriptorPath
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(validation.schema, "nekolink.adapter.app_manifest.v1");
+  assert.equal(validation.resource_count, 2);
+  assert.deepEqual(validation.bundle_types, ["session", "workspace"]);
+  assert.deepEqual(validation.sensitive_resources, ["session.default", "workspace.default"]);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample derives a resource action plan from an app manifest", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-resource-plan-"));
+  const manifestPath = join(tempRoot, "app-manifest.json");
+  const manifest = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "app-manifest",
+      "--type",
+      "workspace",
+      "--app-id",
+      "generic.app",
+      "--name",
+      "Generic App",
+      "--resource-id",
+      "workspace.hand-off"
+    ],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const exportPlan = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "resource-plan",
+      "--manifest",
+      manifestPath,
+      "--resource-id",
+      "workspace.hand-off",
+      "--action",
+      "export",
+      "--bundle-id",
+      "bundle_workspace_handoff"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(exportPlan.action, "export");
+  assert.equal(exportPlan.bundle_type, "workspace");
+  assert.equal(exportPlan.next_bridge_scope, "bundle.send");
+  assert.equal(exportPlan.runtime_action, "export_bundle");
+  assert.equal(exportPlan.next_step, "run_adapter_export_then_request_bundle_send");
+  assert.equal(exportPlan.logical_source, "app.workspace.selected");
+
+  const importPlan = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "resource-plan",
+      "--manifest",
+      manifestPath,
+      "--resource-id",
+      "workspace.hand-off",
+      "--action",
+      "import",
+      "--bundle-id",
+      "bundle_workspace_handoff"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(importPlan.action, "import");
+  assert.equal(importPlan.next_bridge_scope, "bundle.import.request");
+  assert.equal(importPlan.runtime_action, "import_bundle");
+  assert.equal(importPlan.logical_target, "adapter.workspace");
+
+  const rollbackPlan = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "resource-plan",
+      "--manifest",
+      manifestPath,
+      "--resource-id",
+      "workspace.hand-off",
+      "--action",
+      "rollback",
+      "--bundle-id",
+      "bundle_workspace_handoff"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(rollbackPlan.action, "rollback");
+  assert.equal(rollbackPlan.runtime_action, "rollback_import");
+  assert.equal(rollbackPlan.next_step, "query_receipt_state_then_request_bundle_rollback");
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample rejects unsafe app manifests", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-app-manifest-invalid-"));
+  const manifestPath = join(tempRoot, "app-manifest.json");
+  const manifest = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "app-manifest",
+      "--type",
+      "session",
+      "--app-id",
+      "generic.app"
+    ],
+    { encoding: "utf8" }
+  ));
+
+  manifest.resources[0].logical_source = "/home/user/.app/session";
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-app-manifest", "--manifest", manifestPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /logical_source must be logical/
+  );
+
+  manifest.resources[0].logical_source = "app.session.selected";
+  manifest.resources[0].requires_trusted_device = false;
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-app-manifest", "--manifest", manifestPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /session app resource must mark sensitive and require trusted device/
+  );
+
+  manifest.resources[0].requires_trusted_device = true;
+  manifest.safety.require_receipt_for_import = false;
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-app-manifest", "--manifest", manifestPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /safety.require_receipt_for_import must be true/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample can derive auth scopes from an adapter descriptor", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-descriptor-auth-"));
   const descriptorPath = join(tempRoot, "adapter.json");
