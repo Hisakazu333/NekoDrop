@@ -47,6 +47,20 @@ const ADAPTER_RUNTIME_ACTIONS = new Set(["export_bundle", "import_bundle", "roll
 const UNSAFE_RUNTIME_COMMANDS = new Set(["sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
 const ADAPTER_MIGRATION_POLICIES = new Set(["manual_only", "adapter_managed"]);
 const APP_RESOURCE_DIRECTIONS = new Set(["export", "import", "both"]);
+const IMPORT_PLAN_STATES = ["would_import", "would_conflict", "would_skip", "cannot_import"];
+const ACTION_LIFECYCLE_STATUSES = ["queued", "running", "succeeded", "failed", "conflict", "cancelled"];
+const ACTION_STATE_STATES = ["missing", "pending", "running", "result"];
+const RECEIPT_STATE_STATES = [
+  "missing",
+  "ready_to_import",
+  "import_conflict",
+  "imported_can_rollback",
+  "imported_no_rollback",
+  "rolled_back",
+  "save_only",
+  "not_imported"
+];
+const ROLLBACK_BLOCKING_REASONS = ["destination_missing", "imported_file_missing", "already_rolled_back"];
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -90,6 +104,10 @@ async function main() {
   }
   if (command === "resource-plan") {
     printJson(buildResourcePlan(parseFlags(args)));
+    return;
+  }
+  if (command === "contract") {
+    printJson(buildAdapterContract());
     return;
   }
   if (command === "workflow") {
@@ -397,6 +415,21 @@ function nextActionForAdapterImportPlan(state) {
     return "choose_rename_or_skip_conflicts_or_cancel";
   }
   return "cancel_import";
+}
+
+function buildAdapterContract() {
+  return {
+    schema: "generic.adapter.contract.v1",
+    bridge_actions: ["bundle.send", "bundle.import", "bundle.rollback"],
+    import_plan_states: IMPORT_PLAN_STATES,
+    action_lifecycle_statuses: ACTION_LIFECYCLE_STATUSES,
+    action_state_states: ACTION_STATE_STATES,
+    receipt_state_states: RECEIPT_STATE_STATES,
+    rollback_blocking_reasons: ROLLBACK_BLOCKING_REASONS,
+    action_result_rule: "Use lifecycle_status for control flow when present; status is the raw bridge result.",
+    sensitive_bundle_types: Array.from(SENSITIVE_BUNDLE_TYPES),
+    sensitive_bundle_policy: "skill, session, workspace, and agent_profile require a trusted authenticated encrypted target."
+  };
 }
 
 function rollbackAdapterTargetImport(flags) {
@@ -2221,6 +2254,7 @@ function usage() {
   node generic-adapter.mjs app-manifest --descriptor adapter.json --app-id generic.app --name "Generic App"
   node generic-adapter.mjs validate-app-manifest --manifest app-manifest.json --descriptor adapter.json
   node generic-adapter.mjs resource-plan --manifest app-manifest.json --resource-id workspace.default --action export --bundle-id ID
+  node generic-adapter.mjs contract
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --app-manifest app-manifest.json --resource-id workspace.default --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID
