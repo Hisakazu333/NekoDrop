@@ -239,6 +239,121 @@ test("generic adapter sample imports a checked bundle into an adapter-owned targ
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
+test("generic adapter sample dry-runs adapter-owned imports before writing", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-import-dry-run-"));
+  const source = join(tempRoot, "source");
+  const output = join(tempRoot, "out");
+  const targetRoot = join(tempRoot, "adapter-data");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "workspace.json"), JSON.stringify({ name: "demo workspace" }));
+  writeFileSync(join(source, "notes.md"), "dry run me\n");
+
+  execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "export",
+      "--source",
+      source,
+      "--output",
+      output,
+      "--bundle-id",
+      "bundle_workspace_dry_run",
+      "--type",
+      "workspace",
+      "--name",
+      "Workspace dry run"
+    ],
+    { encoding: "utf8" }
+  );
+  const bundleRoot = join(output, "bundle_workspace_dry_run");
+  const targetPath = join(targetRoot, "workspace", "bundle_workspace_dry_run");
+
+  const dryRun = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace",
+      "--dry-run",
+      "true"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(dryRun.status, "would_import");
+  assert.equal(dryRun.dry_run, true);
+  assert.equal(dryRun.would_import_file_count, 2);
+  assert.equal(dryRun.receipt_path, null);
+  assert.equal(readFileMaybe(join(targetPath, "notes.md")), null);
+
+  execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const conflictDryRun = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "reject",
+      "--dry-run",
+      "true"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(conflictDryRun.status, "would_conflict");
+  assert.equal(conflictDryRun.conflict_count, 2);
+  assert.equal(conflictDryRun.would_import_file_count, 2);
+
+  const skipDryRun = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "import-target",
+      "--bundle-root",
+      bundleRoot,
+      "--target-root",
+      targetRoot,
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "skip_conflicts",
+      "--dry-run",
+      "true"
+    ],
+    { encoding: "utf8" }
+  ));
+  assert.equal(skipDryRun.status, "would_conflict");
+  assert.equal(skipDryRun.conflict_count, 2);
+  assert.equal(skipDryRun.would_import_file_count, 0);
+  assert.equal(skipDryRun.would_skip_file_count, 2);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample rejects rollback receipts outside their target", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-rollback-target-"));
   const target = join(tempRoot, "adapter-data", "workspace", "bundle_workspace_import");
@@ -1515,6 +1630,14 @@ test("generic adapter sample full loop can include app-owned import and rollback
 
   const workflow = JSON.parse(stdout);
   const byStep = Object.fromEntries(workflow.steps.map((step) => [step.step, step]));
+  assert.deepEqual(byStep.adapter_import_dry_run.command.slice(0, 4), [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "import-target",
+    "--bundle-root"
+  ]);
+  assert.equal(byStep.adapter_import_dry_run.command.at(-2), "--dry-run");
+  assert.equal(byStep.adapter_import_dry_run.command.at(-1), "true");
   assert.deepEqual(byStep.adapter_import_target.command.slice(0, 4), [
     "node",
     "docs/examples/generic-adapter/generic-adapter.mjs",
@@ -1558,6 +1681,7 @@ test("generic adapter sample does not add app-owned target steps without explici
   );
 
   const workflow = JSON.parse(stdout);
+  assert.equal(workflow.steps.some((step) => step.step === "adapter_import_dry_run"), false);
   assert.equal(workflow.steps.some((step) => step.step === "adapter_import_target"), false);
   assert.equal(workflow.steps.some((step) => step.step === "adapter_rollback_target"), false);
 });
@@ -2089,4 +2213,12 @@ test("generic adapter sample resets missing event cursors", () => {
 
 function readJson(path) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readFileMaybe(path) {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return null;
+  }
 }

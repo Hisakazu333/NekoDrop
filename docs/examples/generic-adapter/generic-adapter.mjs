@@ -224,6 +224,7 @@ function importBundleIntoAdapterTarget(flags) {
   const targetRoot = requireFlag(flags, "target-root");
   const expectedType = requireKnownType(requireFlag(flags, "type"));
   const strategy = requireConflictStrategy(flags["conflict-strategy"] ?? "reject");
+  const dryRun = flags["dry-run"] === "true";
   if (!existsSync(bundleRoot) || !statSync(bundleRoot).isDirectory()) {
     throw new Error(`--bundle-root must be a directory: ${bundleRoot}`);
   }
@@ -254,6 +255,30 @@ function importBundleIntoAdapterTarget(flags) {
     };
   });
   const conflicts = files.filter((file) => file.destination_exists);
+  if (dryRun) {
+    const skipped = strategy === "skip_conflicts"
+      ? conflicts.map((file) => file.manifest_path)
+      : [];
+    const wouldImport = files
+      .map((file) => file.manifest_path)
+      .filter((manifestPath) => !skipped.includes(manifestPath));
+    return {
+      bundle_id: manifest.bundle_id,
+      bundle_type: manifest.bundle_type,
+      display_name: manifest.display_name,
+      target_root: targetRoot,
+      target_path: target,
+      status: conflicts.length > 0 || existsSync(target) ? "would_conflict" : "would_import",
+      dry_run: true,
+      conflict_strategy: strategy,
+      would_import_file_count: wouldImport.length,
+      would_skip_file_count: skipped.length,
+      conflict_count: Math.max(conflicts.length, existsSync(target) ? 1 : 0),
+      conflicts: conflicts.map((file) => file.manifest_path),
+      receipt_path: null
+    };
+  }
+
   if ((existsSync(target) || conflicts.length > 0) && strategy === "reject") {
     return {
       bundle_id: manifest.bundle_id,
@@ -1322,6 +1347,10 @@ function buildWorkflow(flags) {
         },
         ...(flags["target-root"] ? [
           {
+            step: "adapter_import_dry_run",
+            command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot, "dry-run": "true" })
+          },
+          {
             step: "adapter_import_target",
             command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot })
           }
@@ -1576,7 +1605,7 @@ function buildReceiptStateCommand(flags) {
 }
 
 function buildAdapterImportTargetCommand(flags) {
-  return [
+  const command = [
     "node",
     "docs/examples/generic-adapter/generic-adapter.mjs",
     "import-target",
@@ -1589,6 +1618,10 @@ function buildAdapterImportTargetCommand(flags) {
     "--conflict-strategy",
     requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
   ];
+  if (flags["dry-run"] === "true") {
+    command.push("--dry-run", "true");
+  }
+  return command;
 }
 
 function buildAdapterRollbackTargetCommand(flags) {
@@ -2115,6 +2148,7 @@ function usage() {
   console.log(`Usage:
   node generic-adapter.mjs export --source DIR --output DIR --bundle-id ID --type session --name NAME
   node generic-adapter.mjs import-target --bundle-root DIR --target-root DIR --type session --conflict-strategy reject
+  node generic-adapter.mjs import-target --bundle-root DIR --target-root DIR --type session --conflict-strategy reject --dry-run true
   node generic-adapter.mjs rollback-target --receipt PATH
   node generic-adapter.mjs request auth
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
