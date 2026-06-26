@@ -250,6 +250,15 @@ node docs/examples/generic-adapter/generic-adapter.mjs import-target \
 
 dry-run 会校验 manifest、checksum、permissions，计算目标位置和冲突，但不会创建目录、复制文件或写 receipt。full-loop 在提供 `--target-root` 时会先输出 `adapter_import_dry_run`，再输出实际 `adapter_import_target`。
 
+dry-run 的稳定状态只有四种：
+
+- `would_import`：可以导入，或冲突策略会产生新的导入目标
+- `would_conflict`：默认拒绝覆盖，需要换策略或取消
+- `would_skip`：`skip_conflicts` 会跳过已有文件，没有新文件要写
+- `cannot_import`：校验通过不了或策略无法执行
+
+`adapter_import_confirm` 必须发生在 dry-run 之后、实际写入之前。真实 adapter 可以让用户确认，也可以让自己的上层应用确认，但不能跳过 dry-run 直接写。
+
 ## 发送
 
 ```json
