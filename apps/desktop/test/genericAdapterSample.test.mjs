@@ -1423,6 +1423,108 @@ test("generic adapter sample keeps action request ids stable for retry and resul
   assert.equal(byStep.rollback_action_state.request.payload.action_request_id, "stable-rollback-request");
 });
 
+test("generic adapter sample workflow can derive bundle type from an app manifest resource", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-resource-workflow-"));
+  const manifestPath = join(tempRoot, "app-manifest.json");
+  const manifest = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "app-manifest",
+      "--type",
+      "workspace",
+      "--resource-id",
+      "workspace.hand-off"
+    ],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "full-loop",
+      "--app-manifest",
+      manifestPath,
+      "--resource-id",
+      "workspace.hand-off",
+      "--source",
+      "/tmp/source",
+      "--output",
+      "/tmp/out",
+      "--bundle-id",
+      "bundle_workspace_demo",
+      "--name",
+      "Workspace demo",
+      "--target-device-id",
+      "device-a",
+      "--staged-bundle-id",
+      "bundle_workspace_demo"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+  const exportTypeIndex = workflow.steps[0].command.indexOf("--type");
+  assert.equal(workflow.resource_plan.resource_id, "workspace.hand-off");
+  assert.equal(workflow.resource_plan.bundle_type, "workspace");
+  assert.equal(workflow.resource_plan.runtime_action, "export_bundle");
+  assert.notEqual(exportTypeIndex, -1);
+  assert.equal(workflow.steps[0].command[exportTypeIndex + 1], "workspace");
+  assert.equal(workflow.steps[2].request.payload.bundle_type, "workspace");
+  assert.equal(workflow.steps[6].request.payload.expected_bundle_type, "workspace");
+  assert.match(workflow.notes.join("\n"), /resource_plan is present/);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample rejects workflows that do not match resource direction", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-resource-direction-"));
+  const manifestPath = join(tempRoot, "app-manifest.json");
+  const manifest = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "app-manifest",
+      "--type",
+      "workspace",
+      "--resource-id",
+      "workspace.import-only",
+      "--direction",
+      "import"
+    ],
+    { encoding: "utf8" }
+  ));
+  writeFileSync(manifestPath, JSON.stringify(manifest));
+
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [
+        sampleCli,
+        "workflow",
+        "--mode",
+        "send",
+        "--app-manifest",
+        manifestPath,
+        "--resource-id",
+        "workspace.import-only",
+        "--bundle-root",
+        "/tmp/bundle",
+        "--target-device-id",
+        "device-a"
+      ],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /workspace.import-only does not support send workflow/
+  );
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample derives the next event cursor", () => {
   const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-cursor-"));
   const responsePath = join(tempRoot, "events-response.json");

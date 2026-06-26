@@ -1225,6 +1225,8 @@ function buildRequest(kind, flags) {
 function buildWorkflow(flags) {
   const mode = flags.mode ?? "send";
   const descriptor = flags.descriptor ? loadAdapterDescriptor(flags.descriptor) : null;
+  const workflowResource = workflowResourceContext(flags, descriptor);
+  const workflowType = workflowResource?.resource.bundle_type ?? requireKnownType(requireFlag(flags, "type"));
   const steps = [];
   const sendRequestId = flags["send-request-id"] ?? "adapter-send-001";
   const importRequestId = flags["import-request-id"] ?? "adapter-import-001";
@@ -1234,10 +1236,11 @@ function buildWorkflow(flags) {
     return {
       client: CLIENT,
       mode,
+      resource_plan: workflowResource?.plan ?? null,
       steps: [
         {
           step: "export",
-          command: buildExportCommand(flags),
+          command: buildExportCommand({ ...flags, type: workflowType }),
           produces: { bundle_root: bundleRoot }
         },
         {
@@ -1255,7 +1258,7 @@ function buildWorkflow(flags) {
             descriptor: flags.descriptor,
             "bundle-root": bundleRoot,
             "target-device-id": requireFlag(flags, "target-device-id"),
-            type: requireKnownType(requireFlag(flags, "type")),
+            type: workflowType,
             "require-trusted-device": "true"
           })
         },
@@ -1287,7 +1290,7 @@ function buildWorkflow(flags) {
             "request-id": importRequestId,
             descriptor: flags.descriptor,
             "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
-            type: requireKnownType(requireFlag(flags, "type")),
+            type: workflowType,
             "conflict-strategy": flags["conflict-strategy"] ?? "reject"
           })
         },
@@ -1360,6 +1363,7 @@ function buildWorkflow(flags) {
         "Treat queued as pending, running as in-progress, and succeeded / failed / conflict / cancelled as final results.",
         "Sensitive bundle types require trusted authenticated targets; this sample refuses --require-trusted-device false for skill, session, workspace, and agent_profile.",
         "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
+        "If resource_plan is present, use it as the app-level mapping from logical resource to runtime action and bridge scope.",
         "Rollback only removes files imported into NekoDrop's local import area."
       ]
     };
@@ -1380,7 +1384,7 @@ function buildWorkflow(flags) {
         descriptor: flags.descriptor,
         "bundle-root": requireFlag(flags, "bundle-root"),
         "target-device-id": requireFlag(flags, "target-device-id"),
-        type: requireKnownType(requireFlag(flags, "type")),
+        type: workflowType,
         "require-trusted-device": flags["require-trusted-device"]
       })
     });
@@ -1406,7 +1410,7 @@ function buildWorkflow(flags) {
         "request-id": importRequestId,
         descriptor: flags.descriptor,
         "staged-bundle-id": requireFlag(flags, "staged-bundle-id"),
-        type: requireKnownType(requireFlag(flags, "type")),
+        type: workflowType,
         "conflict-strategy": flags["conflict-strategy"] ?? "reject"
       })
     });
@@ -1452,8 +1456,54 @@ function buildWorkflow(flags) {
   return {
     client: CLIENT,
     mode,
+    resource_plan: workflowResource?.plan ?? null,
     steps
   };
+}
+
+function workflowResourceContext(flags, descriptor) {
+  if (!flags["app-manifest"] && !flags["resource-id"]) {
+    return null;
+  }
+  const manifestPath = requireFlag(flags, "app-manifest");
+  const manifest = loadAppManifest(manifestPath, descriptor);
+  const resourceId = requireFlag(flags, "resource-id");
+  const resource = manifest.resources.find((entry) => entry.resource_id === resourceId);
+  if (!resource) {
+    throw new Error(`app manifest does not declare resource: ${resourceId}`);
+  }
+  validateResourceSupportsWorkflow(resource, flags.mode ?? "send");
+  return {
+    manifest,
+    resource,
+    plan: buildResourcePlan({
+      manifest: manifestPath,
+      descriptor: flags.descriptor,
+      "resource-id": resourceId,
+      action: actionForWorkflowMode(flags.mode ?? "send"),
+      "bundle-id": flags["bundle-id"] ?? flags["staged-bundle-id"] ?? `${resource.bundle_type}_${Date.now()}`
+    })
+  };
+}
+
+function actionForWorkflowMode(mode) {
+  if (mode === "import") return "import";
+  if (mode === "rollback") return "rollback";
+  if (mode === "roundtrip") return "import";
+  if (mode === "full-loop") return "export";
+  return "export";
+}
+
+function validateResourceSupportsWorkflow(resource, mode) {
+  if (mode === "send" && resource.direction === "import") {
+    throw new Error(`resource ${resource.resource_id} does not support send workflow`);
+  }
+  if ((mode === "import" || mode === "rollback") && resource.direction === "export") {
+    throw new Error(`resource ${resource.resource_id} does not support ${mode} workflow`);
+  }
+  if ((mode === "roundtrip" || mode === "full-loop") && resource.direction !== "both") {
+    throw new Error(`resource ${resource.resource_id} must support both export and import for ${mode} workflow`);
+  }
 }
 
 function scopesForWorkflowMode(mode) {
@@ -2041,6 +2091,7 @@ function usage() {
   node generic-adapter.mjs resource-plan --manifest app-manifest.json --resource-id workspace.default --action export --bundle-id ID
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
+  node generic-adapter.mjs workflow --mode full-loop --app-manifest app-manifest.json --resource-id workspace.default --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID
   node generic-adapter.mjs workflow --mode rollback --bundle-id ID
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs event-state --response bridge-events-response.json --action-request-id ACTION_REQUEST_ID
