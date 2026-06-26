@@ -8,6 +8,33 @@
 node docs/examples/generic-adapter/generic-adapter.mjs
 ```
 
+## Descriptor
+
+真实 adapter 接入前先声明自己能处理什么。descriptor 不绑定具体应用目录，只说明 client identity、bridge scope、bundle 类型和安全边界。
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs descriptor \
+  --type session \
+  --type workspace \
+  --capability both \
+  --conflict-strategy reject \
+  --conflict-strategy rename > adapter.json
+
+node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
+  --descriptor adapter.json
+```
+
+敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 也必须声明拒绝不可信敏感发送，避免 adapter 自己绕过 NekoDrop 的兜底校验。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
+
+生成请求时也可以直接引用 descriptor：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs request auth \
+  --descriptor adapter.json
+```
+
+传了 `--descriptor` 后，`request send` 和 `request import` 会检查 descriptor 是否声明了对应 `bundle_type`，也会检查 `can_export` / `can_import` 和 `conflict_strategies`。只会导入的 adapter 不能发起发送请求，只会导出的 adapter 不能发起导入请求；只声明 `reject` 的 adapter 不能发起 `rename` 导入。
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：
@@ -56,12 +83,9 @@ node docs/examples/generic-adapter/generic-adapter.mjs export \
       "app_kind": "agent"
     },
     "requested_scopes": [
-      "device.read",
-      "bundle.send",
-      "bundle.import.request",
-      "transfer.status.read"
+      "bundle.read"
     ],
-    "reason": "Send and import user-selected bundles",
+    "reason": "Inspect a staged bundle before import",
     "ttl_seconds": 3600
   }
 }
@@ -73,7 +97,9 @@ node docs/examples/generic-adapter/generic-adapter.mjs export \
 node docs/examples/generic-adapter/generic-adapter.mjs request auth
 ```
 
-NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。
+NekoDrop 会返回短授权码。用户在设置 -> 接入里确认后，后续请求才会进入待执行队列。授权绑定 `client_id`、`app_kind`、scope 和过期时间；adapter 后续请求必须保持同一个 client identity，不能换 `app_kind` 复用授权。
+
+默认 `request auth` 只申请 `bundle.read`。需要发送、导入、撤回或观察传输状态时，adapter 必须显式申请对应 scope，例如 `bundle.send`、`bundle.import.request`、`transfer.status.read`。不要为了省事默认申请全部权限。
 
 如果只想看完整接入顺序，可以让脚本生成一组通用请求：
 
@@ -123,7 +149,7 @@ export -> authorize -> send -> observe_send -> send_action_state
 这不是让一个脚本跨两台机器自动跑完。真实 adapter 应该按设备拆开：
 
 - 发送端：导出 bundle，申请授权，请求 `bundle.send`，观察发送结果。
-- 接收端：收到 staged bundle 后先 `bundle.detail`，再请求 `bundle.import`，观察导入结果，并用 `receipt-state` 判断 receipt 是否可撤回。
+- 接收端：收到 staged bundle 后先用 `bundle.read` 授权调用 `bundle.detail`，再请求 `bundle.import`，观察导入结果，并用 `receipt-state` 判断 receipt 是否可撤回。
 - 需要撤回时：用 `bundle.rollback` 撤回 NekoDrop 本机导入区里的文件，再查 `actions.results` 和 `bundle.detail` 确认撤回状态。
 
 `skill`、`session`、`workspace`、`agent_profile` 都按敏感资料处理：发送端必须要求可信目标，接收端只有 authenticated encrypted session 收到的 bundle 才会进入暂存和导入流程。这个示例会直接拒绝给这些类型传 `--require-trusted-device false`。旧兼容路径收到的目录即使有 `bundle.json`，也只当普通文件保存。
@@ -169,6 +195,22 @@ node docs/examples/generic-adapter/generic-adapter.mjs post send \
 
 请求成功只代表动作入队，不代表已经发送完成。桌面端后台 worker 会自动做 preflight 和真实发送。adapter 优先用 `events.poll` 里的 `action.updated` 观察进度，再用 `actions.results` 查最新结果。
 
+如果 POST 超时或本机应用崩溃后恢复，不要为同一次用户动作生成新的动作 id。用原来的 `request_id` 重试同一种动作，再用同一个值作为 `actions.results.action_request_id` 查询。NekoDrop 只会复用同一 `client_id`、同一 `app_kind`、同一动作类型、同一 `request_id` 和同一 payload 的 pending 动作；换动作类型、换 `app_kind`、换 payload 或换 `request_id` 都会被当成另一件事。
+
+重试响应可以直接归类：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs retry-state \
+  --response bridge-mutation-response.json \
+  --action-request-id adapter-import-001
+```
+
+常见结果：
+
+- `pending_retry`：原动作还在队列里，继续等事件或查 `actions.results`
+- `terminal_result`：原动作已经结束，按结果继续处理 receipt、回滚或失败提示
+- `payload_conflict`：同一个 `request_id` 被拿去做了另一份 payload，应该复用原 payload 重试，或为新的用户动作生成新的 `request_id`
+
 ## 查询结果
 
 ```json
@@ -195,7 +237,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs request results \
   --action-request-id adapter-import-001
 ```
 
-`request_id` 是这次查询请求本身的 id。`action_request_id` 是之前 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的请求 id，用来精确查询某个动作结果。不传 `action_request_id` 时，NekoDrop 按 `after_claimed_at_ms` 和 `limit` 返回一组最近结果。精确查询时，如果还没有终态结果，但动作仍在同一个 client 的待执行队列里，响应会返回脱敏的 `queued`；如果 worker 已经写入执行状态，则返回 `running` 或终态结果。
+`request_id` 是这次查询请求本身的 id。`action_request_id` 是之前 `bundle.send`、`bundle.import` 或 `bundle.rollback` 的请求 id，用来精确查询某个动作结果。不传 `action_request_id` 时，NekoDrop 按 `after_claimed_at_ms` 和 `limit` 返回一组最近结果。精确查询时，如果还没有终态结果，但动作仍在同一个 client 的待执行队列里，响应会返回脱敏的 `queued`；queued / running 结果会带公开的 `bundle_id`、`bundle_type`、`target_device_id` 或 `conflict_strategy` 这类对账字段，但不会返回本机路径；如果 worker 已经写入执行状态，则返回 `running` 或终态结果。
 
 也可以让示例脚本把精确查询响应归类：
 
@@ -212,6 +254,20 @@ node docs/examples/generic-adapter/generic-adapter.mjs action-state \
 - `result`：动作已有终态结果
 - `missing`：当前 client 查不到这个动作，可能是 request id 不对、权限不够、动作属于别的 client，或结果已被清理
 
+`action-state` 还会给一条 `next_action`，给 adapter 一个最直白的下一步提示：
+
+- `wait_for_action_update`
+- `choose_import_conflict_strategy`
+- `query_receipt_or_request_rollback`
+- `query_receipt_state`
+- `query_rollback_status`
+- `query_after_rollback`
+- `show_failure_reason`
+- `show_rollback_blocking_reason`
+- `pair_or_select_trusted_device`
+- `retry_or_cancel_flow`
+- `check_request_id_permission_or_retry_later`
+
 导入后再用 `bundle.detail` 响应推导 receipt 状态：
 
 ```bash
@@ -222,12 +278,36 @@ node docs/examples/generic-adapter/generic-adapter.mjs receipt-state \
 
 `receipt-state` 只读 bridge response 里的公开字段，不读取 NekoDrop 本机私有路径。常见状态：
 
+- `ready_to_import`
+- `import_conflict`
 - `imported_can_rollback`
 - `imported_no_rollback`
 - `rolled_back`
 - `save_only`
 - `not_imported`
 - `missing`
+
+它会把 `bundle.detail` 里的公开字段压成一组稳定判断：
+
+- `can_import`
+- `import_blocking_reason`
+- `import_conflict_count`
+- `import_conflict_strategies`
+- `has_import_receipt`
+- `can_request_rollback`
+- `rollback_blocking_reason`
+- `next_action`
+
+`next_action` 只属于示例层，用来让 adapter 少写重复判断：
+
+- `request_import`
+- `choose_import_conflict_strategy`
+- `request_rollback_or_finish`
+- `finish_import_flow`
+- `save_only_or_ask_user`
+- `wait_for_import_request_or_refresh_detail`
+- `check_bundle_id_permission_or_refresh_detail`
+- `done`
 
 结果里的 `lifecycle_status` 可能是：
 
@@ -294,7 +374,7 @@ node docs/examples/generic-adapter/generic-adapter.mjs receipt-state \
 }
 ```
 
-`action.updated` 事件会带 `request_id`、`action_kind`、`status`、`reason`、`bundle_id`、`bundle_type` 和 `target_device_id`。事件不会返回本机 `bundle_root`。
+`action.updated` 事件会带 `request_id`、`action_kind`、`client_id`、`client_app_kind`、`status`、`reason`、`bundle_id`、`bundle_type` 和 `target_device_id`。事件按当前请求的 client identity 和授权 scope 过滤，不会返回本机 `bundle_root`。
 
 响应里除了 `events` 数组，还会带：
 
@@ -318,6 +398,16 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
   --response bridge-events-response.json
 ```
 
+也可以把一次事件响应归纳成 adapter watch loop 更容易消费的状态：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs event-state \
+  --response bridge-events-response.json \
+  --action-request-id adapter-import-001
+```
+
+`event-state` 会返回下一次 cursor、是否应立即继续拉取、匹配的 `action.updated` 摘要、收到的 bundle id 数组和 transfer 事件数量。它不会替代 `actions.results`；终态事件出现后仍应按 `action_request_id` 精确查询结果。
+
 事件处理建议：
 
 - `action.updated` 里的 `request_id` 是最稳定的关联键。
@@ -338,6 +428,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs cursor \
 node docs/examples/generic-adapter/generic-adapter.mjs request detail \
   --staged-bundle-id bundle_1234567890
 ```
+
+`bundle.detail` 需要 `bundle.read` 授权。它只返回 staged bundle、receipt 和 rollback 的公开状态，不返回 NekoDrop 本机私有路径。
 
 ```json
 {
@@ -376,6 +468,33 @@ node docs/examples/generic-adapter/generic-adapter.mjs request import \
 这一步仍然不是“写进上层应用目录”。NekoDrop 只负责把 staged bundle 校验后放到本机导入区；上层应用自己的 adapter 再读取导入区内容，按自己的数据模型落库、合并或回滚。
 
 导入成功后，NekoDrop 会在本机导入区写一条 import receipt。它记录目标目录、导入策略、实际导入和跳过的 payload 路径。NekoDrop 可以用它生成回滚计划，也可以执行保守撤回：只删除本次 import receipt 记录的导入文件，`skip_conflicts` 跳过的既有文件不会被删除。
+
+如果要演示“上层应用自己的导入”，可以用示例脚本把已校验 bundle 导入到 adapter 自己的数据目录：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs import-target \
+  --bundle-root /absolute/path/to/checked-bundle \
+  --target-root ./adapter-data \
+  --type workspace \
+  --conflict-strategy reject
+```
+
+`import-target` 会重新校验 manifest、checksums 和 permissions，把 payload 写到：
+
+```text
+adapter-data/<bundle_type>/<bundle_id>/
+```
+
+并写入 `.generic-adapter-import-receipt-*.json`。冲突策略和 bridge import 保持一致：`reject`、`rename`、`skip_conflicts`。如果 bundle 标记了 `contains_secrets=true`，示例会拒绝自动导入。
+
+每次成功导入都会写一条独立的 adapter receipt。需要撤回 adapter 自己的导入时，用 `rollback-target`：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs rollback-target \
+  --receipt ./adapter-data/workspace/bundle_workspace_demo/.generic-adapter-import-receipt-xxx.json
+```
+
+`rollback-target` 只删除 receipt 记录里本次导入的文件。`skip_conflicts` 跳过的既有文件不会被删除；如果某个已导入文件已经被用户或应用改写，示例会拒绝撤回，避免盲删新内容。
 
 生成撤回请求：
 

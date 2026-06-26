@@ -119,6 +119,7 @@ pub struct LocalBridgeAuthorizationRecord {
     pub app_kind: Option<String>,
     pub scopes: Vec<LocalBridgePermissionScope>,
     pub granted_at_ms: u128,
+    pub last_used_at_ms: u128,
     pub expires_at_ms: Option<u128>,
 }
 
@@ -146,6 +147,7 @@ pub struct LocalBridgePendingActionResult {
     pub action_kind: String,
     pub client_id: String,
     pub client_display_name: String,
+    pub client_app_kind: Option<String>,
     pub status: String,
     pub lifecycle_status: Option<String>,
     pub reason: Option<String>,

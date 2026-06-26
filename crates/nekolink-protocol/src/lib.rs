@@ -2017,6 +2017,8 @@ pub struct LocalBridgePollEventsRequest {
     #[serde(default)]
     pub after_event_id: Option<String>,
     #[serde(default)]
+    pub action_request_id: Option<String>,
+    #[serde(default)]
     pub limit: Option<usize>,
     #[serde(default)]
     pub timeout_ms: Option<u64>,
@@ -2086,6 +2088,8 @@ pub struct LocalBridgeBundleSendPreflightEvent {
     pub event_id: String,
     pub request_id: String,
     pub client_id: String,
+    #[serde(default)]
+    pub client_app_kind: Option<String>,
     pub status: LocalBridgeBundleSendPreflightStatus,
     pub reason: Option<String>,
     pub bundle_id: Option<String>,
@@ -2130,6 +2134,8 @@ pub struct LocalBridgeActionUpdatedEvent {
     pub request_id: String,
     pub action_kind: String,
     pub client_id: String,
+    #[serde(default)]
+    pub client_app_kind: Option<String>,
     pub status: LocalBridgeActionLifecycleStatus,
     pub reason: Option<String>,
     pub message: String,
@@ -2237,6 +2243,7 @@ impl LocalBridgePollEventsRequest {
         validate_non_empty("request_id", &self.request_id)?;
         validate_optional_bridge_client(self.client.as_ref())?;
         validate_optional_non_empty("after_event_id", self.after_event_id.as_deref())?;
+        validate_optional_non_empty("action_request_id", self.action_request_id.as_deref())?;
         if let Some(limit) = self.limit {
             if limit == 0 || limit > 100 {
                 return Err(ProtocolError::new(
@@ -2283,6 +2290,14 @@ impl LocalBridgeAuthorizationRequest {
                 ErrorCode::InvalidPayload,
                 "requested_scopes cannot be empty",
             ));
+        }
+        for (index, scope) in self.requested_scopes.iter().enumerate() {
+            if self.requested_scopes[..index].contains(scope) {
+                return Err(ProtocolError::new(
+                    ErrorCode::InvalidPayload,
+                    "requested_scopes cannot contain duplicates",
+                ));
+            }
         }
         validate_non_empty("reason", &self.reason)?;
         if let Some(ttl_seconds) = self.ttl_seconds {
@@ -2338,6 +2353,7 @@ impl LocalBridgeBundleSendPreflightEvent {
         validate_non_empty("event_id", &self.event_id)?;
         validate_non_empty("request_id", &self.request_id)?;
         validate_bridge_client_id(&self.client_id)?;
+        validate_optional_non_empty("client_app_kind", self.client_app_kind.as_deref())?;
         validate_optional_non_empty("reason", self.reason.as_deref())?;
         if let Some(bundle_id) = self.bundle_id.as_deref() {
             validate_staged_bundle_id(bundle_id)?;
@@ -2352,6 +2368,7 @@ impl LocalBridgeActionUpdatedEvent {
         validate_non_empty("request_id", &self.request_id)?;
         validate_non_empty("action_kind", &self.action_kind)?;
         validate_bridge_client_id(&self.client_id)?;
+        validate_optional_non_empty("client_app_kind", self.client_app_kind.as_deref())?;
         validate_optional_non_empty("reason", self.reason.as_deref())?;
         validate_non_empty("message", &self.message)?;
         if let Some(bundle_id) = self.bundle_id.as_deref() {
@@ -5058,6 +5075,28 @@ mod tests {
     }
 
     #[test]
+    fn local_bridge_authorization_request_rejects_duplicate_scopes() {
+        let request = LocalBridgeRequest::AuthorizationRequest(LocalBridgeAuthorizationRequest {
+            request_id: "bridge-auth-1".to_string(),
+            client: LocalBridgeClientIdentity {
+                client_id: "local-agent-app".to_string(),
+                display_name: "Local Agent App".to_string(),
+                app_kind: Some("agent".to_string()),
+            },
+            requested_scopes: vec![
+                LocalBridgePermissionScope::BundleRead,
+                LocalBridgePermissionScope::BundleRead,
+            ],
+            reason: "Read staged bundle metadata".to_string(),
+            ttl_seconds: Some(900),
+        });
+
+        let error = request.validate().unwrap_err();
+
+        assert!(error.message.contains("duplicates"));
+    }
+
+    #[test]
     fn local_bridge_bundle_detail_request_uses_stable_json_shape() {
         let request = LocalBridgeRequest::BundleDetail(LocalBridgeBundleDetailRequest {
             request_id: "bridge-request-detail".to_string(),
@@ -5087,6 +5126,7 @@ mod tests {
                 app_kind: Some("agent".to_string()),
             }),
             after_event_id: Some("bridge-event-1".to_string()),
+            action_request_id: Some("bridge-send-1".to_string()),
             limit: Some(10),
             timeout_ms: Some(30_000),
         });
@@ -5097,6 +5137,7 @@ mod tests {
         assert_eq!(json["kind"], "events.poll");
         assert_eq!(json["payload"]["request_id"], "bridge-events-1");
         assert_eq!(json["payload"]["after_event_id"], "bridge-event-1");
+        assert_eq!(json["payload"]["action_request_id"], "bridge-send-1");
         assert_eq!(json["payload"]["limit"], 10);
         assert_eq!(json["payload"]["timeout_ms"], 30_000);
         assert_eq!(
@@ -5181,6 +5222,7 @@ mod tests {
             event_id: "bridge-event-send-1".to_string(),
             request_id: "bridge-send-1".to_string(),
             client_id: "local-agent-app".to_string(),
+            client_app_kind: Some("agent".to_string()),
             status: LocalBridgeBundleSendPreflightStatus::FailedPreflight,
             reason: Some("bundle_root_missing".to_string()),
             bundle_id: None,
@@ -5195,6 +5237,7 @@ mod tests {
         assert_eq!(json["payload"]["event_id"], "bridge-event-send-1");
         assert_eq!(json["payload"]["request_id"], "bridge-send-1");
         assert_eq!(json["payload"]["client_id"], "local-agent-app");
+        assert_eq!(json["payload"]["client_app_kind"], "agent");
         assert_eq!(json["payload"]["status"], "failed_preflight");
         assert_eq!(json["payload"]["reason"], "bundle_root_missing");
         assert_eq!(json["payload"]["bundle_type"], "skill");
@@ -5212,6 +5255,7 @@ mod tests {
             request_id: "bridge-send-1".to_string(),
             action_kind: "bundle.send".to_string(),
             client_id: "local-agent-app".to_string(),
+            client_app_kind: Some("agent".to_string()),
             status: LocalBridgeActionLifecycleStatus::Running,
             reason: None,
             message: "local bridge bundle send is running".to_string(),
@@ -5232,6 +5276,7 @@ mod tests {
         assert_eq!(json["payload"]["request_id"], "bridge-send-1");
         assert_eq!(json["payload"]["action_kind"], "bundle.send");
         assert_eq!(json["payload"]["client_id"], "local-agent-app");
+        assert_eq!(json["payload"]["client_app_kind"], "agent");
         assert_eq!(json["payload"]["status"], "running");
         assert_eq!(json["payload"]["bundle_type"], "skill");
         assert_eq!(json["payload"]["target_device_id"], "device-a");

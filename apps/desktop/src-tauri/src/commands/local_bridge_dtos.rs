@@ -19,6 +19,7 @@ pub(super) fn local_bridge_pending_action_result_to_dto(
         action_kind: result.action_kind.clone(),
         client_id: result.client_id.clone(),
         client_display_name: result.client_display_name.clone(),
+        client_app_kind: result.client_app_kind.clone(),
         status: result.status.clone(),
         lifecycle_status: result.lifecycle_status.clone(),
         reason: result.reason.clone(),
@@ -61,6 +62,7 @@ pub(super) fn local_bridge_pending_action_to_dto(
             action_kind: "bundle.send".to_string(),
             client_id: action.client.client_id.clone(),
             client_display_name: action.client.display_name.clone(),
+            client_app_kind: action.client.app_kind.clone(),
             bundle_type: Some(bundle_type_label(action.bundle_type).to_string()),
             target_device_id: action.target_device_id.clone(),
             staged_bundle_id: None,
@@ -75,6 +77,7 @@ pub(super) fn local_bridge_pending_action_to_dto(
             action_kind: "bundle.import".to_string(),
             client_id: action.client.client_id.clone(),
             client_display_name: action.client.display_name.clone(),
+            client_app_kind: action.client.app_kind.clone(),
             bundle_type: None,
             target_device_id: None,
             staged_bundle_id: Some(action.staged_bundle_id.clone()),
@@ -92,6 +95,7 @@ pub(super) fn local_bridge_pending_action_to_dto(
             action_kind: "bundle.rollback".to_string(),
             client_id: action.client.client_id.clone(),
             client_display_name: action.client.display_name.clone(),
+            client_app_kind: action.client.app_kind.clone(),
             bundle_type: None,
             target_device_id: None,
             staged_bundle_id: Some(action.bundle_id.clone()),
@@ -118,6 +122,7 @@ pub(super) fn local_bridge_authorization_to_dto(
             .map(str::to_string)
             .collect(),
         granted_at_ms: authorization.granted_at_ms,
+        last_used_at_ms: authorization.last_used_at_ms,
         expires_at_ms: authorization.expires_at_ms,
     }
 }

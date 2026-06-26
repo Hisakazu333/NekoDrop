@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   bundleImportPlanLine,
+  bundleImportStatusView,
   bundleCanUseImportStrategy,
   bundleImportStrategyLabel,
   bundleStatusLabel,
@@ -66,6 +67,12 @@ test("labels deleted staged bundles without hiding the receive history", () => {
   assert.equal(deleted.staging_status, "deleted");
   assert.equal(deleted.can_import_now, false);
   assert.equal(bundleStatusLabel(deleted), "已删除");
+  assert.deepEqual(bundleImportStatusView(deleted), {
+    label: "已删除",
+    detail: "暂存已删除，历史记录保留",
+    tone: "muted",
+    nextAction: "none"
+  });
   assert.equal(receiveBundleStatusLabel(report(deleted)), "已删除");
   assert.equal(receiveBundleImportHint(deleted), "暂存已删除，历史记录保留");
 });
@@ -75,6 +82,7 @@ test("keeps failed imports retryable when the bundle allows import", () => {
 
   assert.equal(failed.staging_status, "import_failed");
   assert.equal(failed.can_import_now, true);
+  assert.equal(bundleImportStatusView(failed).nextAction, "retry_import");
   assert.equal(receiveBundleStatusLabel(report(failed)), "导入失败");
   assert.equal(receiveBundleImportHint(failed), "导入没有完成，暂存仍可重试");
 });
@@ -97,6 +105,7 @@ test("labels import conflicts before the user retries import", () => {
   });
 
   assert.equal(bundleStatusLabel(conflicted), "已存在");
+  assert.equal(bundleImportStatusView(conflicted).nextAction, "choose_conflict_strategy");
   assert.equal(receiveBundleImportHint(conflicted), "同名资料已存在，可重命名导入");
   assert.equal(markBundleImportFailed(conflicted).can_import_now, false);
 });
@@ -138,7 +147,13 @@ test("summarizes renamed imports and skipped conflict counts", () => {
     can_request_rollback: true
   });
 
-  assert.equal(receiveBundleImportHint(imported), "已导入到 /tmp/imports/bundle_123-2，跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
+  const view = bundleImportStatusView(imported);
+  assert.equal(view.label, "已导入");
+  assert.equal(view.tone, "success");
+  assert.equal(view.nextAction, "request_rollback");
+  assert.equal(view.detail, "已导入 · 跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
+  assert.doesNotMatch(view.detail, /\/tmp\/imports/);
+  assert.equal(receiveBundleImportHint(imported), "已导入 · 跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
 });
 
 test("summarizes imported bundle rollback state without a local receipt path", () => {
@@ -176,6 +191,14 @@ test("summarizes import plan file counts for importable bundles", () => {
   });
 
   assert.equal(bundleImportPlanLine(importable), "将导入 2 个文件");
+});
+
+test("does not expose local import destinations in compact plan lines", () => {
+  const planned = bundle({
+    import_destination: "/tmp/imports/private/session"
+  });
+
+  assert.equal(bundleImportPlanLine(planned), "已生成导入计划");
 });
 
 test("summarizes concrete import plan conflicts before import", () => {

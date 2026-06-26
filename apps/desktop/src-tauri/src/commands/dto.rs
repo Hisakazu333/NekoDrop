@@ -323,6 +323,9 @@ pub struct LocalBridgeResponseDto {
     pub events_next_after_id: Option<String>,
     pub events_has_more: bool,
     pub events_cursor_state: String,
+    pub events_visible_first_id: Option<String>,
+    pub events_visible_last_id: Option<String>,
+    pub events_visible_count: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -332,6 +335,7 @@ pub struct LocalBridgeAuthorizationDto {
     pub app_kind: Option<String>,
     pub scopes: Vec<String>,
     pub granted_at_ms: u128,
+    pub last_used_at_ms: u128,
     pub expires_at_ms: Option<u128>,
 }
 
@@ -366,6 +370,7 @@ pub struct LocalBridgePendingActionDto {
     pub action_kind: String,
     pub client_id: String,
     pub client_display_name: String,
+    pub client_app_kind: Option<String>,
     pub bundle_type: Option<String>,
     pub target_device_id: Option<String>,
     pub staged_bundle_id: Option<String>,
@@ -399,6 +404,7 @@ pub struct LocalBridgePendingActionResultDto {
     pub action_kind: String,
     pub client_id: String,
     pub client_display_name: String,
+    pub client_app_kind: Option<String>,
     pub status: String,
     pub lifecycle_status: Option<String>,
     pub reason: Option<String>,
@@ -433,6 +439,7 @@ pub struct LocalBridgeBundleSendPreflightDto {
     pub message: String,
     pub client_id: Option<String>,
     pub client_display_name: Option<String>,
+    pub client_app_kind: Option<String>,
     pub bundle_id: Option<String>,
     pub bundle_type: Option<String>,
     pub bundle_root: Option<String>,
