@@ -168,10 +168,9 @@ NekoDrop / OpenNeko / other app
 
 短期建议按这个顺序开分支：
 
-1. `security/session-identity-binding`
-2. `bundle/staging-import-lifecycle`
-3. `bridge/local-runtime-auth`
-4. `bridge/bundle-send-import-requests`
-5. `transport/iroh-spike`
+1. `adapter/real-application-wiring`
+2. `bridge/event-stream-contract`
+3. `adapter/transaction-migration-contract`
+4. `transport/iroh-spike`
 
-每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](STATUS.md)、[ROADMAP.md](ROADMAP.md) 和相关协议文档。
+已经完成的安全、bundle staging/import、local bridge runtime、bundle send/import/rollback 和 generic adapter 样例不要重复开新主线。每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](STATUS.md)、[ROADMAP.md](ROADMAP.md) 和相关协议文档。
