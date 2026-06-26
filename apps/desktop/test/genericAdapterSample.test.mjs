@@ -1375,7 +1375,7 @@ test("generic adapter sample prints a full export send import rollback loop", ()
   assert.equal(workflow.steps[13].request.payload.action_request_id, "adapter-rollback-001");
   assert.equal(workflow.steps[14].request.kind, "bundle.detail");
   assert.equal(workflow.steps[15].command.at(2), "receipt-state");
-  assert.match(workflow.notes.join("\n"), /Rollback only removes files imported into NekoDrop/);
+  assert.match(workflow.notes.join("\n"), /NekoDrop rollback only removes files imported into NekoDrop/);
   assert.match(workflow.notes.join("\n"), /Sensitive bundle types require trusted authenticated targets/);
   assert.match(workflow.notes.join("\n"), /retry the same action kind with the same request_id/);
 });
@@ -1479,6 +1479,87 @@ test("generic adapter sample workflow can derive bundle type from an app manifes
   assert.match(workflow.notes.join("\n"), /resource_plan is present/);
 
   rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample full loop can include app-owned import and rollback commands", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "full-loop",
+      "--source",
+      "/tmp/source",
+      "--output",
+      "/tmp/out",
+      "--bundle-id",
+      "bundle_workspace_demo",
+      "--name",
+      "Workspace demo",
+      "--target-device-id",
+      "device-a",
+      "--staged-bundle-id",
+      "bundle_workspace_demo",
+      "--type",
+      "workspace",
+      "--conflict-strategy",
+      "rename",
+      "--target-root",
+      "/tmp/adapter-target",
+      "--adapter-receipt",
+      "/tmp/adapter-target/workspace/bundle_workspace_demo/.generic-adapter-latest-import-receipt.json"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+  const byStep = Object.fromEntries(workflow.steps.map((step) => [step.step, step]));
+  assert.deepEqual(byStep.adapter_import_target.command.slice(0, 4), [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "import-target",
+    "--bundle-root"
+  ]);
+  assert.equal(byStep.adapter_import_target.command.at(-1), "rename");
+  assert.deepEqual(byStep.adapter_rollback_target.command.slice(0, 4), [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "rollback-target",
+    "--receipt"
+  ]);
+  assert.match(workflow.notes.join("\n"), /application-owned steps/);
+});
+
+test("generic adapter sample does not add app-owned target steps without explicit app paths", () => {
+  const stdout = execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "workflow",
+      "--mode",
+      "full-loop",
+      "--source",
+      "/tmp/source",
+      "--output",
+      "/tmp/out",
+      "--bundle-id",
+      "bundle_workspace_demo",
+      "--name",
+      "Workspace demo",
+      "--target-device-id",
+      "device-a",
+      "--staged-bundle-id",
+      "bundle_workspace_demo",
+      "--type",
+      "workspace"
+    ],
+    { encoding: "utf8" }
+  );
+
+  const workflow = JSON.parse(stdout);
+  assert.equal(workflow.steps.some((step) => step.step === "adapter_import_target"), false);
+  assert.equal(workflow.steps.some((step) => step.step === "adapter_rollback_target"), false);
 });
 
 test("generic adapter sample rejects workflows that do not match resource direction", () => {

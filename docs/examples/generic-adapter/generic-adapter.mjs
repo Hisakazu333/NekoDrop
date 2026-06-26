@@ -1320,6 +1320,12 @@ function buildWorkflow(flags) {
           step: "receipt_state",
           command: buildReceiptStateCommand(flags)
         },
+        ...(flags["target-root"] ? [
+          {
+            step: "adapter_import_target",
+            command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot })
+          }
+        ] : []),
         {
           step: "rollback",
           request: buildRequest("rollback", {
@@ -1352,7 +1358,13 @@ function buildWorkflow(flags) {
         {
           step: "rollback_receipt_state",
           command: buildReceiptStateCommand(flags)
-        }
+        },
+        ...(flags["adapter-receipt"] ? [
+          {
+            step: "adapter_rollback_target",
+            command: buildAdapterRollbackTargetCommand(flags)
+          }
+        ] : [])
       ],
       notes: [
         "Run export on the sending device.",
@@ -1364,7 +1376,8 @@ function buildWorkflow(flags) {
         "Sensitive bundle types require trusted authenticated targets; this sample refuses --require-trusted-device false for skill, session, workspace, and agent_profile.",
         "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
         "If resource_plan is present, use it as the app-level mapping from logical resource to runtime action and bridge scope.",
-        "Rollback only removes files imported into NekoDrop's local import area."
+        "NekoDrop rollback only removes files imported into NekoDrop's local import area.",
+        "adapter_import_target and adapter_rollback_target are application-owned steps; they require an app-selected target root or adapter receipt and do not run inside NekoDrop."
       ]
     };
   }
@@ -1559,6 +1572,32 @@ function buildReceiptStateCommand(flags) {
     flags["detail-response"] ?? "bridge-detail-response.json",
     "--bundle-id",
     requireFlag(flags, "staged-bundle-id")
+  ];
+}
+
+function buildAdapterImportTargetCommand(flags) {
+  return [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "import-target",
+    "--bundle-root",
+    requireFlag(flags, "bundle-root"),
+    "--target-root",
+    requireFlag(flags, "target-root"),
+    "--type",
+    requireKnownType(requireFlag(flags, "type")),
+    "--conflict-strategy",
+    requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
+  ];
+}
+
+function buildAdapterRollbackTargetCommand(flags) {
+  return [
+    "node",
+    "docs/examples/generic-adapter/generic-adapter.mjs",
+    "rollback-target",
+    "--receipt",
+    requireFlag(flags, "adapter-receipt")
   ];
 }
 
