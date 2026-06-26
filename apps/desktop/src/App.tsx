@@ -28,8 +28,8 @@ import {
   type TransferSecurityViewModel
 } from "./securityState";
 import {
-  bundleStatusLabel,
   bundleCanUseImportStrategy,
+  bundleImportStatusView,
   bundleImportPlanLine,
   bundleImportStrategyLabel,
   bundleTypeLabel,
@@ -2903,17 +2903,18 @@ function ReceivePanel({
           <div className="bundle-list">
             {visibleStagedBundles.map((bundle) => {
               const importPlanLine = bundleImportPlanLine(bundle);
+              const importStatus = bundleImportStatusView(bundle);
               return (
                 <div className="bundle-line" key={bundle.bundle_id}>
                   <div className="bundle-copy">
                     <span>
                       {bundle.display_name} · {bundleTypeLabel(bundle.bundle_type)} · {bundle.source_app} · {formatBytes(bundle.total_bytes)}
                     </span>
-                    <small>{receiveBundleImportHint(bundle)}</small>
+                    <small>{importStatus.detail}</small>
                     {importPlanLine ? <small>{importPlanLine}</small> : null}
                   </div>
                   <div className="bundle-actions">
-                    <strong>{bundleStatusLabel(bundle)}</strong>
+                    <strong>{importStatus.label}</strong>
                     {bundle.can_import_now ? (
                       <button
                         className="primary-button"
