@@ -278,12 +278,36 @@ node docs/examples/generic-adapter/generic-adapter.mjs receipt-state \
 
 `receipt-state` 只读 bridge response 里的公开字段，不读取 NekoDrop 本机私有路径。常见状态：
 
+- `ready_to_import`
+- `import_conflict`
 - `imported_can_rollback`
 - `imported_no_rollback`
 - `rolled_back`
 - `save_only`
 - `not_imported`
 - `missing`
+
+它会把 `bundle.detail` 里的公开字段压成一组稳定判断：
+
+- `can_import`
+- `import_blocking_reason`
+- `import_conflict_count`
+- `import_conflict_strategies`
+- `has_import_receipt`
+- `can_request_rollback`
+- `rollback_blocking_reason`
+- `next_action`
+
+`next_action` 只属于示例层，用来让 adapter 少写重复判断：
+
+- `request_import`
+- `choose_import_conflict_strategy`
+- `request_rollback_or_finish`
+- `finish_import_flow`
+- `save_only_or_ask_user`
+- `wait_for_import_request_or_refresh_detail`
+- `check_bundle_id_permission_or_refresh_detail`
+- `done`
 
 结果里的 `lifecycle_status` 可能是：
 
