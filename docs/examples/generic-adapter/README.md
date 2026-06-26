@@ -26,6 +26,10 @@ node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
 
 敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 也必须声明拒绝不可信敏感发送，避免 adapter 自己绕过 NekoDrop 的兜底校验。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
 
+descriptor 里的 `runtime` 只允许 `argv` 形态：命令名 + 参数数组。不要写 shell 字符串、绝对路径或本机数据目录。真实应用可以把 `export_bundle`、`import_bundle`、`rollback_import` 映射到自己的 CLI 或 helper，但 NekoDrop 不会因为 descriptor 存在就自动执行任意命令。
+
+descriptor 里的 `transactions` 要求真实 adapter 做 dry-run、写 receipt，并能按 receipt rollback。遇到版本迁移时默认是 `manual_only`；如果 adapter 声明 `adapter_managed`，也必须自己保证失败不留下半成品。
+
 生成请求时也可以直接引用 descriptor：
 
 ```bash
@@ -406,7 +410,14 @@ node docs/examples/generic-adapter/generic-adapter.mjs event-state \
   --action-request-id adapter-import-001
 ```
 
-`event-state` 会返回下一次 cursor、是否应立即继续拉取、匹配的 `action.updated` 摘要、收到的 bundle id 数组和 transfer 事件数量。它不会替代 `actions.results`；终态事件出现后仍应按 `action_request_id` 精确查询结果。
+`event-state` 会返回下一次 cursor、`next_poll`、匹配的 `action.updated` 摘要、收到的 bundle id 数组和 transfer 事件数量。它不会替代 `actions.results`；终态事件出现后 `must_query_results=true`，仍应按 `action_request_id` 精确查询结果。
+
+`next_poll.mode` 常见值：
+
+- `drain_page`：还有下一页，马上用 `after_event_id` 继续拉。
+- `reset_cursor`：cursor 丢失，丢弃本地 cursor 后从 `null` 重拉快照。
+- `query_results`：已经看到终态事件，先查 `actions.results`。
+- `wait`：没有新终态，按正常间隔或短等待继续。
 
 事件处理建议：
 
