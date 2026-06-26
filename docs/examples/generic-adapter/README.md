@@ -83,6 +83,23 @@ node docs/examples/generic-adapter/generic-adapter.mjs resource-plan \
 
 这个计划只告诉 adapter 下一步该跑哪个 runtime action、需要哪个 bridge scope。它不读取本机文件，也不代表 NekoDrop 能直接写第三方应用目录。
 
+workflow 也可以直接引用 manifest resource。这样真实 adapter 不需要在每个请求里重复写 bundle type：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs workflow \
+  --mode full-loop \
+  --app-manifest app-manifest.json \
+  --resource-id workspace.default \
+  --source ./sample-workspace \
+  --output ./out \
+  --bundle-id bundle_workspace_demo \
+  --name "Workspace demo" \
+  --target-device-id neko-device-target \
+  --staged-bundle-id bundle_workspace_demo
+```
+
+如果资源只支持导入或只支持导出，示例会拒绝不匹配的 workflow。比如 import-only resource 不能生成发送流程，export-only resource 不能生成导入或撤回流程。
+
 ## 导出
 
 adapter 先把自己的数据导出成一个 bundle 目录：
