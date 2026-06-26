@@ -1252,6 +1252,7 @@ function eventStateFromEventsResponse(flags) {
     .map((event) => event.payload);
   const latestAction = actionEvents.at(-1) ?? null;
   const latestActionState = latestAction ? actionEventState(latestAction) : null;
+  const nextPoll = nextEventPollDecision(response, latestActionState);
   return {
     cursor: nextCursorFromResponse(flags),
     stream_window: {
@@ -1261,16 +1262,51 @@ function eventStateFromEventsResponse(flags) {
     },
     event_count: events.length,
     has_more: Boolean(response.events_has_more),
-    should_poll_again: Boolean(response.events_has_more) || response.events_cursor_state === "missing",
+    should_poll_again: nextPoll.immediate,
+    next_poll: nextPoll,
     action_request_id: actionRequestId,
     action_state: latestActionState,
     action_events: actionEvents.map(actionEventState),
     should_query_result: Boolean(latestActionState?.final),
+    must_query_results: Boolean(latestActionState?.final),
     transfer_event_count: transferEvents.length,
     bundle_event_count: bundleEvents.length,
     received_bundle_ids: bundleEvents
       .map((event) => event.bundle_id)
       .filter((bundleId) => typeof bundleId === "string")
+  };
+}
+
+function nextEventPollDecision(response, latestActionState) {
+  if (response.events_cursor_state === "missing") {
+    return {
+      mode: "reset_cursor",
+      immediate: true,
+      after_event_id: null,
+      reason: "cursor_missing"
+    };
+  }
+  if (Boolean(response.events_has_more)) {
+    return {
+      mode: "drain_page",
+      immediate: true,
+      after_event_id: response.events_next_after_id ?? null,
+      reason: "has_more_events"
+    };
+  }
+  if (latestActionState?.final) {
+    return {
+      mode: "query_results",
+      immediate: false,
+      after_event_id: response.events_next_after_id ?? null,
+      reason: "terminal_action_event"
+    };
+  }
+  return {
+    mode: "wait",
+    immediate: false,
+    after_event_id: response.events_next_after_id ?? null,
+    reason: latestActionState ? "action_not_terminal" : "no_matching_action_event"
   };
 }
 
