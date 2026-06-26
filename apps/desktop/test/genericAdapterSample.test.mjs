@@ -835,6 +835,87 @@ test("generic adapter sample prints action result query envelopes", () => {
   assert.equal(request.payload.limit, 5);
 });
 
+test("generic adapter sample classifies mutation retry responses", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-retry-state-"));
+  const pendingPath = join(tempRoot, "pending.json");
+  const conflictPath = join(tempRoot, "conflict.json");
+  const terminalPath = join(tempRoot, "terminal.json");
+  writeFileSync(pendingPath, JSON.stringify({
+    status: "pending_runtime",
+    message: "local bridge action is already queued for the desktop runtime",
+    action_results: [{
+      request_id: "adapter-import-001",
+      action_kind: "bundle.import",
+      lifecycle_status: "queued",
+      status: "queued",
+      message: "local bridge action is queued for the desktop runtime",
+      bundle_id: "bundle_received_1",
+      bundle_type: "workspace",
+      conflict_strategy: "rename"
+    }]
+  }));
+  writeFileSync(conflictPath, JSON.stringify({
+    status: "conflict",
+    message: "local bridge request_id already belongs to a different payload",
+    action_results: [{
+      request_id: "adapter-import-001",
+      action_kind: "bundle.import",
+      lifecycle_status: "queued",
+      status: "queued",
+      message: "local bridge action is queued for the desktop runtime",
+      bundle_id: "bundle_received_1",
+      bundle_type: "workspace",
+      conflict_strategy: "rename"
+    }]
+  }));
+  writeFileSync(terminalPath, JSON.stringify({
+    status: "ok",
+    message: "local bridge action result snapshot",
+    action_results: [{
+      request_id: "adapter-import-001",
+      action_kind: "bundle.import",
+      lifecycle_status: "succeeded",
+      status: "completed",
+      message: "local bridge bundle was imported by the desktop runtime",
+      bundle_id: "bundle_received_1",
+      bundle_type: "workspace",
+      conflict_strategy: "rename",
+      has_import_receipt: true,
+      can_request_rollback: true,
+      rollback_file_count: 2
+    }]
+  }));
+
+  const pending = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "retry-state", "--response", pendingPath, "--action-request-id", "adapter-import-001"],
+    { encoding: "utf8" }
+  ));
+  const conflict = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "retry-state", "--response", conflictPath, "--action-request-id", "adapter-import-001"],
+    { encoding: "utf8" }
+  ));
+  const terminal = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "retry-state", "--response", terminalPath, "--action-request-id", "adapter-import-001"],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(pending.state, "pending_retry");
+  assert.equal(pending.final, false);
+  assert.equal(pending.next_action, "observe_events_or_query_actions_results");
+  assert.equal(pending.existing_action.bundle_id, "bundle_received_1");
+  assert.equal(conflict.state, "payload_conflict");
+  assert.equal(conflict.final, true);
+  assert.equal(conflict.next_action, "reuse_original_request_id_payload_or_create_new_user_action");
+  assert.equal(terminal.state, "terminal_result");
+  assert.equal(terminal.final, true);
+  assert.equal(terminal.next_action, "query_receipt_or_request_rollback");
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
 test("generic adapter sample prints rollback request envelopes", () => {
   const stdout = execFileSync(
     process.execPath,

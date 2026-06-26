@@ -195,7 +195,21 @@ node docs/examples/generic-adapter/generic-adapter.mjs post send \
 
 请求成功只代表动作入队，不代表已经发送完成。桌面端后台 worker 会自动做 preflight 和真实发送。adapter 优先用 `events.poll` 里的 `action.updated` 观察进度，再用 `actions.results` 查最新结果。
 
-如果 POST 超时或本机应用崩溃后恢复，不要为同一次用户动作生成新的动作 id。用原来的 `request_id` 重试同一种动作，再用同一个值作为 `actions.results.action_request_id` 查询。NekoDrop 只会合并同一 `client_id`、同一 `app_kind`、同一动作类型和同一 `request_id` 的 pending 动作；换动作类型、换 `app_kind` 或换 `request_id` 都会被当成另一件事。
+如果 POST 超时或本机应用崩溃后恢复，不要为同一次用户动作生成新的动作 id。用原来的 `request_id` 重试同一种动作，再用同一个值作为 `actions.results.action_request_id` 查询。NekoDrop 只会复用同一 `client_id`、同一 `app_kind`、同一动作类型、同一 `request_id` 和同一 payload 的 pending 动作；换动作类型、换 `app_kind`、换 payload 或换 `request_id` 都会被当成另一件事。
+
+重试响应可以直接归类：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs retry-state \
+  --response bridge-mutation-response.json \
+  --action-request-id adapter-import-001
+```
+
+常见结果：
+
+- `pending_retry`：原动作还在队列里，继续等事件或查 `actions.results`
+- `terminal_result`：原动作已经结束，按结果继续处理 receipt、回滚或失败提示
+- `payload_conflict`：同一个 `request_id` 被拿去做了另一份 payload，应该复用原 payload 重试，或为新的用户动作生成新的 `request_id`
 
 ## 查询结果
 

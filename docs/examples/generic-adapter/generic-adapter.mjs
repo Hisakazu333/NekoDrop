@@ -96,6 +96,10 @@ async function main() {
     printJson(actionStateFromResultsResponse(parseFlags(args)));
     return;
   }
+  if (command === "retry-state") {
+    printJson(retryStateFromMutationResponse(parseFlags(args)));
+    return;
+  }
   if (command === "receipt-state") {
     printJson(receiptStateFromDetailResponse(parseFlags(args)));
     return;
@@ -1198,6 +1202,53 @@ function actionStateFromResultsResponse(flags) {
   };
 }
 
+function retryStateFromMutationResponse(flags) {
+  const responsePath = requireFlag(flags, "response");
+  const actionRequestId = requireFlag(flags, "action-request-id");
+  const response = JSON.parse(readFileSync(responsePath, "utf8"));
+  const result = Array.isArray(response.action_results)
+    ? response.action_results.find((item) => item.request_id === actionRequestId)
+    : null;
+  if (response.status === "conflict") {
+    return {
+      action_request_id: actionRequestId,
+      state: "payload_conflict",
+      final: true,
+      message: response.message,
+      existing_action: result ? actionResultSummary(actionRequestId, result, result.lifecycle_status ?? result.status) : null,
+      next_action: "reuse_original_request_id_payload_or_create_new_user_action"
+    };
+  }
+  if (response.status === "pending_runtime") {
+    return {
+      action_request_id: actionRequestId,
+      state: "pending_retry",
+      final: false,
+      message: response.message,
+      existing_action: result ? actionResultSummary(actionRequestId, result, result.lifecycle_status ?? result.status) : null,
+      next_action: "observe_events_or_query_actions_results"
+    };
+  }
+  if (response.status === "ok" && result) {
+    return {
+      action_request_id: actionRequestId,
+      state: "terminal_result",
+      final: true,
+      message: response.message,
+      existing_action: actionResultSummary(actionRequestId, result, result.lifecycle_status ?? result.status),
+      next_action: nextActionForActionResult(result, result.lifecycle_status ?? result.status)
+    };
+  }
+  return {
+    action_request_id: actionRequestId,
+    state: "unknown",
+    final: false,
+    message: response.message ?? null,
+    existing_action: null,
+    next_action: "query_actions_results"
+  };
+}
+
 function actionResultSummary(actionRequestId, result, lifecycle) {
   return {
     action_request_id: actionRequestId,
@@ -1459,6 +1510,7 @@ function usage() {
   node generic-adapter.mjs cursor --response bridge-events-response.json
   node generic-adapter.mjs event-state --response bridge-events-response.json --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs action-state --response bridge-results-response.json --action-request-id ACTION_REQUEST_ID
+  node generic-adapter.mjs retry-state --response bridge-mutation-response.json --action-request-id ACTION_REQUEST_ID
   node generic-adapter.mjs receipt-state --response bridge-detail-response.json --bundle-id ID
   node generic-adapter.mjs post send --port 47321 --bundle-root DIR --target-device-id ID --type workspace`);
 }
