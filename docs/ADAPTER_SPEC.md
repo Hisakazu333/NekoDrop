@@ -130,9 +130,11 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
 
 当前桌面端会把已授权的发送或导入请求放进待执行队列，设置页可以查看、移除，并显示最近结果和失败原因。后台 worker 会按 FIFO 自动取出动作执行。`bundle.send` 执行前先做 preflight：确认 `bundle_root` 存在、bundle 校验通过、请求里的 `bundle_type` 和 manifest 一致，并在 `require_trusted_device=true` 时确认目标设备已经可信。执行时仍走桌面发送主线，不绕过可信设备和 session 校验。动作状态会按 `queued -> running -> succeeded / failed / conflict / cancelled` 写入最近结果，并通过 `events.poll` 的 `action.updated` 事件给授权 client 观察；普通状态列表和事件都不返回本机 `bundle_root`。
 
-`bundle.send`、`bundle.import` 和 `bundle.rollback` 的 `request_id` 是 adapter 侧的动作幂等键。一次用户动作如果本机 POST 超时、进程重启或没有拿到终态结果，adapter 应用同一个 `request_id` 重试同一种动作，然后用 `actions.results.action_request_id` 精确对账。runtime 只会把同一 `client_id`、同一 `app_kind`、同一动作类型和同一 `request_id` 的待执行动作视为同一次请求；新的 pending 请求会替换旧的 pending 请求。不同动作类型或不同 client identity 即使复用同一个字符串，也不会互相覆盖。`display_name` 只用于显示，不参与身份判断。
+`bundle.send`、`bundle.import` 和 `bundle.rollback` 的 `request_id` 是 adapter 侧的动作幂等键。一次用户动作如果本机 POST 超时、进程重启或没有拿到终态结果，adapter 应用同一个 `request_id` 重试同一种动作，然后用 `actions.results.action_request_id` 精确对账。runtime 只会把同一 `client_id`、同一 `app_kind`、同一动作类型、同一 `request_id` 和同一 payload 的待执行动作视为同一次请求；重复请求会复用原 pending 动作，不会重新入队。不同动作类型或不同 client identity 即使复用同一个字符串，也不会互相覆盖。`display_name` 只用于显示，不参与身份判断。
 
 如果同一个 `request_id` 已经有终态结果，重复请求不应再次入队，而应直接返回已有结果快照。adapter 侧可以把这理解为“同一动作已经做完了，继续查结果，不要重新发一遍”。
+
+如果同一个 `request_id` 但 payload 已经变了，比如换了 `staged_bundle_id`、`bundle_root`、`bundle_type` 或 `conflict_strategy`，runtime 会直接拒绝这次请求，不当成 retry。`request_id` 只允许复用在同一份动作语义上。
 
 `bundle.import` 动作只导入到 NekoDrop 本机导入区，不直接写第三方应用目录。默认策略是 `reject`：同名或文件冲突时停止，并在 `actions.results` 里返回 `bundle_import_conflict`。调用方也可以传 `conflict_strategy`：
 
