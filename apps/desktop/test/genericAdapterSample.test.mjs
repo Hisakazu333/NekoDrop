@@ -401,6 +401,17 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
     descriptor.bundle_types.map((entry) => entry.bundle_type),
     ["session", "workspace"]
   );
+  assert.equal(descriptor.runtime.invocation, "argv");
+  assert.equal(descriptor.runtime.working_directory, "adapter_root");
+  assert.deepEqual(
+    descriptor.runtime.actions.map((entry) => entry.action),
+    ["export_bundle", "import_bundle", "rollback_import"]
+  );
+  assert.equal(descriptor.runtime.actions[0].command, "generic-adapter");
+  assert.deepEqual(
+    descriptor.runtime.actions[0].args.slice(0, 3),
+    ["export", "--source", "{source_dir}"]
+  );
   assert.equal(descriptor.bundle_types[0].sensitive, true);
   assert.equal(descriptor.bundle_types[0].requires_trusted_device, true);
 
@@ -411,6 +422,7 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
   ));
   assert.equal(validation.schema, "nekolink.adapter.v1");
   assert.equal(validation.bundle_type_count, 2);
+  assert.deepEqual(validation.runtime_actions, ["export_bundle", "import_bundle", "rollback_import"]);
   assert.deepEqual(validation.sensitive_bundle_types, ["session", "workspace"]);
 
   rmSync(tempRoot, { recursive: true, force: true });
@@ -732,6 +744,41 @@ test("generic adapter sample rejects unsafe adapter descriptors", () => {
       { encoding: "utf8", stdio: "pipe" }
     ),
     /adapter descriptor must refuse untrusted sensitive sends/
+  );
+
+  descriptor.security.refuses_untrusted_sensitive_send = true;
+  descriptor.runtime.actions[0].command = "/usr/bin/generic-adapter";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /adapter runtime command must be a command name/
+  );
+
+  descriptor.runtime.actions[0].command = "sh";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /adapter runtime command must not be a shell/
+  );
+
+  descriptor.runtime.actions[0].command = "generic-adapter";
+  descriptor.runtime.actions[0].action = "run_shell";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /unsupported adapter runtime action/
   );
 
   rmSync(tempRoot, { recursive: true, force: true });
