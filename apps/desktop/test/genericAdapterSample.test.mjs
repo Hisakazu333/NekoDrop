@@ -1997,7 +1997,21 @@ test("generic adapter sample derives action state from precise result lookups", 
         reason: null,
         message: "rollback completed",
         bundle_id: "bundle_received_1",
+        rolled_back_file_count: 0,
         can_request_rollback: false
+      },
+      {
+        request_id: "adapter-import-completed-001",
+        action_kind: "bundle.import",
+        status: "completed",
+        lifecycle_status: "succeeded",
+        reason: null,
+        message: "import completed",
+        bundle_id: "bundle_imported_1",
+        bundle_type: "workspace",
+        has_import_receipt: true,
+        rollback_file_count: 2,
+        can_request_rollback: true
       },
       {
         request_id: "adapter-rollback-failed-001",
@@ -2031,6 +2045,11 @@ test("generic adapter sample derives action state from precise result lookups", 
     [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-import-conflict-001"],
     { encoding: "utf8" }
   ));
+  const importCompleted = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-import-completed-001"],
+    { encoding: "utf8" }
+  ));
   const rollbackFailed = JSON.parse(execFileSync(
     process.execPath,
     [sampleCli, "action-state", "--response", responsePath, "--action-request-id", "adapter-rollback-failed-001"],
@@ -2057,6 +2076,11 @@ test("generic adapter sample derives action state from precise result lookups", 
   assert.equal(result.lifecycle_status, "succeeded");
   assert.equal(result.bundle_id, "bundle_received_1");
   assert.equal(result.next_action, "query_rollback_status");
+  assert.equal(importCompleted.status, "completed");
+  assert.equal(importCompleted.lifecycle_status, "succeeded");
+  assert.equal(importCompleted.state, "result");
+  assert.equal(importCompleted.next_action, "query_receipt_or_request_rollback");
+  assert.equal(importCompleted.can_request_rollback, true);
   assert.equal(conflict.state, "result");
   assert.equal(conflict.next_action, "choose_import_conflict_strategy");
   assert.equal(rollbackFailed.next_action, "show_rollback_blocking_reason");
@@ -2064,6 +2088,33 @@ test("generic adapter sample derives action state from precise result lookups", 
   assert.equal(missing.final, false);
 
   rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample exposes the bridge receipt and result state contract", () => {
+  const contract = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "contract"],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(contract.schema, "generic.adapter.contract.v1");
+  assert.deepEqual(contract.bridge_actions, ["bundle.send", "bundle.import", "bundle.rollback"]);
+  assert.deepEqual(contract.import_plan_states, ["would_import", "would_conflict", "would_skip", "cannot_import"]);
+  assert.deepEqual(contract.action_lifecycle_statuses, ["queued", "running", "succeeded", "failed", "conflict", "cancelled"]);
+  assert.deepEqual(contract.action_state_states, ["missing", "pending", "running", "result"]);
+  assert.deepEqual(contract.receipt_state_states, [
+    "missing",
+    "ready_to_import",
+    "import_conflict",
+    "imported_can_rollback",
+    "imported_no_rollback",
+    "rolled_back",
+    "save_only",
+    "not_imported"
+  ]);
+  assert.deepEqual(contract.rollback_blocking_reasons, ["destination_missing", "imported_file_missing", "already_rolled_back"]);
+  assert.match(contract.action_result_rule, /Use lifecycle_status/);
+  assert.deepEqual(contract.sensitive_bundle_types, ["skill", "session", "workspace", "agent_profile"]);
 });
 
 test("generic adapter sample derives receipt state from bundle detail responses", () => {

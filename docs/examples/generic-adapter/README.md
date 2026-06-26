@@ -8,6 +8,14 @@
 node docs/examples/generic-adapter/generic-adapter.mjs
 ```
 
+先看状态契约：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs contract
+```
+
+它会输出 bridge action、dry-run plan、action lifecycle、receipt state 和 rollback blocking reason 的固定集合。adapter 做控制流时优先看 `lifecycle_status`；`status` 是 bridge 原始结果，保留给兼容代码。
+
 ## Descriptor
 
 真实 adapter 接入前先声明自己能处理什么。descriptor 不绑定具体应用目录，只说明 client identity、bridge scope、bundle 类型和安全边界。
