@@ -60,6 +60,23 @@ pub enum TransferSecurityMode {
     AuthenticatedEncryptedSession,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceivedBundleStagingBlockReason {
+    LegacyPlain,
+    SensitiveBundleRequiresAuthenticatedSession,
+}
+
+impl ReceivedBundleStagingBlockReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyPlain => "legacy_plain",
+            Self::SensitiveBundleRequiresAuthenticatedSession => {
+                "sensitive_bundle_requires_authenticated_session"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceivedBundleReport {
     pub bundle_id: String,
@@ -1199,10 +1216,22 @@ fn can_stage_received_bundle_for_import(
     bundle_type: BundleType,
     security_mode: TransferSecurityMode,
 ) -> bool {
-    if bundle_type.requires_authenticated_encrypted_session() {
-        return security_mode == TransferSecurityMode::AuthenticatedEncryptedSession;
+    received_bundle_staging_block_reason(bundle_type, security_mode).is_none()
+}
+
+pub fn received_bundle_staging_block_reason(
+    bundle_type: BundleType,
+    security_mode: TransferSecurityMode,
+) -> Option<ReceivedBundleStagingBlockReason> {
+    if security_mode == TransferSecurityMode::LegacyPlain {
+        return Some(ReceivedBundleStagingBlockReason::LegacyPlain);
     }
-    security_mode != TransferSecurityMode::LegacyPlain
+    if bundle_type.requires_authenticated_encrypted_session()
+        && security_mode != TransferSecurityMode::AuthenticatedEncryptedSession
+    {
+        return Some(ReceivedBundleStagingBlockReason::SensitiveBundleRequiresAuthenticatedSession);
+    }
+    None
 }
 
 fn staged_bundle_to_report(staged: StagedBundle) -> ReceivedBundleReport {
@@ -1826,28 +1855,73 @@ mod tests {
                 bundle_type,
                 TransferSecurityMode::LegacyPlain
             ));
+            assert_eq!(
+                received_bundle_staging_block_reason(
+                    bundle_type,
+                    TransferSecurityMode::LegacyPlain
+                )
+                .map(ReceivedBundleStagingBlockReason::as_str),
+                Some("legacy_plain")
+            );
             assert!(!can_stage_received_bundle_for_import(
                 bundle_type,
                 TransferSecurityMode::EncryptedSession
             ));
+            assert_eq!(
+                received_bundle_staging_block_reason(
+                    bundle_type,
+                    TransferSecurityMode::EncryptedSession
+                )
+                .map(ReceivedBundleStagingBlockReason::as_str),
+                Some("sensitive_bundle_requires_authenticated_session")
+            );
             assert!(can_stage_received_bundle_for_import(
                 bundle_type,
                 TransferSecurityMode::AuthenticatedEncryptedSession
             ));
+            assert_eq!(
+                received_bundle_staging_block_reason(
+                    bundle_type,
+                    TransferSecurityMode::AuthenticatedEncryptedSession
+                ),
+                None
+            );
         }
 
         assert!(!can_stage_received_bundle_for_import(
             BundleType::ConfigSnapshot,
             TransferSecurityMode::LegacyPlain
         ));
+        assert_eq!(
+            received_bundle_staging_block_reason(
+                BundleType::ConfigSnapshot,
+                TransferSecurityMode::LegacyPlain
+            )
+            .map(ReceivedBundleStagingBlockReason::as_str),
+            Some("legacy_plain")
+        );
         assert!(can_stage_received_bundle_for_import(
             BundleType::ConfigSnapshot,
             TransferSecurityMode::EncryptedSession
         ));
+        assert_eq!(
+            received_bundle_staging_block_reason(
+                BundleType::ConfigSnapshot,
+                TransferSecurityMode::EncryptedSession
+            ),
+            None
+        );
         assert!(can_stage_received_bundle_for_import(
             BundleType::ConfigSnapshot,
             TransferSecurityMode::AuthenticatedEncryptedSession
         ));
+        assert_eq!(
+            received_bundle_staging_block_reason(
+                BundleType::ConfigSnapshot,
+                TransferSecurityMode::AuthenticatedEncryptedSession
+            ),
+            None
+        );
     }
 
     #[test]
