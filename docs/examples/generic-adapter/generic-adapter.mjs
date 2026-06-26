@@ -47,6 +47,20 @@ const ADAPTER_RUNTIME_ACTIONS = new Set(["export_bundle", "import_bundle", "roll
 const UNSAFE_RUNTIME_COMMANDS = new Set(["sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
 const ADAPTER_MIGRATION_POLICIES = new Set(["manual_only", "adapter_managed"]);
 const APP_RESOURCE_DIRECTIONS = new Set(["export", "import", "both"]);
+const IMPORT_PLAN_STATES = ["would_import", "would_conflict", "would_skip", "cannot_import"];
+const ACTION_LIFECYCLE_STATUSES = ["queued", "running", "succeeded", "failed", "conflict", "cancelled"];
+const ACTION_STATE_STATES = ["missing", "pending", "running", "result"];
+const RECEIPT_STATE_STATES = [
+  "missing",
+  "ready_to_import",
+  "import_conflict",
+  "imported_can_rollback",
+  "imported_no_rollback",
+  "rolled_back",
+  "save_only",
+  "not_imported"
+];
+const ROLLBACK_BLOCKING_REASONS = ["destination_missing", "imported_file_missing", "already_rolled_back"];
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -90,6 +104,10 @@ async function main() {
   }
   if (command === "resource-plan") {
     printJson(buildResourcePlan(parseFlags(args)));
+    return;
+  }
+  if (command === "contract") {
+    printJson(buildAdapterContract());
     return;
   }
   if (command === "workflow") {
@@ -224,6 +242,7 @@ function importBundleIntoAdapterTarget(flags) {
   const targetRoot = requireFlag(flags, "target-root");
   const expectedType = requireKnownType(requireFlag(flags, "type"));
   const strategy = requireConflictStrategy(flags["conflict-strategy"] ?? "reject");
+  const dryRun = flags["dry-run"] === "true";
   if (!existsSync(bundleRoot) || !statSync(bundleRoot).isDirectory()) {
     throw new Error(`--bundle-root must be a directory: ${bundleRoot}`);
   }
@@ -254,6 +273,10 @@ function importBundleIntoAdapterTarget(flags) {
     };
   });
   const conflicts = files.filter((file) => file.destination_exists);
+  if (dryRun) {
+    return adapterImportPlan(manifest, targetRoot, target, files, conflicts, strategy);
+  }
+
   if ((existsSync(target) || conflicts.length > 0) && strategy === "reject") {
     return {
       bundle_id: manifest.bundle_id,
@@ -319,6 +342,93 @@ function importBundleIntoAdapterTarget(flags) {
     conflict_count: conflicts.length,
     conflicts: conflicts.map((file) => file.manifest_path),
     receipt_path: receiptPath
+  };
+}
+
+function adapterImportPlan(manifest, targetRoot, target, files, conflicts, strategy) {
+  const skipped = strategy === "skip_conflicts"
+    ? conflicts.map((file) => file.manifest_path)
+    : [];
+  const wouldImport = files
+    .map((file) => file.manifest_path)
+    .filter((manifestPath) => !skipped.includes(manifestPath));
+  const conflictCount = Math.max(conflicts.length, existsSync(target) ? 1 : 0);
+  const planState = adapterImportPlanState(strategy, conflictCount, wouldImport.length, skipped.length);
+  const nextAction = nextActionForAdapterImportPlan(planState);
+  const plan = {
+    schema: "generic.adapter.import_plan.v1",
+    state: planState,
+    next_action: nextAction,
+    bundle_id: manifest.bundle_id,
+    bundle_type: manifest.bundle_type,
+    display_name: manifest.display_name,
+    conflict_strategy: strategy,
+    target_root: targetRoot,
+    target_path: target,
+    file_count: files.length,
+    would_import_file_count: wouldImport.length,
+    would_skip_file_count: skipped.length,
+    conflict_count: conflictCount,
+    conflicts: conflicts.map((file) => file.manifest_path),
+    would_import_paths: wouldImport,
+    would_skip_paths: skipped
+  };
+  return {
+    bundle_id: manifest.bundle_id,
+    bundle_type: manifest.bundle_type,
+    display_name: manifest.display_name,
+    target_root: targetRoot,
+    target_path: target,
+    status: planState,
+    dry_run: true,
+    conflict_strategy: strategy,
+    would_import_file_count: wouldImport.length,
+    would_skip_file_count: skipped.length,
+    conflict_count: conflictCount,
+    conflicts: plan.conflicts,
+    receipt_path: null,
+    plan
+  };
+}
+
+function adapterImportPlanState(strategy, conflictCount, wouldImportCount, skippedCount) {
+  if (conflictCount === 0) {
+    return "would_import";
+  }
+  if (strategy === "reject") {
+    return "would_conflict";
+  }
+  if (strategy === "skip_conflicts" && wouldImportCount === 0 && skippedCount > 0) {
+    return "would_skip";
+  }
+  if (strategy === "skip_conflicts" || strategy === "rename") {
+    return "would_import";
+  }
+  return "cannot_import";
+}
+
+function nextActionForAdapterImportPlan(state) {
+  if (state === "would_import" || state === "would_skip") {
+    return "confirm_import_then_run_import_target";
+  }
+  if (state === "would_conflict") {
+    return "choose_rename_or_skip_conflicts_or_cancel";
+  }
+  return "cancel_import";
+}
+
+function buildAdapterContract() {
+  return {
+    schema: "generic.adapter.contract.v1",
+    bridge_actions: ["bundle.send", "bundle.import", "bundle.rollback"],
+    import_plan_states: IMPORT_PLAN_STATES,
+    action_lifecycle_statuses: ACTION_LIFECYCLE_STATUSES,
+    action_state_states: ACTION_STATE_STATES,
+    receipt_state_states: RECEIPT_STATE_STATES,
+    rollback_blocking_reasons: ROLLBACK_BLOCKING_REASONS,
+    action_result_rule: "Use lifecycle_status for control flow when present; status is the raw bridge result.",
+    sensitive_bundle_types: Array.from(SENSITIVE_BUNDLE_TYPES),
+    sensitive_bundle_policy: "skill, session, workspace, and agent_profile require a trusted authenticated encrypted target."
   };
 }
 
@@ -1322,6 +1432,15 @@ function buildWorkflow(flags) {
         },
         ...(flags["target-root"] ? [
           {
+            step: "adapter_import_dry_run",
+            command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot, "dry-run": "true" })
+          },
+          {
+            step: "adapter_import_confirm",
+            requires: "user_or_app_confirmation_after_adapter_import_dry_run",
+            accepts_plan_states: ["would_import", "would_skip"]
+          },
+          {
             step: "adapter_import_target",
             command: buildAdapterImportTargetCommand({ ...flags, type: workflowType, "bundle-root": bundleRoot })
           }
@@ -1377,6 +1496,8 @@ function buildWorkflow(flags) {
         "Keep events_next_after_id between observe calls; reset to null when events_cursor_state is missing.",
         "If resource_plan is present, use it as the app-level mapping from logical resource to runtime action and bridge scope.",
         "NekoDrop rollback only removes files imported into NekoDrop's local import area.",
+        "adapter_import_dry_run must return would_import, would_conflict, would_skip, or cannot_import before an app writes data.",
+        "adapter_import_confirm is an app-owned confirmation step between dry-run and import-target.",
         "adapter_import_target and adapter_rollback_target are application-owned steps; they require an app-selected target root or adapter receipt and do not run inside NekoDrop."
       ]
     };
@@ -1576,7 +1697,7 @@ function buildReceiptStateCommand(flags) {
 }
 
 function buildAdapterImportTargetCommand(flags) {
-  return [
+  const command = [
     "node",
     "docs/examples/generic-adapter/generic-adapter.mjs",
     "import-target",
@@ -1589,6 +1710,10 @@ function buildAdapterImportTargetCommand(flags) {
     "--conflict-strategy",
     requireConflictStrategy(flags["conflict-strategy"] ?? "reject")
   ];
+  if (flags["dry-run"] === "true") {
+    command.push("--dry-run", "true");
+  }
+  return command;
 }
 
 function buildAdapterRollbackTargetCommand(flags) {
@@ -2115,6 +2240,7 @@ function usage() {
   console.log(`Usage:
   node generic-adapter.mjs export --source DIR --output DIR --bundle-id ID --type session --name NAME
   node generic-adapter.mjs import-target --bundle-root DIR --target-root DIR --type session --conflict-strategy reject
+  node generic-adapter.mjs import-target --bundle-root DIR --target-root DIR --type session --conflict-strategy reject --dry-run true
   node generic-adapter.mjs rollback-target --receipt PATH
   node generic-adapter.mjs request auth
   node generic-adapter.mjs request send --bundle-root DIR --target-device-id ID --type workspace
@@ -2128,6 +2254,7 @@ function usage() {
   node generic-adapter.mjs app-manifest --descriptor adapter.json --app-id generic.app --name "Generic App"
   node generic-adapter.mjs validate-app-manifest --manifest app-manifest.json --descriptor adapter.json
   node generic-adapter.mjs resource-plan --manifest app-manifest.json --resource-id workspace.default --action export --bundle-id ID
+  node generic-adapter.mjs contract
   node generic-adapter.mjs workflow --mode roundtrip --bundle-root DIR --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID --type workspace --conflict-strategy rename
   node generic-adapter.mjs workflow --mode full-loop --app-manifest app-manifest.json --resource-id workspace.default --source DIR --output DIR --bundle-id ID --name NAME --target-device-id ID --staged-bundle-id ID

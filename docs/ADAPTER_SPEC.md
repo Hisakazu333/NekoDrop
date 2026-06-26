@@ -254,9 +254,9 @@ app manifest 可以用来生成某个资源的 action plan：导出时先跑 ada
 
 adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。action 事件带 `client_id` 和 `client_app_kind`，runtime 会按当前请求的 client identity 和授权 scope 过滤。`events.poll` 可以传 `action_request_id` 只观察某个 `bundle.send`、`bundle.import` 或 `bundle.rollback` 动作；不传时返回当前授权视图里的普通事件流。`events.poll` 的 `after_event_id` 只对当前 client 可见的事件流有效；如果 cursor 指向已经裁剪、无权限或属于其他 client identity 的事件，响应会返回 `events_cursor_state=missing`，adapter 应把本地 cursor 清空后重新拉一页快照。事件响应还会带 `events_visible_first_id`、`events_visible_last_id` 和 `events_visible_count`，这三个字段只描述当前 client 当前过滤条件下可见的事件窗口，不是全局队列统计。`actions.results` 里的 `request_id` 是查询请求本身；要查某次动作的结果，同样传那次动作的 `request_id` 到 `action_request_id`。不传 `action_request_id` 时，runtime 会按 `after_claimed_at_ms` 和 `limit` 返回最近结果。传 `action_request_id` 时，如果结果表还没有终态记录，但动作仍在同一 client 的待执行队列里，runtime 会返回脱敏的 `queued` 状态；queued `bundle.import` 和 `bundle.rollback` 会带公开 `bundle_id`，方便 adapter 对账；如果 worker 已写入执行状态，则返回 `running` 或终态结果。结果按 `client_id`、`app_kind` 和授权 scope 过滤；查不到、没有对应 scope，或结果属于其他 client identity 时，只返回空结果，不暴露对方状态。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 
-通用 adapter 示例会把这些结果再归纳成一个 `next_action` 提示，方便上层决定下一步是继续等、换冲突策略、查 receipt、请求回滚，还是直接报错。这个提示只属于示例层，不是协议字段。
+通用 adapter 示例会把这些结果再归纳成一个 `next_action` 提示，方便上层决定下一步是继续等、换冲突策略、查 receipt、请求回滚，还是直接报错。这个提示只属于示例层，不是协议字段。示例的 `contract` 命令会输出当前固定状态集合；adapter 控制流应优先读 `lifecycle_status`，把 `status` 当原始 bridge 结果保留。
 
-示例里还提供了 `import-target` 和 `rollback-target` 命令，用来演示上层应用如何把已校验 bundle 导入自己的数据目录，再按 adapter 私有 receipt 保守撤回。导入前会重新校验 manifest / checksums / permissions；撤回只删除 receipt 记录里本次导入且未被改写的文件。这个样例只说明“上层应用自己的导入流程应该怎么写”，不代表 NekoDrop 负责写第三方应用目录。
+示例里还提供了 `import-target` 和 `rollback-target` 命令，用来演示上层应用如何把已校验 bundle 导入自己的数据目录，再按 adapter 私有 receipt 保守撤回。`import-target --dry-run true` 会先返回 `generic.adapter.import_plan.v1`，稳定状态只允许 `would_import`、`would_conflict`、`would_skip` 或 `cannot_import`。真实 adapter 应在 dry-run 和实际写入之间做用户确认或应用确认；`would_conflict` 不能直接写，必须换成 `rename`、`skip_conflicts` 或取消。导入前会重新校验 manifest / checksums / permissions；撤回只删除 receipt 记录里本次导入且未被改写的文件。这个样例只说明“上层应用自己的导入流程应该怎么写”，不代表 NekoDrop 负责写第三方应用目录。
 
 示例里的 `event-state` 会把一次 `events.poll` response 归纳成 watch loop 可用的 cursor、action 摘要和下一步提示。它是 adapter 侧辅助，不是新的 bridge 协议；终态事件出现后仍应调用 `actions.results` 做精确结果查询。
 

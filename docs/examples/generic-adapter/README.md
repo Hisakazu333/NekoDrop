@@ -8,6 +8,14 @@
 node docs/examples/generic-adapter/generic-adapter.mjs
 ```
 
+先看状态契约：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs contract
+```
+
+它会输出 bridge action、dry-run plan、action lifecycle、receipt state 和 rollback blocking reason 的固定集合。adapter 做控制流时优先看 `lifecycle_status`；`status` 是 bridge 原始结果，保留给兼容代码。
+
 ## Descriptor
 
 真实 adapter 接入前先声明自己能处理什么。descriptor 不绑定具体应用目录，只说明 client identity、bridge scope、bundle 类型和安全边界。
@@ -236,6 +244,28 @@ export -> authorize -> send -> observe_send -> send_action_state
 - 需要撤回时：用 `bundle.rollback` 撤回 NekoDrop 本机导入区里的文件，再查 `actions.results` 和 `bundle.detail` 确认撤回状态。
 
 `skill`、`session`、`workspace`、`agent_profile` 都按敏感资料处理：发送端必须要求可信目标，接收端只有 authenticated encrypted session 收到的 bundle 才会进入暂存和导入流程。这个示例会直接拒绝给这些类型传 `--require-trusted-device false`。旧兼容路径收到的目录即使有 `bundle.json`，也只当普通文件保存。
+
+应用侧导入也可以先 dry-run：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs import-target \
+  --bundle-root ./out/bundle_workspace_demo \
+  --target-root ./adapter-data \
+  --type workspace \
+  --conflict-strategy reject \
+  --dry-run true
+```
+
+dry-run 会校验 manifest、checksum、permissions，计算目标位置和冲突，但不会创建目录、复制文件或写 receipt。full-loop 在提供 `--target-root` 时会先输出 `adapter_import_dry_run`，再输出实际 `adapter_import_target`。
+
+dry-run 的稳定状态只有四种：
+
+- `would_import`：可以导入，或冲突策略会产生新的导入目标
+- `would_conflict`：默认拒绝覆盖，需要换策略或取消
+- `would_skip`：`skip_conflicts` 会跳过已有文件，没有新文件要写
+- `cannot_import`：校验通过不了或策略无法执行
+
+`adapter_import_confirm` 必须发生在 dry-run 之后、实际写入之前。真实 adapter 可以让用户确认，也可以让自己的上层应用确认，但不能跳过 dry-run 直接写。
 
 ## 发送
 
