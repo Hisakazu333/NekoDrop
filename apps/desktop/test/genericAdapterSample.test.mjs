@@ -401,6 +401,25 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
     descriptor.bundle_types.map((entry) => entry.bundle_type),
     ["session", "workspace"]
   );
+  assert.equal(descriptor.runtime.invocation, "argv");
+  assert.equal(descriptor.runtime.working_directory, "adapter_root");
+  assert.deepEqual(
+    descriptor.runtime.actions.map((entry) => entry.action),
+    ["export_bundle", "import_bundle", "rollback_import"]
+  );
+  assert.deepEqual(descriptor.transactions, {
+    dry_run_required: true,
+    receipt_required: true,
+    rollback_supported: true,
+    rollback_requires_receipt: true,
+    conflict_resolution_required: true,
+    migration_policy: "manual_only"
+  });
+  assert.equal(descriptor.runtime.actions[0].command, "generic-adapter");
+  assert.deepEqual(
+    descriptor.runtime.actions[0].args.slice(0, 3),
+    ["export", "--source", "{source_dir}"]
+  );
   assert.equal(descriptor.bundle_types[0].sensitive, true);
   assert.equal(descriptor.bundle_types[0].requires_trusted_device, true);
 
@@ -411,9 +430,28 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
   ));
   assert.equal(validation.schema, "nekolink.adapter.v1");
   assert.equal(validation.bundle_type_count, 2);
+  assert.deepEqual(validation.runtime_actions, ["export_bundle", "import_bundle", "rollback_import"]);
+  assert.equal(validation.migration_policy, "manual_only");
   assert.deepEqual(validation.sensitive_bundle_types, ["session", "workspace"]);
 
   rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample can declare adapter-managed migrations", () => {
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "descriptor",
+      "--type",
+      "workspace",
+      "--migration-policy",
+      "adapter_managed"
+    ],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(descriptor.transactions.migration_policy, "adapter_managed");
 });
 
 test("generic adapter sample can derive auth scopes from an adapter descriptor", () => {
@@ -732,6 +770,65 @@ test("generic adapter sample rejects unsafe adapter descriptors", () => {
       { encoding: "utf8", stdio: "pipe" }
     ),
     /adapter descriptor must refuse untrusted sensitive sends/
+  );
+
+  descriptor.security.refuses_untrusted_sensitive_send = true;
+  descriptor.runtime.actions[0].command = "/usr/bin/generic-adapter";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /adapter runtime command must be a command name/
+  );
+
+  descriptor.runtime.actions[0].command = "sh";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /adapter runtime command must not be a shell/
+  );
+
+  descriptor.runtime.actions[0].command = "generic-adapter";
+  descriptor.runtime.actions[0].action = "run_shell";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /unsupported adapter runtime action/
+  );
+
+  descriptor.runtime.actions[0].action = "export_bundle";
+  descriptor.transactions.receipt_required = false;
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /transactions.receipt_required must be true/
+  );
+
+  descriptor.transactions.receipt_required = true;
+  descriptor.transactions.migration_policy = "auto_overwrite";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /unsupported adapter migration_policy/
   );
 
   rmSync(tempRoot, { recursive: true, force: true });
@@ -1212,12 +1309,93 @@ test("generic adapter sample summarizes event poll responses for a watch loop", 
   assert.equal(state.has_more, true);
   assert.equal(state.should_poll_again, true);
   assert.equal(state.should_query_result, true);
+  assert.equal(state.must_query_results, true);
+  assert.deepEqual(state.next_poll, {
+    mode: "drain_page",
+    immediate: true,
+    after_event_id: "bridge-event-45",
+    reason: "has_more_events"
+  });
   assert.equal(state.action_events.length, 2);
   assert.equal(state.action_state.lifecycle_status, "conflict");
   assert.equal(state.action_state.final, true);
   assert.equal(state.action_state.next_action, "query_result_and_choose_import_conflict_strategy");
   assert.deepEqual(state.received_bundle_ids, ["bundle_workspace_demo"]);
   assert.equal(state.transfer_event_count, 1);
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample event state asks for result lookup after terminal action", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-event-terminal-"));
+  const responsePath = join(tempRoot, "events-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    events_next_after_id: "bridge-event-46",
+    events_cursor_state: "ok",
+    events_has_more: false,
+    events: [
+      {
+        kind: "action.updated",
+        payload: {
+          request_id: "adapter-send-001",
+          action_kind: "bundle.send",
+          status: "succeeded",
+          reason: null,
+          target_device_id: "device-a"
+        }
+      }
+    ]
+  }));
+
+  const state = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "event-state",
+      "--response",
+      responsePath,
+      "--action-request-id",
+      "adapter-send-001"
+    ],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(state.should_poll_again, false);
+  assert.equal(state.must_query_results, true);
+  assert.deepEqual(state.next_poll, {
+    mode: "query_results",
+    immediate: false,
+    after_event_id: "bridge-event-46",
+    reason: "terminal_action_event"
+  });
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample event state resets missing cursors", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-generic-adapter-event-missing-"));
+  const responsePath = join(tempRoot, "events-response.json");
+  writeFileSync(responsePath, JSON.stringify({
+    events_next_after_id: null,
+    events_cursor_state: "missing",
+    events_has_more: false,
+    events: []
+  }));
+
+  const state = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "event-state", "--response", responsePath],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(state.should_poll_again, true);
+  assert.equal(state.must_query_results, false);
+  assert.deepEqual(state.next_poll, {
+    mode: "reset_cursor",
+    immediate: true,
+    after_event_id: null,
+    reason: "cursor_missing"
+  });
 
   rmSync(tempRoot, { recursive: true, force: true });
 });

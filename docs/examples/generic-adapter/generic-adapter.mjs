@@ -42,6 +42,9 @@ const FULL_LOOP_BRIDGE_SCOPES = [
   "bundle.import.request",
   "transfer.status.read"
 ];
+const ADAPTER_RUNTIME_ACTIONS = new Set(["export_bundle", "import_bundle", "rollback_import"]);
+const UNSAFE_RUNTIME_COMMANDS = new Set(["sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
+const ADAPTER_MIGRATION_POLICIES = new Set(["manual_only", "adapter_managed"]);
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -516,6 +519,8 @@ function buildAdapterDescriptor(flags) {
       requested_scopes: bridgeScopes,
       default_ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
     },
+    runtime: buildAdapterRuntimeProfile(flags),
+    transactions: buildAdapterTransactionPolicy(flags),
     bundle_types: uniqueTypes.map((type) => ({
       bundle_type: type,
       can_export: capability !== "import",
@@ -545,6 +550,8 @@ function validateAdapterDescriptorFile(flags) {
     adapter_id: descriptor.adapter_id,
     bundle_type_count: descriptor.bundle_types.length,
     requested_scopes: descriptor.bridge.requested_scopes,
+    runtime_actions: descriptor.runtime.actions.map((entry) => entry.action),
+    migration_policy: descriptor.transactions.migration_policy,
     sensitive_bundle_types: descriptor.bundle_types
       .filter((entry) => entry.sensitive)
       .map((entry) => entry.bundle_type)
@@ -582,6 +589,8 @@ function validateAdapterDescriptor(descriptor) {
   if (!Number.isInteger(descriptor.bridge.default_ttl_seconds) || descriptor.bridge.default_ttl_seconds <= 0) {
     throw new Error("adapter descriptor bridge.default_ttl_seconds must be positive");
   }
+  validateAdapterRuntimeProfile(descriptor.runtime);
+  validateAdapterTransactionPolicy(descriptor.transactions);
   if (!Array.isArray(descriptor.bundle_types) || descriptor.bundle_types.length === 0) {
     throw new Error("adapter descriptor bundle_types is required");
   }
@@ -638,6 +647,138 @@ function validateDescriptorBundleType(entry, seenTypes) {
     if (entry.sensitive !== true || entry.requires_trusted_device !== true) {
       throw new Error(`${type} descriptor must mark sensitive and require trusted device`);
     }
+  }
+}
+
+function buildAdapterTransactionPolicy(flags) {
+  return {
+    dry_run_required: true,
+    receipt_required: true,
+    rollback_supported: true,
+    rollback_requires_receipt: true,
+    conflict_resolution_required: true,
+    migration_policy: flags["migration-policy"] ?? "manual_only"
+  };
+}
+
+function validateAdapterTransactionPolicy(transactions) {
+  if (!transactions || typeof transactions !== "object") {
+    throw new Error("adapter descriptor transactions is required");
+  }
+  for (const field of [
+    "dry_run_required",
+    "receipt_required",
+    "rollback_supported",
+    "rollback_requires_receipt",
+    "conflict_resolution_required"
+  ]) {
+    if (transactions[field] !== true) {
+      throw new Error(`adapter descriptor transactions.${field} must be true`);
+    }
+  }
+  if (!ADAPTER_MIGRATION_POLICIES.has(transactions.migration_policy)) {
+    throw new Error(`unsupported adapter migration_policy: ${transactions.migration_policy}`);
+  }
+}
+
+function buildAdapterRuntimeProfile(flags) {
+  const command = flags["runtime-command"] ?? "generic-adapter";
+  const actions = [
+    {
+      action: "export_bundle",
+      command,
+      args: [
+        "export",
+        "--source",
+        "{source_dir}",
+        "--output",
+        "{bundle_output}",
+        "--bundle-id",
+        "{bundle_id}",
+        "--type",
+        "{bundle_type}",
+        "--name",
+        "{display_name}"
+      ]
+    },
+    {
+      action: "import_bundle",
+      command,
+      args: [
+        "import-target",
+        "--bundle-root",
+        "{bundle_root}",
+        "--target-root",
+        "{target_root}",
+        "--type",
+        "{bundle_type}",
+        "--conflict-strategy",
+        "{conflict_strategy}"
+      ]
+    },
+    {
+      action: "rollback_import",
+      command,
+      args: ["rollback-target", "--receipt", "{adapter_receipt}"]
+    }
+  ];
+  return {
+    invocation: "argv",
+    working_directory: "adapter_root",
+    actions
+  };
+}
+
+function validateAdapterRuntimeProfile(runtime) {
+  if (!runtime || typeof runtime !== "object") {
+    throw new Error("adapter descriptor runtime is required");
+  }
+  if (runtime.invocation !== "argv") {
+    throw new Error("adapter descriptor runtime.invocation must be argv");
+  }
+  if (runtime.working_directory !== "adapter_root") {
+    throw new Error("adapter descriptor runtime.working_directory must be adapter_root");
+  }
+  if (!Array.isArray(runtime.actions) || runtime.actions.length === 0) {
+    throw new Error("adapter descriptor runtime.actions is required");
+  }
+  const seenActions = new Set();
+  for (const entry of runtime.actions) {
+    validateAdapterRuntimeAction(entry, seenActions);
+  }
+}
+
+function validateAdapterRuntimeAction(entry, seenActions) {
+  if (!entry || typeof entry !== "object") {
+    throw new Error("adapter descriptor runtime action must be an object");
+  }
+  if (!ADAPTER_RUNTIME_ACTIONS.has(entry.action)) {
+    throw new Error(`unsupported adapter runtime action: ${entry.action}`);
+  }
+  if (seenActions.has(entry.action)) {
+    throw new Error(`duplicate adapter runtime action: ${entry.action}`);
+  }
+  seenActions.add(entry.action);
+  validateRuntimeCommand(entry.command);
+  if (!Array.isArray(entry.args)) {
+    throw new Error(`adapter runtime ${entry.action} args must be an array`);
+  }
+  for (const arg of entry.args) {
+    if (typeof arg !== "string") {
+      throw new Error(`adapter runtime ${entry.action} args must be strings`);
+    }
+  }
+}
+
+function validateRuntimeCommand(command) {
+  if (typeof command !== "string" || command.trim() === "") {
+    throw new Error("adapter runtime command is required");
+  }
+  if (command.includes("/") || command.includes("\\") || command.startsWith(".") || command.includes(" ")) {
+    throw new Error("adapter runtime command must be a command name, not a path or shell string");
+  }
+  if (UNSAFE_RUNTIME_COMMANDS.has(command.toLowerCase())) {
+    throw new Error("adapter runtime command must not be a shell");
   }
 }
 
@@ -1111,6 +1252,7 @@ function eventStateFromEventsResponse(flags) {
     .map((event) => event.payload);
   const latestAction = actionEvents.at(-1) ?? null;
   const latestActionState = latestAction ? actionEventState(latestAction) : null;
+  const nextPoll = nextEventPollDecision(response, latestActionState);
   return {
     cursor: nextCursorFromResponse(flags),
     stream_window: {
@@ -1120,16 +1262,51 @@ function eventStateFromEventsResponse(flags) {
     },
     event_count: events.length,
     has_more: Boolean(response.events_has_more),
-    should_poll_again: Boolean(response.events_has_more) || response.events_cursor_state === "missing",
+    should_poll_again: nextPoll.immediate,
+    next_poll: nextPoll,
     action_request_id: actionRequestId,
     action_state: latestActionState,
     action_events: actionEvents.map(actionEventState),
     should_query_result: Boolean(latestActionState?.final),
+    must_query_results: Boolean(latestActionState?.final),
     transfer_event_count: transferEvents.length,
     bundle_event_count: bundleEvents.length,
     received_bundle_ids: bundleEvents
       .map((event) => event.bundle_id)
       .filter((bundleId) => typeof bundleId === "string")
+  };
+}
+
+function nextEventPollDecision(response, latestActionState) {
+  if (response.events_cursor_state === "missing") {
+    return {
+      mode: "reset_cursor",
+      immediate: true,
+      after_event_id: null,
+      reason: "cursor_missing"
+    };
+  }
+  if (Boolean(response.events_has_more)) {
+    return {
+      mode: "drain_page",
+      immediate: true,
+      after_event_id: response.events_next_after_id ?? null,
+      reason: "has_more_events"
+    };
+  }
+  if (latestActionState?.final) {
+    return {
+      mode: "query_results",
+      immediate: false,
+      after_event_id: response.events_next_after_id ?? null,
+      reason: "terminal_action_event"
+    };
+  }
+  return {
+    mode: "wait",
+    immediate: false,
+    after_event_id: response.events_next_after_id ?? null,
+    reason: latestActionState ? "action_not_terminal" : "no_matching_action_event"
   };
 }
 

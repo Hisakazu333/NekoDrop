@@ -150,6 +150,7 @@ local application
 
 本阶段要解决：
 
+- 当前优先做真实上层 application adapter，其次收紧 bridge event stream 和 adapter transaction / migration contract
 - 更完整的事件订阅，不只依赖短等待轮询
 - 本机接入 UI 对待授权、待执行和失败原因的展示
 - 真实上层应用 adapter，让应用按通用样例导出、发送、接收、导入和回滚
