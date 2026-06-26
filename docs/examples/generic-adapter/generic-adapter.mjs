@@ -42,6 +42,8 @@ const FULL_LOOP_BRIDGE_SCOPES = [
   "bundle.import.request",
   "transfer.status.read"
 ];
+const ADAPTER_RUNTIME_ACTIONS = new Set(["export_bundle", "import_bundle", "rollback_import"]);
+const UNSAFE_RUNTIME_COMMANDS = new Set(["sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -516,6 +518,7 @@ function buildAdapterDescriptor(flags) {
       requested_scopes: bridgeScopes,
       default_ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
     },
+    runtime: buildAdapterRuntimeProfile(flags),
     bundle_types: uniqueTypes.map((type) => ({
       bundle_type: type,
       can_export: capability !== "import",
@@ -545,6 +548,7 @@ function validateAdapterDescriptorFile(flags) {
     adapter_id: descriptor.adapter_id,
     bundle_type_count: descriptor.bundle_types.length,
     requested_scopes: descriptor.bridge.requested_scopes,
+    runtime_actions: descriptor.runtime.actions.map((entry) => entry.action),
     sensitive_bundle_types: descriptor.bundle_types
       .filter((entry) => entry.sensitive)
       .map((entry) => entry.bundle_type)
@@ -582,6 +586,7 @@ function validateAdapterDescriptor(descriptor) {
   if (!Number.isInteger(descriptor.bridge.default_ttl_seconds) || descriptor.bridge.default_ttl_seconds <= 0) {
     throw new Error("adapter descriptor bridge.default_ttl_seconds must be positive");
   }
+  validateAdapterRuntimeProfile(descriptor.runtime);
   if (!Array.isArray(descriptor.bundle_types) || descriptor.bundle_types.length === 0) {
     throw new Error("adapter descriptor bundle_types is required");
   }
@@ -638,6 +643,107 @@ function validateDescriptorBundleType(entry, seenTypes) {
     if (entry.sensitive !== true || entry.requires_trusted_device !== true) {
       throw new Error(`${type} descriptor must mark sensitive and require trusted device`);
     }
+  }
+}
+
+function buildAdapterRuntimeProfile(flags) {
+  const command = flags["runtime-command"] ?? "generic-adapter";
+  const actions = [
+    {
+      action: "export_bundle",
+      command,
+      args: [
+        "export",
+        "--source",
+        "{source_dir}",
+        "--output",
+        "{bundle_output}",
+        "--bundle-id",
+        "{bundle_id}",
+        "--type",
+        "{bundle_type}",
+        "--name",
+        "{display_name}"
+      ]
+    },
+    {
+      action: "import_bundle",
+      command,
+      args: [
+        "import-target",
+        "--bundle-root",
+        "{bundle_root}",
+        "--target-root",
+        "{target_root}",
+        "--type",
+        "{bundle_type}",
+        "--conflict-strategy",
+        "{conflict_strategy}"
+      ]
+    },
+    {
+      action: "rollback_import",
+      command,
+      args: ["rollback-target", "--receipt", "{adapter_receipt}"]
+    }
+  ];
+  return {
+    invocation: "argv",
+    working_directory: "adapter_root",
+    actions
+  };
+}
+
+function validateAdapterRuntimeProfile(runtime) {
+  if (!runtime || typeof runtime !== "object") {
+    throw new Error("adapter descriptor runtime is required");
+  }
+  if (runtime.invocation !== "argv") {
+    throw new Error("adapter descriptor runtime.invocation must be argv");
+  }
+  if (runtime.working_directory !== "adapter_root") {
+    throw new Error("adapter descriptor runtime.working_directory must be adapter_root");
+  }
+  if (!Array.isArray(runtime.actions) || runtime.actions.length === 0) {
+    throw new Error("adapter descriptor runtime.actions is required");
+  }
+  const seenActions = new Set();
+  for (const entry of runtime.actions) {
+    validateAdapterRuntimeAction(entry, seenActions);
+  }
+}
+
+function validateAdapterRuntimeAction(entry, seenActions) {
+  if (!entry || typeof entry !== "object") {
+    throw new Error("adapter descriptor runtime action must be an object");
+  }
+  if (!ADAPTER_RUNTIME_ACTIONS.has(entry.action)) {
+    throw new Error(`unsupported adapter runtime action: ${entry.action}`);
+  }
+  if (seenActions.has(entry.action)) {
+    throw new Error(`duplicate adapter runtime action: ${entry.action}`);
+  }
+  seenActions.add(entry.action);
+  validateRuntimeCommand(entry.command);
+  if (!Array.isArray(entry.args)) {
+    throw new Error(`adapter runtime ${entry.action} args must be an array`);
+  }
+  for (const arg of entry.args) {
+    if (typeof arg !== "string") {
+      throw new Error(`adapter runtime ${entry.action} args must be strings`);
+    }
+  }
+}
+
+function validateRuntimeCommand(command) {
+  if (typeof command !== "string" || command.trim() === "") {
+    throw new Error("adapter runtime command is required");
+  }
+  if (command.includes("/") || command.includes("\\") || command.startsWith(".") || command.includes(" ")) {
+    throw new Error("adapter runtime command must be a command name, not a path or shell string");
+  }
+  if (UNSAFE_RUNTIME_COMMANDS.has(command.toLowerCase())) {
+    throw new Error("adapter runtime command must not be a shell");
   }
 }
 

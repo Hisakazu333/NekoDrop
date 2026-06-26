@@ -26,6 +26,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
 
 敏感类型 `skill`、`session`、`workspace`、`agent_profile` 必须要求可信设备和 authenticated encrypted session。descriptor 也必须声明拒绝不可信敏感发送，避免 adapter 自己绕过 NekoDrop 的兜底校验。descriptor 通过校验不代表已经能读写某个真实应用；它只是接入前的能力声明。
 
+descriptor 里的 `runtime` 只允许 `argv` 形态：命令名 + 参数数组。不要写 shell 字符串、绝对路径或本机数据目录。真实应用可以把 `export_bundle`、`import_bundle`、`rollback_import` 映射到自己的 CLI 或 helper，但 NekoDrop 不会因为 descriptor 存在就自动执行任意命令。
+
 生成请求时也可以直接引用 descriptor：
 
 ```bash

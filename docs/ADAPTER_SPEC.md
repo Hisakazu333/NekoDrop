@@ -81,6 +81,49 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
     ],
     "default_ttl_seconds": 3600
   },
+  "runtime": {
+    "invocation": "argv",
+    "working_directory": "adapter_root",
+    "actions": [
+      {
+        "action": "export_bundle",
+        "command": "generic-adapter",
+        "args": [
+          "export",
+          "--source",
+          "{source_dir}",
+          "--output",
+          "{bundle_output}",
+          "--bundle-id",
+          "{bundle_id}",
+          "--type",
+          "{bundle_type}",
+          "--name",
+          "{display_name}"
+        ]
+      },
+      {
+        "action": "import_bundle",
+        "command": "generic-adapter",
+        "args": [
+          "import-target",
+          "--bundle-root",
+          "{bundle_root}",
+          "--target-root",
+          "{target_root}",
+          "--type",
+          "{bundle_type}",
+          "--conflict-strategy",
+          "{conflict_strategy}"
+        ]
+      },
+      {
+        "action": "rollback_import",
+        "command": "generic-adapter",
+        "args": ["rollback-target", "--receipt", "{adapter_receipt}"]
+      }
+    ]
+  },
   "bundle_types": [
     {
       "bundle_type": "session",
@@ -101,6 +144,8 @@ adapter 不应该从任意路径读取 bundle。真实导入入口应来自 Neko
   }
 }
 ```
+
+`runtime` 只描述 adapter 的本机调用形状，不代表 NekoDrop 会自动执行任意命令。当前只允许 `invocation=argv`，`command` 必须是命令名，不能是绝对路径、shell 字符串或 `sh` / `bash` / `powershell` 这类 shell。`actions` 只能声明 `export_bundle`、`import_bundle` 和 `rollback_import`。真实产品可以把这些 action 映射到自己的 CLI、helper binary 或本机服务，但不能把本机绝对目录写进 descriptor。
 
 `skill`、`session`、`workspace` 和 `agent_profile` 必须标记为 `sensitive=true`，并且 `requires_trusted_device=true`。`bridge.requested_scopes` 只能使用 NekoDrop 已定义的 local bridge scope。adapter 可以用 descriptor 生成授权请求，避免声明的 scope 和实际申请的 scope 分叉。descriptor 只是能力声明；真实导出、导入和回滚仍由 adapter 自己执行。
 
