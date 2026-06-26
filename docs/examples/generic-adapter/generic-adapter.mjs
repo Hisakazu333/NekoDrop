@@ -44,6 +44,7 @@ const FULL_LOOP_BRIDGE_SCOPES = [
 ];
 const ADAPTER_RUNTIME_ACTIONS = new Set(["export_bundle", "import_bundle", "rollback_import"]);
 const UNSAFE_RUNTIME_COMMANDS = new Set(["sh", "bash", "zsh", "cmd", "cmd.exe", "powershell", "powershell.exe", "pwsh", "pwsh.exe"]);
+const ADAPTER_MIGRATION_POLICIES = new Set(["manual_only", "adapter_managed"]);
 
 main().catch((error) => {
   console.error(error instanceof Error ? error.message : String(error));
@@ -519,6 +520,7 @@ function buildAdapterDescriptor(flags) {
       default_ttl_seconds: Number(flags["ttl-seconds"] ?? 3600)
     },
     runtime: buildAdapterRuntimeProfile(flags),
+    transactions: buildAdapterTransactionPolicy(flags),
     bundle_types: uniqueTypes.map((type) => ({
       bundle_type: type,
       can_export: capability !== "import",
@@ -549,6 +551,7 @@ function validateAdapterDescriptorFile(flags) {
     bundle_type_count: descriptor.bundle_types.length,
     requested_scopes: descriptor.bridge.requested_scopes,
     runtime_actions: descriptor.runtime.actions.map((entry) => entry.action),
+    migration_policy: descriptor.transactions.migration_policy,
     sensitive_bundle_types: descriptor.bundle_types
       .filter((entry) => entry.sensitive)
       .map((entry) => entry.bundle_type)
@@ -587,6 +590,7 @@ function validateAdapterDescriptor(descriptor) {
     throw new Error("adapter descriptor bridge.default_ttl_seconds must be positive");
   }
   validateAdapterRuntimeProfile(descriptor.runtime);
+  validateAdapterTransactionPolicy(descriptor.transactions);
   if (!Array.isArray(descriptor.bundle_types) || descriptor.bundle_types.length === 0) {
     throw new Error("adapter descriptor bundle_types is required");
   }
@@ -643,6 +647,37 @@ function validateDescriptorBundleType(entry, seenTypes) {
     if (entry.sensitive !== true || entry.requires_trusted_device !== true) {
       throw new Error(`${type} descriptor must mark sensitive and require trusted device`);
     }
+  }
+}
+
+function buildAdapterTransactionPolicy(flags) {
+  return {
+    dry_run_required: true,
+    receipt_required: true,
+    rollback_supported: true,
+    rollback_requires_receipt: true,
+    conflict_resolution_required: true,
+    migration_policy: flags["migration-policy"] ?? "manual_only"
+  };
+}
+
+function validateAdapterTransactionPolicy(transactions) {
+  if (!transactions || typeof transactions !== "object") {
+    throw new Error("adapter descriptor transactions is required");
+  }
+  for (const field of [
+    "dry_run_required",
+    "receipt_required",
+    "rollback_supported",
+    "rollback_requires_receipt",
+    "conflict_resolution_required"
+  ]) {
+    if (transactions[field] !== true) {
+      throw new Error(`adapter descriptor transactions.${field} must be true`);
+    }
+  }
+  if (!ADAPTER_MIGRATION_POLICIES.has(transactions.migration_policy)) {
+    throw new Error(`unsupported adapter migration_policy: ${transactions.migration_policy}`);
   }
 }
 

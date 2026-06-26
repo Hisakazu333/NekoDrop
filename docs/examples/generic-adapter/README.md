@@ -28,6 +28,8 @@ node docs/examples/generic-adapter/generic-adapter.mjs validate-descriptor \
 
 descriptor 里的 `runtime` 只允许 `argv` 形态：命令名 + 参数数组。不要写 shell 字符串、绝对路径或本机数据目录。真实应用可以把 `export_bundle`、`import_bundle`、`rollback_import` 映射到自己的 CLI 或 helper，但 NekoDrop 不会因为 descriptor 存在就自动执行任意命令。
 
+descriptor 里的 `transactions` 要求真实 adapter 做 dry-run、写 receipt，并能按 receipt rollback。遇到版本迁移时默认是 `manual_only`；如果 adapter 声明 `adapter_managed`，也必须自己保证失败不留下半成品。
+
 生成请求时也可以直接引用 descriptor：
 
 ```bash

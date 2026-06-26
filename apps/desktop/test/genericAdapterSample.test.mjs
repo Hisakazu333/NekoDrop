@@ -407,6 +407,14 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
     descriptor.runtime.actions.map((entry) => entry.action),
     ["export_bundle", "import_bundle", "rollback_import"]
   );
+  assert.deepEqual(descriptor.transactions, {
+    dry_run_required: true,
+    receipt_required: true,
+    rollback_supported: true,
+    rollback_requires_receipt: true,
+    conflict_resolution_required: true,
+    migration_policy: "manual_only"
+  });
   assert.equal(descriptor.runtime.actions[0].command, "generic-adapter");
   assert.deepEqual(
     descriptor.runtime.actions[0].args.slice(0, 3),
@@ -423,9 +431,27 @@ test("generic adapter sample prints and validates an adapter descriptor", () => 
   assert.equal(validation.schema, "nekolink.adapter.v1");
   assert.equal(validation.bundle_type_count, 2);
   assert.deepEqual(validation.runtime_actions, ["export_bundle", "import_bundle", "rollback_import"]);
+  assert.equal(validation.migration_policy, "manual_only");
   assert.deepEqual(validation.sensitive_bundle_types, ["session", "workspace"]);
 
   rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("generic adapter sample can declare adapter-managed migrations", () => {
+  const descriptor = JSON.parse(execFileSync(
+    process.execPath,
+    [
+      sampleCli,
+      "descriptor",
+      "--type",
+      "workspace",
+      "--migration-policy",
+      "adapter_managed"
+    ],
+    { encoding: "utf8" }
+  ));
+
+  assert.equal(descriptor.transactions.migration_policy, "adapter_managed");
 });
 
 test("generic adapter sample can derive auth scopes from an adapter descriptor", () => {
@@ -779,6 +805,30 @@ test("generic adapter sample rejects unsafe adapter descriptors", () => {
       { encoding: "utf8", stdio: "pipe" }
     ),
     /unsupported adapter runtime action/
+  );
+
+  descriptor.runtime.actions[0].action = "export_bundle";
+  descriptor.transactions.receipt_required = false;
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /transactions.receipt_required must be true/
+  );
+
+  descriptor.transactions.receipt_required = true;
+  descriptor.transactions.migration_policy = "auto_overwrite";
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /unsupported adapter migration_policy/
   );
 
   rmSync(tempRoot, { recursive: true, force: true });
