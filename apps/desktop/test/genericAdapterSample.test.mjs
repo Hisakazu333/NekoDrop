@@ -722,30 +722,44 @@ test("generic adapter sample rejects unsafe adapter descriptors", () => {
     /session descriptor must mark sensitive and require trusted device/
   );
 
+  descriptor.bundle_types[0].requires_trusted_device = true;
+  descriptor.security.refuses_untrusted_sensitive_send = false;
+  writeFileSync(descriptorPath, JSON.stringify(descriptor));
+  assert.throws(
+    () => execFileSync(
+      process.execPath,
+      [sampleCli, "validate-descriptor", "--descriptor", descriptorPath],
+      { encoding: "utf8", stdio: "pipe" }
+    ),
+    /adapter descriptor must refuse untrusted sensitive sends/
+  );
+
   rmSync(tempRoot, { recursive: true, force: true });
 });
 
 test("generic adapter sample rejects untrusted sends for sensitive bundle types", () => {
-  assert.throws(
-    () => execFileSync(
-      process.execPath,
-      [
-        sampleCli,
-        "request",
-        "send",
-        "--bundle-root",
-        "/tmp/bundle_adapter_sample",
-        "--target-device-id",
-        "neko-device-target",
-        "--type",
-        "session",
-        "--require-trusted-device",
-        "false"
-      ],
-      { encoding: "utf8", stdio: "pipe" }
-    ),
-    /session bundles require --require-trusted-device true/
-  );
+  for (const type of ["skill", "session", "workspace", "agent_profile"]) {
+    assert.throws(
+      () => execFileSync(
+        process.execPath,
+        [
+          sampleCli,
+          "request",
+          "send",
+          "--bundle-root",
+          "/tmp/bundle_adapter_sample",
+          "--target-device-id",
+          "neko-device-target",
+          "--type",
+          type,
+          "--require-trusted-device",
+          "false"
+        ],
+        { encoding: "utf8", stdio: "pipe" }
+      ),
+      new RegExp(`${type} bundles require --require-trusted-device true`)
+    );
+  }
 
   const stdout = execFileSync(
     process.execPath,
