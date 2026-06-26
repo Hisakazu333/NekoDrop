@@ -410,7 +410,14 @@ node docs/examples/generic-adapter/generic-adapter.mjs event-state \
   --action-request-id adapter-import-001
 ```
 
-`event-state` 会返回下一次 cursor、是否应立即继续拉取、匹配的 `action.updated` 摘要、收到的 bundle id 数组和 transfer 事件数量。它不会替代 `actions.results`；终态事件出现后仍应按 `action_request_id` 精确查询结果。
+`event-state` 会返回下一次 cursor、`next_poll`、匹配的 `action.updated` 摘要、收到的 bundle id 数组和 transfer 事件数量。它不会替代 `actions.results`；终态事件出现后 `must_query_results=true`，仍应按 `action_request_id` 精确查询结果。
+
+`next_poll.mode` 常见值：
+
+- `drain_page`：还有下一页，马上用 `after_event_id` 继续拉。
+- `reset_cursor`：cursor 丢失，丢弃本地 cursor 后从 `null` 重拉快照。
+- `query_results`：已经看到终态事件，先查 `actions.results`。
+- `wait`：没有新终态，按正常间隔或短等待继续。
 
 事件处理建议：
 
