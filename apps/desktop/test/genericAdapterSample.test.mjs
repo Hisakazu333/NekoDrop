@@ -1369,6 +1369,7 @@ test("generic adapter sample derives receipt state from bundle detail responses"
         display_name: "Imported workspace",
         staging_status: "imported",
         import_allowed: true,
+        can_import_now: false,
         has_import_receipt: true,
         imported_with_strategy: "rename",
         import_skipped_file_count: 1,
@@ -1384,6 +1385,7 @@ test("generic adapter sample derives receipt state from bundle detail responses"
         display_name: "Rolled back workspace",
         staging_status: "rolled_back",
         import_allowed: true,
+        can_import_now: false,
         has_import_receipt: true,
         imported_with_strategy: "rename",
         import_skipped_file_count: 0,
@@ -1392,6 +1394,43 @@ test("generic adapter sample derives receipt state from bundle detail responses"
         can_rollback_now: false,
         rollback_blocking_reason: "already_rolled_back",
         rolled_back_file_count: 3
+      },
+      {
+        bundle_id: "bundle_ready_1",
+        bundle_type: "skill",
+        display_name: "Ready skill",
+        staging_status: "saved",
+        import_allowed: true,
+        can_import_now: true,
+        import_blocking_reason: null,
+        import_conflict: false,
+        import_conflict_count: 0,
+        import_conflict_strategies: ["reject", "rename", "skip_conflicts"],
+        has_import_receipt: false,
+        rollback_file_count: 0,
+        can_request_rollback: false,
+        can_rollback_now: false,
+        rollback_blocking_reason: null,
+        rolled_back_file_count: 0,
+        import_destination: "/private/local/should-not-leak"
+      },
+      {
+        bundle_id: "bundle_conflict_1",
+        bundle_type: "session",
+        display_name: "Conflicting session",
+        staging_status: "saved",
+        import_allowed: true,
+        can_import_now: false,
+        import_blocking_reason: "destination_exists",
+        import_conflict: true,
+        import_conflict_count: 2,
+        import_conflict_strategies: ["reject", "rename", "skip_conflicts"],
+        has_import_receipt: false,
+        rollback_file_count: 0,
+        can_request_rollback: false,
+        can_rollback_now: false,
+        rollback_blocking_reason: null,
+        rolled_back_file_count: 0
       }
     ]
   }));
@@ -1411,16 +1450,38 @@ test("generic adapter sample derives receipt state from bundle detail responses"
     [sampleCli, "receipt-state", "--response", responsePath, "--bundle-id", "bundle_missing_1"],
     { encoding: "utf8" }
   ));
+  const ready = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "receipt-state", "--response", responsePath, "--bundle-id", "bundle_ready_1"],
+    { encoding: "utf8" }
+  ));
+  const conflict = JSON.parse(execFileSync(
+    process.execPath,
+    [sampleCli, "receipt-state", "--response", responsePath, "--bundle-id", "bundle_conflict_1"],
+    { encoding: "utf8" }
+  ));
 
   assert.equal(imported.state, "imported_can_rollback");
+  assert.equal(imported.can_import, false);
+  assert.equal(imported.next_action, "request_rollback_or_finish");
   assert.equal(imported.imported_with_strategy, "rename");
   assert.equal(imported.import_skipped_file_count, 1);
   assert.equal(imported.rollback_file_count, 3);
   assert.equal(rolledBack.state, "rolled_back");
+  assert.equal(rolledBack.next_action, "done");
   assert.equal(rolledBack.rollback_blocking_reason, "already_rolled_back");
   assert.equal(rolledBack.rolled_back_file_count, 3);
   assert.equal(missing.state, "missing");
   assert.equal(missing.can_request_rollback, false);
+  assert.equal(missing.next_action, "check_bundle_id_permission_or_refresh_detail");
+  assert.equal(ready.state, "ready_to_import");
+  assert.equal(ready.can_import, true);
+  assert.equal(ready.next_action, "request_import");
+  assert.equal(JSON.stringify(ready).includes("/private/local/should-not-leak"), false);
+  assert.equal(conflict.state, "import_conflict");
+  assert.equal(conflict.import_conflict_count, 2);
+  assert.deepEqual(conflict.import_conflict_strategies, ["reject", "rename", "skip_conflicts"]);
+  assert.equal(conflict.next_action, "choose_import_conflict_strategy");
 
   rmSync(tempRoot, { recursive: true, force: true });
 });

@@ -1313,7 +1313,11 @@ function receiptStateFromDetailResponse(flags) {
     return {
       bundle_id: bundleId,
       state: "missing",
-      can_request_rollback: false
+      can_import: false,
+      import_blocking_reason: "not_found",
+      can_request_rollback: false,
+      rollback_blocking_reason: null,
+      next_action: "check_bundle_id_permission_or_refresh_detail"
     };
   }
   const receipt = {
@@ -1321,6 +1325,14 @@ function receiptStateFromDetailResponse(flags) {
     bundle_type: bundle.bundle_type,
     display_name: bundle.display_name,
     staging_status: bundle.staging_status,
+    import_allowed: bundle.import_allowed !== false,
+    can_import: Boolean(bundle.can_import_now),
+    import_blocking_reason: bundle.import_blocking_reason ?? null,
+    import_conflict: Boolean(bundle.import_conflict),
+    import_conflict_count: Number(bundle.import_conflict_count ?? 0),
+    import_conflict_strategies: Array.isArray(bundle.import_conflict_strategies)
+      ? bundle.import_conflict_strategies
+      : [],
     has_import_receipt: Boolean(bundle.has_import_receipt),
     imported_with_strategy: bundle.imported_with_strategy ?? null,
     import_skipped_file_count: Number(bundle.import_skipped_file_count ?? 0),
@@ -1333,25 +1345,48 @@ function receiptStateFromDetailResponse(flags) {
   if (receipt.rolled_back_file_count > 0 || receipt.staging_status === "rolled_back") {
     return {
       ...receipt,
-      state: "rolled_back"
+      state: "rolled_back",
+      can_import: false,
+      can_request_rollback: false,
+      next_action: "done"
     };
   }
   if (receipt.has_import_receipt) {
+    const state = receipt.can_request_rollback ? "imported_can_rollback" : "imported_no_rollback";
     return {
       ...receipt,
-      state: receipt.can_request_rollback ? "imported_can_rollback" : "imported_no_rollback"
+      can_import: false,
+      state,
+      next_action: receipt.can_request_rollback ? "request_rollback_or_finish" : "finish_import_flow"
     };
   }
   if (bundle.import_allowed === false) {
     return {
       ...receipt,
       state: "save_only",
-      import_blocking_reason: bundle.import_blocking_reason ?? null
+      can_import: false,
+      next_action: "save_only_or_ask_user"
+    };
+  }
+  if (receipt.import_conflict || receipt.import_blocking_reason === "destination_exists" || receipt.import_blocking_reason === "destination_file_exists") {
+    return {
+      ...receipt,
+      state: "import_conflict",
+      can_import: false,
+      next_action: "choose_import_conflict_strategy"
+    };
+  }
+  if (receipt.can_import) {
+    return {
+      ...receipt,
+      state: "ready_to_import",
+      next_action: "request_import"
     };
   }
   return {
     ...receipt,
-    state: "not_imported"
+    state: "not_imported",
+    next_action: "wait_for_import_request_or_refresh_detail"
   };
 }
 
