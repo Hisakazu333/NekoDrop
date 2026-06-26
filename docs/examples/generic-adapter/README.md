@@ -237,6 +237,19 @@ export -> authorize -> send -> observe_send -> send_action_state
 
 `skill`、`session`、`workspace`、`agent_profile` 都按敏感资料处理：发送端必须要求可信目标，接收端只有 authenticated encrypted session 收到的 bundle 才会进入暂存和导入流程。这个示例会直接拒绝给这些类型传 `--require-trusted-device false`。旧兼容路径收到的目录即使有 `bundle.json`，也只当普通文件保存。
 
+应用侧导入也可以先 dry-run：
+
+```bash
+node docs/examples/generic-adapter/generic-adapter.mjs import-target \
+  --bundle-root ./out/bundle_workspace_demo \
+  --target-root ./adapter-data \
+  --type workspace \
+  --conflict-strategy reject \
+  --dry-run true
+```
+
+dry-run 会校验 manifest、checksum、permissions，计算目标位置和冲突，但不会创建目录、复制文件或写 receipt。full-loop 在提供 `--target-root` 时会先输出 `adapter_import_dry_run`，再输出实际 `adapter_import_target`。
+
 ## 发送
 
 ```json
