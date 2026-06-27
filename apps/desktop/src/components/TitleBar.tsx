@@ -2,7 +2,6 @@ import React, { useState, useEffect } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
-import { type as osType } from "@tauri-apps/api/os";
 import { isTauriRuntime } from "../tauri";
 
 interface TitleBarProps {
@@ -23,21 +22,13 @@ export function TitleBar({ onToggleInbox, inboxOpen }: TitleBarProps) {
   } = useAppContext();
 
   const [isMaximized, setIsMaximized] = useState(false);
-  const [isMac, setIsMac] = useState(false);
   const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
+  const isMac = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac");
 
   // 待处理动作与资料包总数 / Total count of pending actions and unimported bundles
   const pendingCount =
     localBridgePendingActions.length +
     stagedBundles.filter((b) => b.staging_status === "saved").length;
-
-  useEffect(() => {
-    if (isTauriRuntime()) {
-      osType().then((type) => setIsMac(type === "Darwin"));
-    } else {
-      setIsMac(typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac"));
-    }
-  }, []);
 
   // 监听窗口最大化状态以更新图标 / Monitor window maximization state to update the icon
   useEffect(() => {
@@ -81,7 +72,7 @@ export function TitleBar({ onToggleInbox, inboxOpen }: TitleBarProps) {
   };
 
   return (
-    <header className="app-titlebar" data-tauri-drag-region>
+    <header className="app-titlebar" data-tauri-drag-region style={{ WebkitAppRegion: "drag", userSelect: "none" } as any}>
       {/* 针对 Mac 系统的交通灯留白区 / Mac Traffic Lights Spacer */}
       {isMac && <div className="titlebar-mac-spacer" data-tauri-drag-region />}
 

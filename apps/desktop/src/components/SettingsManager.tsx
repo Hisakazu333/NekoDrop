@@ -60,7 +60,7 @@ export function SettingsManager() {
                   type="button"
                   style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--color-bg-secondary)', border: appearance === "light" ? '2px solid var(--color-primary)' : '2px solid transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-primary)' }}
                 >
-                  <Icon name="sun" />
+                  <Icon name="appearance" />
                   <span style={{ marginLeft: '8px', fontWeight: 'bold' }}>浅色模式</span>
                 </button>
                 <button
@@ -69,7 +69,7 @@ export function SettingsManager() {
                   type="button"
                   style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--color-bg-secondary)', border: appearance === "dark" ? '2px solid var(--color-primary)' : '2px solid transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-primary)' }}
                 >
-                  <Icon name="moon" />
+                  <Icon name="appearance" />
                   <span style={{ marginLeft: '8px', fontWeight: 'bold' }}>深色模式</span>
                 </button>
               </div>

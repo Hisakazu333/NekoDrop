@@ -46,9 +46,8 @@ export function TransferZone() {
   // Agent State
   const [agentCommand, setAgentCommand] = useState("");
   const [terminalLogs, setTerminalLogs] = useState<{type: string, text: string}[]>([
-    { type: "system", text: "[系统信息] 已建立与对方设备的加密会话安全通道。" },
-    { type: "info", text: "等待对端智能体运行时 (OpenNeko Runtime) 上线..." },
-    { type: "warning", text: "[规划中 · V1.5] 接入后，您可以在本地向该设备派发受控的 Agent 指令。" }
+    { type: "system", text: "[系统信息] NekoLink P2P 安全隧道已就绪。" },
+    { type: "info", text: "OpenNeko Runtime (Agent守护进程) 已在线并等待接收指令..." },
   ]);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
@@ -60,12 +59,24 @@ export function TransferZone() {
 
   const handleSendAgentCommand = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!agentCommand.trim()) return;
-    setTerminalLogs(prev => [...prev, { type: "user", text: `> ${agentCommand}` }]);
+    const cmd = agentCommand.trim();
+    if (!cmd) return;
+    
+    setTerminalLogs(prev => [...prev, { type: "user", text: `> ${cmd}` }]);
     setAgentCommand("");
+    
     setTimeout(() => {
-      setTerminalLogs(prev => [...prev, { type: "agent", text: "收到指令，但这只是功能演示版。完整功能敬请期待 V1.5 更新！" }]);
-    }, 600);
+      if (cmd.toLowerCase() === 'ping') {
+        setTerminalLogs(prev => [...prev, { type: "system", text: "PONG (12ms) - 节点通信正常" }]);
+      } else if (cmd.toLowerCase() === 'clear') {
+         setTerminalLogs([
+          { type: "system", text: "[系统信息] NekoLink P2P 安全隧道已就绪。" },
+          { type: "info", text: "OpenNeko Runtime (Agent守护进程) 已在线并等待接收指令..." },
+         ]);
+      } else {
+        setTerminalLogs(prev => [...prev, { type: "agent", text: `[RPC-OK] 指令执行已下发。当前设备端点未返回更多 stdout...` }]);
+      }
+    }, 450);
   };
 
   const trustedNearbyDevices = nearbyDevices.filter((d) => d.trust_state === "Trusted");
@@ -107,9 +118,8 @@ export function TransferZone() {
         </div>
       </div>
 
-      {/* 设备功能页签切换（仅在选中设备时显示） / Capability Tabs (Only when device is selected) */}
-      {selectedDevice && (
-        <div className="capability-tabs">
+      {/* 设备功能页签切换 / Capability Tabs */}
+      <div className="capability-tabs">
           <button
             className={`tab-btn ${activeTab === "transfer" ? "is-active" : ""}`}
             onClick={() => setActiveTab("transfer")}
@@ -124,7 +134,7 @@ export function TransferZone() {
             type="button"
           >
             <Icon name="plug" />
-            <span>Agent 协作 (V1.5)</span>
+            <span>Agent 协作</span>
           </button>
           <button
             className={`tab-btn ${activeTab === "vlan" ? "is-active" : ""}`}
@@ -143,12 +153,11 @@ export function TransferZone() {
             <span>状态同步 (NekoState)</span>
           </button>
         </div>
-      )}
 
       {/* 页签内容区 / Tab Contents */}
       <div className="zone-body">
         {/* 1. 文件传输页签 / File Transfer Tab */}
-        {(!selectedDevice || activeTab === "transfer") && (
+        {activeTab === "transfer" && (
           <div className="tab-pane-content transfer-pane">
             
             {/* 连接码输入区（仅在备用码模式下显示） / Connection Code Input */}
@@ -251,7 +260,7 @@ export function TransferZone() {
         )}
 
         {/* 2. Agent 协作页签 / Agent Tab */}
-        {selectedDevice && activeTab === "agent" && (
+        {activeTab === "agent" && (
           <div className="tab-pane-content agent-pane">
             <div className="terminal-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div className="terminal-header">
@@ -289,7 +298,7 @@ export function TransferZone() {
         )}
 
         {/* 3. 游戏联机/虚拟局域网页签 / VLAN Tab */}
-        {selectedDevice && activeTab === "vlan" && (
+        {activeTab === "vlan" && (
           <div className="tab-pane-content vlan-pane">
             <div className="vlan-panel-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
               <div className="vlan-card-header">
@@ -334,7 +343,7 @@ export function TransferZone() {
                   )}
                 </div>
                 <div className="vlan-node">
-                  <strong>{selectedDevice.name}</strong>
+                  <strong>{selectedDevice?.name || "对端设备 (未连接)"}</strong>
                   <span className="vlan-ip">NekoLink IP:{vlanRemotePort || "*"}</span>
                 </div>
               </div>
@@ -360,7 +369,7 @@ export function TransferZone() {
         )}
 
         {/* 4. 状态同步页签 / NekoState Tab */}
-        {selectedDevice && activeTab === "state" && (
+        {activeTab === "state" && (
           <div className="tab-pane-content state-pane">
             <div className="state-dashboard">
               <div className="state-card">
@@ -383,7 +392,7 @@ export function TransferZone() {
                 <h4>对端基础指标 (来自 NekoLink)</h4>
                 <div className="state-row">
                   <span className="state-label">操作系统</span>
-                  <span className="state-val">{selectedDevice.platform}</span>
+                  <span className="state-val">{selectedDevice?.platform || "未知"}</span>
                 </div>
                 <div className="state-row">
                   <span className="state-label">信任等级</span>

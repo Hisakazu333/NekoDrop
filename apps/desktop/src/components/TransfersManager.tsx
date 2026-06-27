@@ -37,26 +37,7 @@ export function TransfersManager() {
       </div>
 
       <div className="manager-body">
-        {/* 数据统计仪表盘 / Statistics Dashboard */}
-        <div className="dashboard-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '16px', marginBottom: '24px' }}>
-          <div className="dashboard-card" style={{ padding: '20px', borderRadius: '12px', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
-            <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>总计传输量</span>
-            <div style={{ fontSize: '28px', fontWeight: 800, margin: '8px 0', color: 'var(--color-primary)' }}>128.4 GB</div>
-            <span style={{ fontSize: '12px', color: 'var(--color-success)' }}>↑ 14% 较上周</span>
-          </div>
-          <div className="dashboard-card" style={{ padding: '20px', borderRadius: '12px', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
-            <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>端到端加密会话</span>
-            <div style={{ fontSize: '28px', fontWeight: 800, margin: '8px 0', color: 'var(--color-text-primary)' }}>1,432</div>
-            <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>最近30天活跃记录</span>
-          </div>
-          <div className="dashboard-card" style={{ padding: '20px', borderRadius: '12px', background: 'var(--color-bg-secondary)', border: '1px solid var(--color-border)' }}>
-            <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)', textTransform: 'uppercase', fontWeight: 600 }}>安全策略拦截</span>
-            <div style={{ fontSize: '28px', fontWeight: 800, margin: '8px 0', color: 'var(--color-danger)' }}>12</div>
-            <span style={{ fontSize: '12px', color: 'var(--color-text-secondary)' }}>未授权设备尝试连接</span>
-          </div>
-        </div>
-
-        <div className="header-ops">
+        <div className="history-list">
           {totalCount > 0 && (
             <button
               className="btn-danger-action"
