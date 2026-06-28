@@ -98,6 +98,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
 规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理和导入到 NekoDrop 本机导入区；自动导出、导入计划预览和上层应用真实导入还没有完成。
+`docs/examples/generic-adapter/` 现在提供了一个可执行的本机样板，串起 export、bundle.detail、events.poll、actions.results、bundle.import、receipt 和 rollback。它是适配边界的参照，不是对真实第三方应用的自动接入。
 
 候选包类型：
 
@@ -152,7 +153,7 @@ local application
 
 - 更完整的事件订阅，不只依赖短等待轮询
 - 本机接入 UI 对待授权、待执行和失败原因的展示
-- 通用 adapter 样例，让上层应用知道怎么导出和导入 bundle
+- 通用 adapter 样例已经落成，后续继续补真实导入计划和冲突策略
 - 导入计划和冲突策略
 
 不做：
