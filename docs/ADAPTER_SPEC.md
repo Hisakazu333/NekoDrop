@@ -107,7 +107,9 @@ adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.res
 
 这些样例使用通用应用名，不绑定任何第三方项目。测试会校验样例的 manifest、checksum、权限和 payload 文件。
 
-本机应用接入 local bridge 的最小请求流程见 [generic-adapter](examples/generic-adapter/)。
+本机应用接入 local bridge 的最小请求流程见 [generic-adapter](examples/generic-adapter/)。那里有一个可执行的 `generic-adapter.mjs` 样板，直接串起 `export -> bundle.detail -> events.poll/actions.results -> bundle.import -> receipt -> rollback`。
+
+样板里 `bundle.detail` 的只读预览状态用 `saved` / `imported`，`actions.results` 和 `events.poll` 里的动作状态用同一组生命周期词：`queued`、`running`、`succeeded`、`failed`、`conflict`、`cancelled`。
 
 ## 仍未实现
 
