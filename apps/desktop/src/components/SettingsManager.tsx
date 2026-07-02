@@ -42,35 +42,33 @@ export function SettingsManager() {
   return (
     <div className="manager-pane settings-manager">
       <div className="manager-header">
-        <h2>系统配置与服务设置 (Settings & Services)</h2>
+        <h2>设置与服务</h2>
         <p>配置这台设备的网络传输属性，并管理本机外部开发工具的受控接入。</p>
       </div>
 
       <div className="manager-body">
         {/* 0. 外观与界面设置 / Appearance Settings */}
         <div className="settings-section-card">
-          <h3>外观与界面</h3>
+          <h3>外观</h3>
           <div className="settings-form">
             <div className="form-item">
-              <label>界面颜色主题 (Theme):</label>
-              <div className="theme-toggle-group" style={{ display: 'flex', gap: '12px', marginTop: '8px' }}>
+              <label>界面主题</label>
+              <div className="theme-toggle-group">
                 <button
                   className={`btn-theme-select ${appearance === "light" ? "is-active" : ""}`}
                   onClick={() => setAppearance("light")}
                   type="button"
-                  style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--color-bg-secondary)', border: appearance === "light" ? '2px solid var(--color-primary)' : '2px solid transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-primary)' }}
                 >
-                  <Icon name="appearance" />
-                  <span style={{ marginLeft: '8px', fontWeight: 'bold' }}>浅色模式</span>
+                  <Icon name="sun" />
+                  <span>浅色模式</span>
                 </button>
                 <button
                   className={`btn-theme-select ${appearance === "dark" ? "is-active" : ""}`}
                   onClick={() => setAppearance("dark")}
                   type="button"
-                  style={{ flex: 1, padding: '12px', borderRadius: '8px', background: 'var(--color-bg-secondary)', border: appearance === "dark" ? '2px solid var(--color-primary)' : '2px solid transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-primary)' }}
                 >
-                  <Icon name="appearance" />
-                  <span style={{ marginLeft: '8px', fontWeight: 'bold' }}>深色模式</span>
+                  <Icon name="moon" />
+                  <span>深色模式</span>
                 </button>
               </div>
             </div>
@@ -78,13 +76,13 @@ export function SettingsManager() {
         </div>
 
         {/* 1. 基础局域网文件传输设置 / Base File Sharing Settings */}
-        <div className="settings-section-card" style={{ marginTop: '24px' }}>
-          <h3>文件传输服务配置</h3>
+        <div className="settings-section-card">
+          <h3>文件传输服务</h3>
           
           <div className="settings-form">
             {/* 修改本机设备名 */}
             <div className="form-item">
-              <label htmlFor="device-name">本机设备名 (局域网显示名称):</label>
+              <label htmlFor="device-name">本机设备名（局域网显示名称）</label>
               <div className="form-input-group">
                 <input
                   id="device-name"
@@ -106,7 +104,7 @@ export function SettingsManager() {
 
             {/* 修改接收存储路径 */}
             <div className="form-item">
-              <label htmlFor="receive-dir">默认文件接收目录 (保存路径):</label>
+              <label htmlFor="receive-dir">默认文件接收目录</label>
               <div className="form-input-group">
                 <input
                   id="receive-dir"
@@ -137,7 +135,7 @@ export function SettingsManager() {
             {/* 修改端口与策略 */}
             <div className="form-row-two-columns">
               <div className="form-item">
-                <label htmlFor="bind-port">默认监听服务端口:</label>
+                <label htmlFor="bind-port">默认监听端口</label>
                 <div className="form-input-group">
                   <input
                     id="bind-port"
@@ -158,7 +156,7 @@ export function SettingsManager() {
               </div>
 
               <div className="form-item">
-                <label htmlFor="receive-policy">未配对设备接收策略:</label>
+                <label htmlFor="receive-policy">未配对设备接收策略</label>
                 <select
                   id="receive-policy"
                   value={receivePolicy}
@@ -179,7 +177,7 @@ export function SettingsManager() {
         {/* 2. 本地桥控制台管理 / Local Bridge Console */}
         <div className="settings-section-card">
           <div className="card-title-header">
-            <h3>本机外部开发接口 (Local Bridge API)</h3>
+            <h3>本机外部接口 Local Bridge</h3>
             <span className={`status-led ${localBridgeStatus?.active ? "is-running" : "is-stopped"}`}>
               {localBridgeStatus?.active ? "服务运行中" : "已停止"}
             </span>

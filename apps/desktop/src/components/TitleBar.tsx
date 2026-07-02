@@ -79,7 +79,7 @@ export function TitleBar({ onToggleInbox, inboxOpen }: TitleBarProps) {
       {/* 左侧品牌与名称 / Brand and Logo */}
       <div className="titlebar-brand" data-tauri-drag-region>
         <span className="titlebar-logo">
-          <Icon name="package" />
+          <Icon name="paw" />
         </span>
         <strong data-tauri-drag-region>NekoDrop</strong>
         <span className="titlebar-subtitle" data-tauri-drag-region>
@@ -114,7 +114,7 @@ export function TitleBar({ onToggleInbox, inboxOpen }: TitleBarProps) {
           title={appearance === "dark" ? "切换至浅色模式" : "切换至深色模式"}
           type="button"
         >
-          <Icon name="appearance" />
+          <Icon name={appearance === "dark" ? "sun" : "moon"} />
         </button>
 
         {/* 仅在非 Mac 平台且处于 Tauri 运行时才渲染窗口控制按钮 / Only render controls on non-Mac platforms in Tauri */}

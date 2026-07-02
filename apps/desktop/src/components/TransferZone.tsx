@@ -1,10 +1,37 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { formatBytes } from "../transferProgress";
-import type { DeviceDto } from "../types";
+import { platformBadge } from "../platformDisplay";
+import type { IconName } from "./Icon";
 
 type TabType = "transfer" | "agent" | "vlan" | "state";
+
+interface ComingSoonCopy {
+  mascot: string;
+  title: string;
+  desc: string;
+}
+
+// 未实现能力：诚实标注为“即将推出”，不展示任何假数据或假控件
+// Unimplemented capabilities: honestly marked "coming soon", never fake data.
+const COMING_SOON: Record<Exclude<TabType, "transfer">, ComingSoonCopy> = {
+  agent: {
+    mascot: "🤖",
+    title: "Agent 协作",
+    desc: "跨设备 Agent 指令通道会作为 NekoLink 的上层能力接入，走统一的加密 session 与 local bridge，而不是写死到桌面端。当前版本尚未开放。"
+  },
+  vlan: {
+    mascot: "🎮",
+    title: "游戏联机 / 组网",
+    desc: "基于 iroh / relay 的 P2P 虚拟局域网会在 NekoLink transport 就绪后接入。当前主线仍是同局域网 TCP 传输，跨公网组网尚未开放。"
+  },
+  state: {
+    mascot: "🔄",
+    title: "状态同步 NekoState",
+    desc: "session、workspace、skill、agent profile 的跨设备迁移会通过可校验的 bundle 进行。协议模型已在推进，自动同步入口尚未开放。"
+  }
+};
 
 /**
  * 中间核心工作台：文件投放区与设备能力多页签控制面板
@@ -14,7 +41,6 @@ export function TransferZone() {
   const {
     selectedPaths,
     manualPaths,
-    setManualPaths,
     plan,
     scanStatus,
     removePath,
@@ -24,7 +50,6 @@ export function TransferZone() {
     selectedDeviceId,
     selectedDeviceSnapshot,
     nearbyDevices,
-    trustedDevices,
     sendCurrentTransfer,
     busy,
     dragActive,
@@ -35,49 +60,6 @@ export function TransferZone() {
   } = useAppContext();
 
   const [activeTab, setActiveTab] = useState<TabType>("transfer");
-  
-  // VLAN State
-  const [simulationPing, setSimulationPing] = useState<number | null>(null);
-  const [isConnectingVlan, setIsConnectingVlan] = useState(false);
-  const [vlanProtocol, setVlanProtocol] = useState("TCP");
-  const [vlanLocalPort, setVlanLocalPort] = useState("8080");
-  const [vlanRemotePort, setVlanRemotePort] = useState("8080");
-
-  // Agent State
-  const [agentCommand, setAgentCommand] = useState("");
-  const [terminalLogs, setTerminalLogs] = useState<{type: string, text: string}[]>([
-    { type: "system", text: "[系统信息] NekoLink P2P 安全隧道已就绪。" },
-    { type: "info", text: "OpenNeko Runtime (Agent守护进程) 已在线并等待接收指令..." },
-  ]);
-  const terminalEndRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (activeTab === "agent") {
-      terminalEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }
-  }, [terminalLogs, activeTab]);
-
-  const handleSendAgentCommand = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cmd = agentCommand.trim();
-    if (!cmd) return;
-    
-    setTerminalLogs(prev => [...prev, { type: "user", text: `> ${cmd}` }]);
-    setAgentCommand("");
-    
-    setTimeout(() => {
-      if (cmd.toLowerCase() === 'ping') {
-        setTerminalLogs(prev => [...prev, { type: "system", text: "PONG (12ms) - 节点通信正常" }]);
-      } else if (cmd.toLowerCase() === 'clear') {
-         setTerminalLogs([
-          { type: "system", text: "[系统信息] NekoLink P2P 安全隧道已就绪。" },
-          { type: "info", text: "OpenNeko Runtime (Agent守护进程) 已在线并等待接收指令..." },
-         ]);
-      } else {
-        setTerminalLogs(prev => [...prev, { type: "agent", text: `[RPC-OK] 指令执行已下发。当前设备端点未返回更多 stdout...` }]);
-      }
-    }, 450);
-  };
 
   const trustedNearbyDevices = nearbyDevices.filter((d) => d.trust_state === "Trusted");
   const selectedDevice =
@@ -88,15 +70,12 @@ export function TransferZone() {
   const totalPaths = selectedPaths.length;
   const canSend = totalPaths > 0 && !busy && (Boolean(selectedDevice) || connectionCode.trim().length > 0);
 
-  // 模拟建立虚拟局域网连接 / Simulate establishing virtual LAN tunnel
-  const handleConnectVlan = () => {
-    setIsConnectingVlan(true);
-    setSimulationPing(null);
-    setTimeout(() => {
-      setIsConnectingVlan(false);
-      setSimulationPing(Math.floor(Math.random() * 8) + 8); // 8-15ms
-    }, 1500);
-  };
+  const tabs: { id: TabType; icon: IconName; label: string; soon: boolean }[] = [
+    { id: "transfer", icon: "upload", label: "文件传输", soon: false },
+    { id: "agent", icon: "plug", label: "Agent 协作", soon: true },
+    { id: "vlan", icon: "link", label: "游戏联机 / 组网", soon: true },
+    { id: "state", icon: "package", label: "状态同步", soon: true }
+  ];
 
   return (
     <section className="transfer-zone">
@@ -105,70 +84,49 @@ export function TransferZone() {
         <div className="zone-title-group">
           <strong>
             {selectedDevice
-              ? `设备控制台: ${selectedDevice.name}`
+              ? `发送到 ${selectedDevice.name}`
               : connectionCodeOpen
-              ? "通过备用连接码发送"
-              : "主工作台 (Workspace)"}
+              ? "通过连接码发送"
+              : "主工作台"}
           </strong>
           <span className="zone-subtitle">
             {selectedDevice
-              ? `${selectedDevice.platform} · 可信设备加密通道`
-              : "将文件或文件夹投放至下方进行共享"}
+              ? `${platformBadge(selectedDevice.platform).label} · 可信设备加密通道`
+              : "把文件或文件夹丢到下面，选好设备就能发"}
           </span>
         </div>
       </div>
 
       {/* 设备功能页签切换 / Capability Tabs */}
       <div className="capability-tabs">
+        {tabs.map((tab) => (
           <button
-            className={`tab-btn ${activeTab === "transfer" ? "is-active" : ""}`}
-            onClick={() => setActiveTab("transfer")}
+            key={tab.id}
+            className={`tab-btn ${activeTab === tab.id ? "is-active" : ""}`}
+            onClick={() => setActiveTab(tab.id)}
             type="button"
           >
-            <Icon name="upload" />
-            <span>文件传输</span>
+            <Icon name={tab.icon} />
+            <span>{tab.label}</span>
+            {tab.soon && <span className="tab-soon-dot" title="即将推出" />}
           </button>
-          <button
-            className={`tab-btn ${activeTab === "agent" ? "is-active" : ""}`}
-            onClick={() => setActiveTab("agent")}
-            type="button"
-          >
-            <Icon name="plug" />
-            <span>Agent 协作</span>
-          </button>
-          <button
-            className={`tab-btn ${activeTab === "vlan" ? "is-active" : ""}`}
-            onClick={() => setActiveTab("vlan")}
-            type="button"
-          >
-            <Icon name="link" />
-            <span>游戏联机/组网</span>
-          </button>
-          <button
-            className={`tab-btn ${activeTab === "state" ? "is-active" : ""}`}
-            onClick={() => setActiveTab("state")}
-            type="button"
-          >
-            <Icon name="package" />
-            <span>状态同步 (NekoState)</span>
-          </button>
-        </div>
+        ))}
+      </div>
 
       {/* 页签内容区 / Tab Contents */}
       <div className="zone-body">
         {/* 1. 文件传输页签 / File Transfer Tab */}
         {activeTab === "transfer" && (
           <div className="tab-pane-content transfer-pane">
-            
             {/* 连接码输入区（仅在备用码模式下显示） / Connection Code Input */}
             {connectionCodeOpen && !selectedDevice && (
               <div className="connection-code-input-box">
-                <label htmlFor="code-input">输入接收端连接码：</label>
+                <label htmlFor="code-input">输入接收端连接码</label>
                 <div className="input-group">
                   <input
                     id="code-input"
                     type="text"
-                    placeholder="输入对方客户端显示的连接码..."
+                    placeholder="粘贴对方客户端显示的连接码..."
                     value={connectionCode}
                     onChange={(e) => setConnectionCode(e.target.value)}
                   />
@@ -177,7 +135,7 @@ export function TransferZone() {
                     onClick={() => setConnectionCodeOpen(false)}
                     type="button"
                   >
-                    返回设备树
+                    返回设备列表
                   </button>
                 </div>
               </div>
@@ -186,18 +144,20 @@ export function TransferZone() {
             {/* 大面积虚线拖拽区域 / Drag & Drop Zone */}
             <div className={`drag-drop-area ${dragActive ? "is-active" : ""}`}>
               <div className="drag-drop-inner">
-                <Icon name="upload" className="drag-drop-icon" />
-                <h3>拖拽文件或文件夹到此处</h3>
+                <div className="drag-drop-mascot">
+                  <Icon name="paw" />
+                </div>
+                <h3>把文件或文件夹丢到这里</h3>
                 <p className="drag-drop-tip">支持直接拖放任意文件与大容量目录</p>
-                
+
                 <div className="drag-drop-actions">
                   <button className="btn-secondary" onClick={pickFiles} type="button" disabled={Boolean(busy)}>
                     <Icon name="file" />
-                    选择文件...
+                    选择文件
                   </button>
                   <button className="btn-secondary" onClick={pickFolders} type="button" disabled={Boolean(busy)}>
                     <Icon name="folder" />
-                    选择文件夹...
+                    选择文件夹
                   </button>
                 </div>
               </div>
@@ -207,9 +167,9 @@ export function TransferZone() {
             {totalPaths > 0 && (
               <div className="selected-queue-box">
                 <div className="queue-header">
-                  <strong>已加入发送队列 ({totalPaths} 个路径)</strong>
+                  <strong>发送队列 · {totalPaths} 个路径</strong>
                   <button className="btn-text-danger" onClick={clearQueue} type="button">
-                    清空队列
+                    清空
                   </button>
                 </div>
                 <div className="queue-list">
@@ -217,8 +177,8 @@ export function TransferZone() {
                     <div className="queue-item" key={path}>
                       <Icon name="file" className="queue-item-icon" />
                       <span className="queue-item-path">{path}</span>
-                      <button className="queue-item-remove" onClick={() => removePath(path)} type="button">
-                        ×
+                      <button className="queue-item-remove" onClick={() => removePath(path)} type="button" title="移除">
+                        <Icon name="x" />
                       </button>
                     </div>
                   ))}
@@ -227,12 +187,16 @@ export function TransferZone() {
                 {/* 扫描与计划摘要 / Scan & Plan Summary */}
                 {scanStatus && (
                   <div className="queue-status-hint">
-                    正在扫描目录: 已发现 {scanStatus.files_found} 个文件...
+                    正在扫描目录：已发现 {scanStatus.files_found} 个文件...
                   </div>
                 )}
-                {plan && (
+                {plan && !scanStatus && (
                   <div className="queue-plan-summary">
-                    <span>传输计划已生成：共 <strong>{plan.file_count}</strong> 个文件 · <strong>{formatBytes(plan.total_bytes)}</strong></span>
+                    <Icon name="check" />
+                    <span>
+                      传输计划已生成：<strong>{plan.file_count}</strong> 个文件 ·{" "}
+                      <strong>{formatBytes(plan.total_bytes)}</strong>
+                    </span>
                   </div>
                 )}
               </div>
@@ -259,150 +223,18 @@ export function TransferZone() {
           </div>
         )}
 
-        {/* 2. Agent 协作页签 / Agent Tab */}
-        {activeTab === "agent" && (
-          <div className="tab-pane-content agent-pane">
-            <div className="terminal-panel" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <div className="terminal-header">
-                <span className="terminal-dot red" />
-                <span className="terminal-dot yellow" />
-                <span className="terminal-dot green" />
-                <span className="terminal-title">OpenNeko Agent Terminal</span>
-              </div>
-              <div className="terminal-body" style={{ flex: 1, display: 'flex', flexDirection: 'column' }}>
-                <div className="terminal-logs" style={{ flex: 1, overflowY: 'auto', marginBottom: '12px' }}>
-                  {terminalLogs.map((log, index) => (
-                    <div key={index} className="log-line" style={{ marginBottom: '6px', fontSize: '13px' }}>
-                      <span className={log.type === 'system' ? 'cyan-text' : log.type === 'info' ? 'gray-text' : log.type === 'user' ? 'white-text' : log.type === 'warning' ? 'yellow-text' : 'green-text'}>
-                        {log.text}
-                      </span>
-                    </div>
-                  ))}
-                  <div ref={terminalEndRef} />
-                </div>
-                <form className="terminal-input-row" onSubmit={handleSendAgentCommand} style={{ display: 'flex', gap: '8px', alignItems: 'center', background: 'rgba(0,0,0,0.2)', padding: '8px', borderRadius: '4px' }}>
-                  <span className="prompt-symbol" style={{ color: '#0f0', fontWeight: 'bold' }}>$</span>
-                  <input
-                    type="text"
-                    className="terminal-input"
-                    style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', outline: 'none', fontFamily: 'monospace' }}
-                    value={agentCommand}
-                    onChange={(e) => setAgentCommand(e.target.value)}
-                    placeholder="输入指令，例如: ping, deploy..."
-                  />
-                  <button type="submit" className="btn-primary btn-small" disabled={!agentCommand.trim()} style={{ padding: '4px 12px' }}>执行</button>
-                </form>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 3. 游戏联机/虚拟局域网页签 / VLAN Tab */}
-        {activeTab === "vlan" && (
-          <div className="tab-pane-content vlan-pane">
-            <div className="vlan-panel-card" style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-              <div className="vlan-card-header">
-                <Icon name="link" />
-                <h3>NekoLink 虚拟局域网房间</h3>
-              </div>
-              <p className="vlan-desc">
-                基于 <strong>iroh / P2P</strong> 隧道技术，在两台设备之间建立一条虚拟的网络通道。
-                可以让仅支持局域网联机的小型游戏、开发调试服务跨网络直接互通。
-              </p>
-
-              <div className="vlan-config-form" style={{ display: 'flex', gap: '12px', marginBottom: '20px', alignItems: 'flex-end', background: 'var(--color-bg-secondary)', padding: '12px', borderRadius: '8px' }}>
-                <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                  <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', marginBottom: '4px', display: 'block' }}>协议 (Protocol)</label>
-                  <select className="form-control" value={vlanProtocol} onChange={e => setVlanProtocol(e.target.value)} disabled={simulationPing !== null} style={{ width: '100%' }}>
-                    <option value="TCP">TCP</option>
-                    <option value="UDP">UDP</option>
-                  </select>
-                </div>
-                <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                  <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', marginBottom: '4px', display: 'block' }}>本地端口</label>
-                  <input type="text" className="form-control" value={vlanLocalPort} onChange={e => setVlanLocalPort(e.target.value)} placeholder="如 8080" disabled={simulationPing !== null} style={{ width: '100%' }} />
-                </div>
-                <div className="form-group" style={{ flex: 1, margin: 0 }}>
-                  <label style={{ fontSize: '12px', color: 'var(--color-text-secondary)', marginBottom: '4px', display: 'block' }}>对端端口</label>
-                  <input type="text" className="form-control" value={vlanRemotePort} onChange={e => setVlanRemotePort(e.target.value)} placeholder="如 8080" disabled={simulationPing !== null} style={{ width: '100%' }} />
-                </div>
-              </div>
-
-              <div className="vlan-network-box" style={{ flex: 1 }}>
-                <div className="vlan-node">
-                  <strong>本机 (Local)</strong>
-                  <span className="vlan-ip">127.0.0.1:{vlanLocalPort || "*"}</span>
-                </div>
-                <div className={`vlan-connection-line ${simulationPing ? "is-connected" : ""}`}>
-                  {isConnectingVlan ? (
-                    <span className="vlan-connecting-text">建立隧道中...</span>
-                  ) : simulationPing ? (
-                    <span className="vlan-ping-tag">延迟: {simulationPing} ms (P2P 直连)</span>
-                  ) : (
-                    <span className="vlan-idle-line" />
-                  )}
-                </div>
-                <div className="vlan-node">
-                  <strong>{selectedDevice?.name || "对端设备 (未连接)"}</strong>
-                  <span className="vlan-ip">NekoLink IP:{vlanRemotePort || "*"}</span>
-                </div>
-              </div>
-
-              <div className="vlan-actions" style={{ marginTop: '16px', display: 'flex', justifyContent: 'flex-end' }}>
-                {simulationPing ? (
-                  <button className="btn-danger" onClick={() => setSimulationPing(null)} type="button">
-                    断开虚拟隧道
-                  </button>
-                ) : (
-                  <button
-                    className="btn-primary"
-                    disabled={isConnectingVlan}
-                    onClick={handleConnectVlan}
-                    type="button"
-                  >
-                    {isConnectingVlan ? "正在打洞建立隧道..." : "映射并连接 (Connect)"}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* 4. 状态同步页签 / NekoState Tab */}
-        {activeTab === "state" && (
-          <div className="tab-pane-content state-pane">
-            <div className="state-dashboard">
-              <div className="state-card">
-                <h4>同步层状态 (NekoState)</h4>
-                <div className="state-row">
-                  <span className="state-label">长期身份密钥</span>
-                  <span className="state-val code-font">Ed25519 Verified</span>
-                </div>
-                <div className="state-row">
-                  <span className="state-label">上次握手时间</span>
-                  <span className="state-val">刚刚</span>
-                </div>
-                <div className="state-row">
-                  <span className="state-label">加密方式</span>
-                  <span className="state-val">X25519 + HKDF (已加密)</span>
-                </div>
-              </div>
-
-              <div className="state-card">
-                <h4>对端基础指标 (来自 NekoLink)</h4>
-                <div className="state-row">
-                  <span className="state-label">操作系统</span>
-                  <span className="state-val">{selectedDevice?.platform || "未知"}</span>
-                </div>
-                <div className="state-row">
-                  <span className="state-label">信任等级</span>
-                  <span className="state-val green-text">高可信 (Trusted Pinning)</span>
-                </div>
-                <div className="state-row">
-                  <span className="state-label">状态同步周期</span>
-                  <span className="state-val">实时推送 (心跳正常)</span>
-                </div>
-              </div>
+        {/* 2-4. 未实现能力：诚实占位 / Unimplemented: honest placeholder */}
+        {activeTab !== "transfer" && (
+          <div className="tab-pane-content">
+            <div className="coming-soon">
+              <span className="coming-soon-badge">
+                <Icon name="sparkle" />
+                即将推出
+              </span>
+              <div className="coming-soon-mascot">{COMING_SOON[activeTab].mascot}</div>
+              <h3>{COMING_SOON[activeTab].title}</h3>
+              <p>{COMING_SOON[activeTab].desc}</p>
+              <div className="coming-soon-note">属于 NekoLink 后续版本 · 当前不影响文件传输</div>
             </div>
           </div>
         )}

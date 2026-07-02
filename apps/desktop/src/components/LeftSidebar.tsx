@@ -2,20 +2,8 @@ import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { buildDiscoveryCopy } from "../networkPermissionHints";
+import { platformBadge } from "../platformDisplay";
 import type { DeviceDto, TrustedDeviceDto } from "../types";
-
-/**
- * 平台标识转换函数 / Platform Label converter
- */
-function getPlatformIcon(platform: string): string {
-  const p = platform.toLowerCase();
-  if (p.includes("mac") || p.includes("darwin")) return " Mac";
-  if (p.includes("win")) return "⊞ Windows";
-  if (p.includes("ios") || p.includes("iphone") || p.includes("ipad")) return "📱 iOS";
-  if (p.includes("android")) return "🤖 Android";
-  if (p.includes("linux")) return "🐧 Linux";
-  return "💻 设备";
-}
 
 /**
  * 左侧导航与设备树组件
@@ -30,7 +18,6 @@ export function LeftSidebar() {
     setConnectionCodeOpen,
     setConnectionCode,
     requestPairing,
-    forgetTrustedDevice,
     mode,
     setMode,
     discoveryStatus
@@ -70,35 +57,29 @@ export function LeftSidebar() {
     }
   };
 
+  const navItems = [
+    { id: "send" as const, icon: "send" as const, label: "发送" },
+    { id: "devices" as const, icon: "devices" as const, label: "设备" },
+    { id: "transfers" as const, icon: "clock" as const, label: "历史" }
+  ];
+
   return (
     <aside className="left-sidebar">
       {/* 极窄活动导航栏 / Vertical Activity Bar */}
       <div className="activity-bar">
         <div className="activity-bar-top">
-          <button
-            className={`activity-btn ${mode === "send" ? "is-active" : ""}`}
-            onClick={() => setMode("send")}
-            title="发送文件"
-            type="button"
-          >
-            <Icon name="send" />
-          </button>
-          <button
-            className={`activity-btn ${mode === "devices" ? "is-active" : ""}`}
-            onClick={() => setMode("devices")}
-            title="设备管理"
-            type="button"
-          >
-            <Icon name="devices" />
-          </button>
-          <button
-            className={`activity-btn ${mode === "transfers" ? "is-active" : ""}`}
-            onClick={() => setMode("transfers")}
-            title="传输历史"
-            type="button"
-          >
-            <Icon name="clock" />
-          </button>
+          {navItems.map((item) => (
+            <button
+              key={item.id}
+              className={`activity-btn ${mode === item.id ? "is-active" : ""}`}
+              onClick={() => setMode(item.id)}
+              title={item.label}
+              type="button"
+            >
+              <Icon name={item.icon} />
+              <span>{item.label}</span>
+            </button>
+          ))}
         </div>
         <div className="activity-bar-bottom">
           <button
@@ -108,6 +89,7 @@ export function LeftSidebar() {
             type="button"
           >
             <Icon name="settings" />
+            <span>设置</span>
           </button>
         </div>
       </div>
@@ -117,7 +99,7 @@ export function LeftSidebar() {
         {/* 顶部搜索框 / Search Input */}
         <div className="sidebar-search">
           <div className="search-input-wrapper">
-            <Icon name="settings" className="search-icon" style={{ transform: "rotate(45deg)" }} />
+            <Icon name="search" className="search-icon" />
             <input
               type="text"
               placeholder="搜索设备..."
@@ -129,7 +111,6 @@ export function LeftSidebar() {
 
         {/* 设备列表滚动区 / Scrollable List Area */}
         <div className="device-tree-scroll">
-          
           {/* 1. 附近在线发现设备 / Nearby Devices */}
           <div className="tree-section">
             <button
@@ -148,17 +129,21 @@ export function LeftSidebar() {
                   filteredNearby.map((device) => {
                     const isTrusted = device.trust_state === "Trusted";
                     const isSelected = selectedDeviceId === device.id;
+                    const badge = platformBadge(device.platform);
                     return (
                       <div
                         key={device.id}
                         className={`tree-node ${isSelected ? "is-selected" : ""}`}
                         onClick={() => handleSelectNearby(device)}
                       >
-                        <span className="node-status-dot is-online" />
+                        <span className="node-avatar">
+                          {badge.emoji}
+                          <span className="node-status-dot is-online" />
+                        </span>
                         <div className="node-info">
                           <span className="node-name">{device.name}</span>
                           <span className="node-meta">
-                            {getPlatformIcon(device.platform)} · {isTrusted ? "已信任" : "待配对"}
+                            {badge.label} · {isTrusted ? "已信任" : "待配对"}
                           </span>
                         </div>
                         {!isTrusted && (
@@ -201,17 +186,21 @@ export function LeftSidebar() {
                   filteredTrusted.map((device) => {
                     const isOnline = nearbyDevices.some((n) => n.id === device.device_id);
                     const isSelected = selectedDeviceId === device.device_id;
+                    const badge = platformBadge(device.platform);
                     return (
                       <div
                         key={device.device_id}
                         className={`tree-node ${isSelected ? "is-selected" : ""} ${!isOnline ? "is-offline" : ""}`}
                         onClick={() => handleSelectTrusted(device)}
                       >
-                        <span className={`node-status-dot ${isOnline ? "is-online" : "is-offline"}`} />
+                        <span className="node-avatar">
+                          {badge.emoji}
+                          <span className={`node-status-dot ${isOnline ? "is-online" : "is-offline"}`} />
+                        </span>
                         <div className="node-info">
                           <span className="node-name">{device.device_name}</span>
                           <span className="node-meta">
-                            {getPlatformIcon(device.platform)} · {isOnline ? "在线" : "离线"}
+                            {badge.label} · {isOnline ? "在线" : "离线"}
                           </span>
                         </div>
                         <Icon name="shield" className="node-trust-icon" />

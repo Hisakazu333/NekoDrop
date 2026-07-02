@@ -49,7 +49,7 @@ function AppContent() {
           )}
           {toast && (
             <div className="global-alert-card is-toast">
-              <span className="alert-badge">提示</span>
+              <span className="alert-badge">喵</span>
               <span className="alert-message">{toast}</span>
             </div>
           )}
