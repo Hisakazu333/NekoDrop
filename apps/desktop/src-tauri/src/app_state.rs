@@ -119,6 +119,7 @@ pub struct LocalBridgeAuthorizationRecord {
     pub app_kind: Option<String>,
     pub scopes: Vec<LocalBridgePermissionScope>,
     pub granted_at_ms: u128,
+    pub last_used_at_ms: u128,
     pub expires_at_ms: Option<u128>,
 }
 
@@ -137,6 +138,7 @@ pub struct PendingLocalBridgeAuthorization {
 pub enum LocalBridgePendingAction {
     SendBundle(LocalBridgePendingSendBundleAction),
     ImportBundle(LocalBridgePendingImportBundleAction),
+    RollbackBundleImport(LocalBridgePendingRollbackBundleImportAction),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -145,6 +147,7 @@ pub struct LocalBridgePendingActionResult {
     pub action_kind: String,
     pub client_id: String,
     pub client_display_name: String,
+    pub client_app_kind: Option<String>,
     pub status: String,
     pub lifecycle_status: Option<String>,
     pub reason: Option<String>,
@@ -154,6 +157,12 @@ pub struct LocalBridgePendingActionResult {
     pub bundle_root: Option<String>,
     pub target_device_id: Option<String>,
     pub require_trusted_device: Option<bool>,
+    pub conflict_strategy: Option<String>,
+    pub skipped_file_count: usize,
+    pub import_receipt_path: Option<String>,
+    pub rollback_file_count: usize,
+    pub rollback_blocking_reason: Option<String>,
+    pub rolled_back_file_count: usize,
     pub requested_at_ms: u128,
     pub claimed_at_ms: u128,
 }
@@ -175,6 +184,15 @@ pub struct LocalBridgePendingImportBundleAction {
     pub client: LocalBridgeClientIdentity,
     pub staged_bundle_id: String,
     pub expected_bundle_type: Option<BundleType>,
+    pub conflict_strategy: String,
+    pub requested_at_ms: u128,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LocalBridgePendingRollbackBundleImportAction {
+    pub request_id: String,
+    pub client: LocalBridgeClientIdentity,
+    pub bundle_id: String,
     pub requested_at_ms: u128,
 }
 
@@ -219,6 +237,7 @@ pub struct AppState {
     pub device_identity: LocalDeviceIdentity,
     pub nearby_devices: Arc<Mutex<Vec<Device>>>,
     pub nearby_devices_seen_at: Arc<Mutex<HashMap<String, Instant>>>,
+    pub nearby_device_fullnames: Arc<Mutex<HashMap<String, String>>>,
     pub discovery_status: Arc<Mutex<DiscoveryStatusState>>,
     pub trusted_devices: Arc<Mutex<Vec<TrustedDeviceRecord>>>,
     pub transfer_history: Arc<Mutex<Vec<TransferHistoryRecord>>>,
@@ -246,6 +265,7 @@ impl AppState {
             device_identity,
             nearby_devices: Arc::new(Mutex::new(Vec::new())),
             nearby_devices_seen_at: Arc::new(Mutex::new(HashMap::new())),
+            nearby_device_fullnames: Arc::new(Mutex::new(HashMap::new())),
             discovery_status: Arc::new(Mutex::new(DiscoveryStatusState::starting())),
             trusted_devices: Arc::new(Mutex::new(trusted_devices)),
             transfer_history: Arc::new(Mutex::new(transfer_history)),

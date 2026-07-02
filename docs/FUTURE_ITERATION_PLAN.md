@@ -713,15 +713,15 @@ logs/
 最推荐的下一步顺序：
 
 ```text
-1. Bundle import plan and conflict policy
-2. Generic adapter sample
-3. Local Bridge event stream and action UI
+1. Real application adapter wiring
+2. Local Bridge event stream and action UI
+3. Adapter transaction / migration contract
 4. iroh / Relay / P2P
 5. NekoState
 6. OpenNeko Agent Integration
 ```
 
-当前最不应该跳过的是 bundle 闭环和 local bridge 接入边界。设备身份、可信配对、encrypted control、replay window、encrypted file frames、接收端 streaming 解密和桌面 session identity binding 已经有基础；下一步要把上层导入、冲突处理、adapter 样例和 bridge 事件状态压实。没有这些，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
+当前最不应该跳过的是真实应用 adapter 和 local bridge 事件边界。设备身份、可信配对、encrypted control、replay window、encrypted file frames、接收端 streaming 解密、桌面 session identity binding、bundle staging/import/rollback、local bridge worker 和 generic adapter 样例都已经有基础；下一步要把真实上层应用接入、事件状态和导入事务压实。没有这些，后面手机控制电脑、Agent 跨设备执行、状态同步都会缺少安全地基。
 
 ## 12. 一句话总结
 

@@ -17,6 +17,11 @@ export interface TrustedTargetCopy {
   subtitle: string;
 }
 
+export interface DeviceCapabilitySummary {
+  label: string;
+  state: "ready" | "locked" | "off";
+}
+
 export function buildNearbyDeviceViewModel(device: DeviceDto, selected: boolean): NearbyDeviceViewModel {
   if (device.trust_state === "Trusted") {
     return {
@@ -59,6 +64,22 @@ export function selectedTrustedTargetCopy(device: TrustedDeviceDto, online: bool
     targetLabel: device.device_name,
     subtitle: online ? `在线 · ${endpoint}` : `使用上次地址 · ${endpoint}`
   };
+}
+
+export function buildDeviceCapabilitySummary(options: {
+  trusted: boolean;
+  online: boolean;
+  hasPublicKey: boolean;
+}): DeviceCapabilitySummary[] {
+  const authenticated = options.trusted && options.hasPublicKey;
+  return [
+    { label: "文件", state: options.online ? "ready" : "locked" },
+    { label: "可信", state: options.trusted ? "ready" : "locked" },
+    { label: "加密", state: authenticated ? "ready" : "locked" },
+    { label: "资料包", state: authenticated ? "ready" : "locked" },
+    { label: "Agent", state: "off" },
+    { label: "跨网络", state: "off" }
+  ];
 }
 
 export function platformLabel(platform: string) {

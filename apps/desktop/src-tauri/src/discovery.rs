@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -14,7 +14,7 @@ use crate::trusted_devices::{save_trusted_devices, trusted_record_matches, Trust
 
 const SERVICE_TYPE: &str = "_nekodrop._tcp.local.";
 const REGISTER_INTERVAL: Duration = Duration::from_secs(2);
-const DEVICE_STALE_AFTER: Duration = Duration::from_secs(90);
+const DEVICE_STALE_AFTER: Duration = Duration::from_secs(10 * 60);
 const TRUSTED_DEVICE_REFRESH_AFTER_MS: u128 = 30_000;
 
 pub fn start_discovery(state: &AppState) {
@@ -22,6 +22,7 @@ pub fn start_discovery(state: &AppState) {
     let receive_session = state.receive_session.clone();
     let nearby_devices = state.nearby_devices.clone();
     let nearby_seen_at = state.nearby_devices_seen_at.clone();
+    let nearby_fullnames = state.nearby_device_fullnames.clone();
     let discovery_status = state.discovery_status.clone();
     let trusted_devices = state.trusted_devices.clone();
 
@@ -76,6 +77,7 @@ pub fn start_discovery(state: &AppState) {
                             &device_identity,
                             &nearby_devices,
                             &nearby_seen_at,
+                            &nearby_fullnames,
                             &trusted_devices,
                             &info,
                         );
@@ -89,12 +91,17 @@ pub fn start_discovery(state: &AppState) {
                         }
                     }
                     ServiceEvent::ServiceRemoved(_, fullname) => {
-                        remove_device_by_fullname(&nearby_devices, &nearby_seen_at, &fullname);
+                        remove_device_by_fullname(
+                            &nearby_devices,
+                            &nearby_seen_at,
+                            &nearby_fullnames,
+                            &fullname,
+                        );
                     }
                     _ => {}
                 }
             }
-            purge_stale_devices(&nearby_devices, &nearby_seen_at);
+            purge_stale_devices(&nearby_devices, &nearby_seen_at, &nearby_fullnames);
             thread::sleep(Duration::from_millis(800));
         }
     });
@@ -220,6 +227,7 @@ fn add_or_update_device(
     local_identity: &LocalDeviceIdentity,
     nearby_devices: &Arc<Mutex<Vec<Device>>>,
     nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
+    nearby_fullnames: &Arc<Mutex<HashMap<String, String>>>,
     trusted_devices: &Arc<Mutex<Vec<TrustedDeviceRecord>>>,
     info: &ResolvedService,
 ) -> bool {
@@ -267,7 +275,14 @@ fn add_or_update_device(
         }
     }
     if let Ok(mut seen_at) = nearby_seen_at.lock() {
-        seen_at.insert(device_id, Instant::now());
+        seen_at.insert(device_id.clone(), Instant::now());
+    }
+    if let Ok(mut fullnames) = nearby_fullnames.lock() {
+        let fullname = info.get_fullname().to_string();
+        fullnames.retain(|known_fullname, known_device_id| {
+            known_device_id != &device_id || known_fullname == &fullname
+        });
+        fullnames.insert(fullname, device_id);
     }
     true
 }
@@ -312,19 +327,31 @@ fn refresh_trusted_device_endpoint(
 fn remove_device_by_fullname(
     nearby_devices: &Arc<Mutex<Vec<Device>>>,
     nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
+    nearby_fullnames: &Arc<Mutex<HashMap<String, String>>>,
     fullname: &str,
 ) {
+    let device_id = if let Ok(mut fullnames) = nearby_fullnames.lock() {
+        let device_id = fullnames.remove(fullname);
+        if let Some(device_id) = device_id.as_ref() {
+            fullnames.retain(|_, known_device_id| known_device_id != device_id);
+        }
+        device_id.unwrap_or_else(|| fullname.to_string())
+    } else {
+        fullname.to_string()
+    };
+
     if let Ok(mut devices) = nearby_devices.lock() {
-        devices.retain(|device| device.id.as_str() != fullname);
+        devices.retain(|device| device.id.as_str() != device_id);
     }
     if let Ok(mut seen_at) = nearby_seen_at.lock() {
-        seen_at.remove(fullname);
+        seen_at.remove(&device_id);
     }
 }
 
 fn purge_stale_devices(
     nearby_devices: &Arc<Mutex<Vec<Device>>>,
     nearby_seen_at: &Arc<Mutex<HashMap<String, Instant>>>,
+    nearby_fullnames: &Arc<Mutex<HashMap<String, String>>>,
 ) {
     let stale_ids = if let Ok(seen_at) = nearby_seen_at.lock() {
         seen_at
@@ -336,9 +363,9 @@ fn purge_stale_devices(
                     None
                 }
             })
-            .collect::<Vec<_>>()
+            .collect::<HashSet<_>>()
     } else {
-        Vec::new()
+        HashSet::new()
     };
 
     if stale_ids.is_empty() {
@@ -346,12 +373,13 @@ fn purge_stale_devices(
     }
 
     if let Ok(mut devices) = nearby_devices.lock() {
-        devices.retain(|device| !stale_ids.iter().any(|id| id == device.id.as_str()));
+        devices.retain(|device| !stale_ids.contains(device.id.as_str()));
     }
     if let Ok(mut seen_at) = nearby_seen_at.lock() {
-        for device_id in stale_ids {
-            seen_at.remove(&device_id);
-        }
+        seen_at.retain(|device_id, _| !stale_ids.contains(device_id));
+    }
+    if let Ok(mut fullnames) = nearby_fullnames.lock() {
+        fullnames.retain(|_, device_id| !stale_ids.contains(device_id));
     }
 }
 
@@ -416,5 +444,112 @@ fn update_discovery_status(
 ) {
     if let Ok(mut status) = discovery_status.lock() {
         update(&mut status);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_device(id: &str) -> Device {
+        Device::new(
+            DeviceId::new(id).expect("valid device id"),
+            "MacBook",
+            DevicePlatform::MacOS,
+            "192.168.1.2",
+            45920,
+        )
+        .expect("valid device")
+    }
+
+    #[test]
+    fn remove_device_by_fullname_uses_resolved_device_id() {
+        let devices = Arc::new(Mutex::new(vec![test_device("device-a")]));
+        let seen_at = Arc::new(Mutex::new(HashMap::from([(
+            "device-a".to_string(),
+            Instant::now(),
+        )])));
+        let fullnames = Arc::new(Mutex::new(HashMap::from([
+            (
+                "MacBook-a._nekodrop._tcp.local.".to_string(),
+                "device-a".to_string(),
+            ),
+            (
+                "MacBook-old._nekodrop._tcp.local.".to_string(),
+                "device-a".to_string(),
+            ),
+        ])));
+
+        remove_device_by_fullname(
+            &devices,
+            &seen_at,
+            &fullnames,
+            "MacBook-a._nekodrop._tcp.local.",
+        );
+
+        assert!(devices.lock().expect("devices lock").is_empty());
+        assert!(seen_at.lock().expect("seen lock").is_empty());
+        assert!(fullnames.lock().expect("fullname lock").is_empty());
+    }
+
+    #[test]
+    fn remove_device_by_fullname_ignores_unknown_fullname() {
+        let devices = Arc::new(Mutex::new(vec![test_device("device-a")]));
+        let seen_at = Arc::new(Mutex::new(HashMap::from([(
+            "device-a".to_string(),
+            Instant::now(),
+        )])));
+        let fullnames = Arc::new(Mutex::new(HashMap::new()));
+
+        remove_device_by_fullname(
+            &devices,
+            &seen_at,
+            &fullnames,
+            "MacBook-old._nekodrop._tcp.local.",
+        );
+
+        assert_eq!(devices.lock().expect("devices lock").len(), 1);
+        assert!(seen_at.lock().expect("seen lock").contains_key("device-a"));
+    }
+
+    #[test]
+    fn purge_stale_devices_cleans_all_discovery_indexes() {
+        let devices = Arc::new(Mutex::new(vec![
+            test_device("stale-device"),
+            test_device("fresh-device"),
+        ]));
+        let stale_seen_at = Instant::now()
+            .checked_sub(DEVICE_STALE_AFTER + Duration::from_secs(1))
+            .expect("valid stale instant");
+        let seen_at = Arc::new(Mutex::new(HashMap::from([
+            ("stale-device".to_string(), stale_seen_at),
+            ("fresh-device".to_string(), Instant::now()),
+        ])));
+        let fullnames = Arc::new(Mutex::new(HashMap::from([
+            (
+                "Stale._nekodrop._tcp.local.".to_string(),
+                "stale-device".to_string(),
+            ),
+            (
+                "Fresh._nekodrop._tcp.local.".to_string(),
+                "fresh-device".to_string(),
+            ),
+        ])));
+
+        purge_stale_devices(&devices, &seen_at, &fullnames);
+
+        let devices = devices.lock().expect("devices lock");
+        assert_eq!(devices.len(), 1);
+        assert_eq!(devices[0].id.as_str(), "fresh-device");
+        drop(devices);
+
+        let seen_at = seen_at.lock().expect("seen lock");
+        assert!(!seen_at.contains_key("stale-device"));
+        assert!(seen_at.contains_key("fresh-device"));
+        drop(seen_at);
+
+        let fullnames = fullnames.lock().expect("fullname lock");
+        assert!(!fullnames.contains_key("Stale._nekodrop._tcp.local."));
+        assert!(fullnames.contains_key("Fresh._nekodrop._tcp.local."));
     }
 }

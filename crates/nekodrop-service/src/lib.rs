@@ -60,6 +60,23 @@ pub enum TransferSecurityMode {
     AuthenticatedEncryptedSession,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceivedBundleStagingBlockReason {
+    LegacyPlain,
+    SensitiveBundleRequiresAuthenticatedSession,
+}
+
+impl ReceivedBundleStagingBlockReason {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LegacyPlain => "legacy_plain",
+            Self::SensitiveBundleRequiresAuthenticatedSession => {
+                "sensitive_bundle_requires_authenticated_session"
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReceivedBundleReport {
     pub bundle_id: String,
@@ -465,7 +482,7 @@ where
 pub fn accept_transfer_stream_with_decision_and_bundle_staging<D, P>(
     stream: &mut TcpStream,
     receive_dir: &Path,
-    bundle_staging_root: &Path,
+    _bundle_staging_root: &Path,
     decide: D,
     on_progress: P,
 ) -> NekoDropResult<TransferReceiveReport>
@@ -474,16 +491,13 @@ where
     P: FnMut(TransferProgressEvent),
 {
     match read_incoming_control_frame(stream)? {
-        IncomingControlFrame::FileOffer(offer) => {
-            accept_transfer_offer_stream_with_decision_and_bundle_staging(
-                stream,
-                receive_dir,
-                bundle_staging_root,
-                offer,
-                decide,
-                on_progress,
-            )
-        }
+        IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
+            stream,
+            receive_dir,
+            offer,
+            decide,
+            on_progress,
+        ),
         IncomingControlFrame::SessionHello(_) => Err(NekoDropError::Network(
             "session hello requires encrypted control receive entry".into(),
         )),
@@ -626,7 +640,7 @@ where
         frame => accept_plain_incoming_frame_with_cancel(
             stream,
             receive_dir,
-            Some(bundle_staging_root),
+            None,
             frame,
             decide,
             handle_pairing,
@@ -824,32 +838,6 @@ where
     )
 }
 
-fn accept_transfer_offer_stream_with_decision_and_bundle_staging<D, P>(
-    stream: &mut TcpStream,
-    receive_dir: &Path,
-    bundle_staging_root: &Path,
-    offer: TransferOffer,
-    decide: D,
-    on_progress: P,
-) -> NekoDropResult<TransferReceiveReport>
-where
-    D: FnOnce(&TransferOffer) -> bool,
-    P: FnMut(TransferProgressEvent),
-{
-    accept_transfer_offer_stream_with_decision_writer_and_cancel(
-        stream,
-        receive_dir,
-        Some(bundle_staging_root),
-        offer,
-        decide,
-        on_progress,
-        || false,
-        |stream, offer, decision| {
-            write_transfer_decision_for_transfer(stream, &offer.transfer_id, decision)
-        },
-    )
-}
-
 fn accept_transfer_offer_stream_with_encrypted_decision_and_cancel<D, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -1024,7 +1012,12 @@ where
             offer.file_count
         )));
     }
-    let bundle = maybe_stage_received_bundle(receive_dir, &offer.root_name, bundle_staging_root)?;
+    let bundle = maybe_stage_received_bundle(
+        receive_dir,
+        &offer.root_name,
+        bundle_staging_root,
+        TransferSecurityMode::LegacyPlain,
+    )?;
 
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
@@ -1175,7 +1168,12 @@ where
             offer.file_count
         )));
     }
-    let bundle = maybe_stage_received_bundle(receive_dir, &offer.root_name, bundle_staging_root)?;
+    let bundle = maybe_stage_received_bundle(
+        receive_dir,
+        &offer.root_name,
+        bundle_staging_root,
+        security_mode,
+    )?;
 
     Ok(TransferReceiveReport {
         transfer_id: offer.transfer_id,
@@ -1193,6 +1191,7 @@ fn maybe_stage_received_bundle(
     receive_dir: &Path,
     root_name: &str,
     bundle_staging_root: Option<&Path>,
+    security_mode: TransferSecurityMode,
 ) -> NekoDropResult<Option<ReceivedBundleReport>> {
     let Some(bundle_staging_root) = bundle_staging_root else {
         return Ok(None);
@@ -1201,9 +1200,38 @@ fn maybe_stage_received_bundle(
     if !received_root.join("bundle.json").exists() {
         return Ok(None);
     }
+    let detected = match nekodrop_storage::detect_bundle_directory(&received_root)? {
+        Some(detected) => detected,
+        None => return Ok(None),
+    };
+    if !can_stage_received_bundle_for_import(detected.manifest.bundle_type, security_mode) {
+        return Ok(None);
+    }
     stage_bundle_directory(&received_root, bundle_staging_root)
         .map(staged_bundle_to_report)
         .map(Some)
+}
+
+fn can_stage_received_bundle_for_import(
+    bundle_type: BundleType,
+    security_mode: TransferSecurityMode,
+) -> bool {
+    received_bundle_staging_block_reason(bundle_type, security_mode).is_none()
+}
+
+pub fn received_bundle_staging_block_reason(
+    bundle_type: BundleType,
+    security_mode: TransferSecurityMode,
+) -> Option<ReceivedBundleStagingBlockReason> {
+    if security_mode == TransferSecurityMode::LegacyPlain {
+        return Some(ReceivedBundleStagingBlockReason::LegacyPlain);
+    }
+    if bundle_type.requires_authenticated_encrypted_session()
+        && security_mode != TransferSecurityMode::AuthenticatedEncryptedSession
+    {
+        return Some(ReceivedBundleStagingBlockReason::SensitiveBundleRequiresAuthenticatedSession);
+    }
+    None
 }
 
 fn staged_bundle_to_report(staged: StagedBundle) -> ReceivedBundleReport {
@@ -1688,8 +1716,8 @@ mod tests {
     }
 
     #[test]
-    fn service_reports_staged_bundle_after_receive_completes() {
-        let dir = unique_temp_dir("service-bundle-detected");
+    fn legacy_plain_receive_keeps_bundle_as_plain_files_only() {
+        let dir = unique_temp_dir("service-plain-bundle-not-staged");
         let source_root = create_valid_bundle_source(&dir);
         let receive_dir = dir.join("receive");
         let staging_root = dir.join("staging");
@@ -1705,19 +1733,195 @@ mod tests {
 
         send_paths(&endpoint, &[source_root]).unwrap();
         let receive_report = receiver.join().unwrap().unwrap();
-        let bundle = receive_report.bundle.expect("bundle should be reported");
 
-        assert_eq!(bundle.bundle_id, "bundle_1234567890");
-        assert_eq!(bundle.bundle_type, BundleType::Skill);
-        assert_eq!(bundle.display_name, "voice_transcribe");
-        assert_eq!(bundle.source_app, "OpenNeko");
-        assert_eq!(bundle.file_count, 2);
-        assert_eq!(bundle.total_bytes, 28);
-        assert_eq!(bundle.staging_path, staging_root.join("bundle_1234567890"));
-        assert!(bundle.import_allowed);
-        assert!(bundle.staging_path.join("bundle.json").is_file());
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::LegacyPlain
+        );
+        assert_eq!(receive_report.bundle, None);
+        assert!(receive_dir.join("bundle").join("bundle.json").is_file());
+        assert!(!staging_root.join("bundle_1234567890").exists());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_control_plain_fallback_keeps_bundle_as_plain_files_only() {
+        let dir = unique_temp_dir("service-encrypted-control-plain-bundle-not-staged");
+        let source_root = create_valid_bundle_source(&dir);
+        let receive_dir = dir.join("receive");
+        let staging_root = dir.join("staging");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let staging_root = staging_root.clone();
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &staging_root,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        send_paths(&endpoint, &[source_root]).unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::LegacyPlain
+        );
+        assert_eq!(receive_report.bundle, None);
+        assert!(receive_dir.join("bundle").join("bundle.json").is_file());
+        assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_session_without_authenticated_identity_keeps_sensitive_bundle_as_plain_files_only()
+    {
+        let dir = unique_temp_dir("service-encrypted-sensitive-bundle-not-staged");
+        let source_root = create_valid_bundle_source(&dir);
+        let receive_dir = dir.join("receive");
+        let staging_root = dir.join("staging");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender = test_identity("neko-device-sender", "Sender Mac");
+        let receiver_identity = test_identity("neko-device-receiver", "Receiver Windows");
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let staging_root = staging_root.clone();
+            let receiver_identity = receiver_identity.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &staging_root,
+                    &receiver_identity,
+                    |_| true,
+                    |_| panic!("pairing should not be handled on encrypted transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        send_plan_with_encrypted_control_and_cancel(&endpoint, plan, &sender, |_| {}, || false)
+            .unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::EncryptedSession
+        );
+        assert_eq!(receive_report.bundle, None);
+        assert!(receive_dir.join("bundle").join("bundle.json").is_file());
+        assert!(!staging_root.join("bundle_1234567890").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn bundle_staging_policy_requires_authenticated_session_for_sensitive_types() {
+        for bundle_type in [
+            BundleType::Skill,
+            BundleType::Session,
+            BundleType::Workspace,
+            BundleType::AgentProfile,
+        ] {
+            assert!(!can_stage_received_bundle_for_import(
+                bundle_type,
+                TransferSecurityMode::LegacyPlain
+            ));
+            assert_eq!(
+                received_bundle_staging_block_reason(
+                    bundle_type,
+                    TransferSecurityMode::LegacyPlain
+                )
+                .map(ReceivedBundleStagingBlockReason::as_str),
+                Some("legacy_plain")
+            );
+            assert!(!can_stage_received_bundle_for_import(
+                bundle_type,
+                TransferSecurityMode::EncryptedSession
+            ));
+            assert_eq!(
+                received_bundle_staging_block_reason(
+                    bundle_type,
+                    TransferSecurityMode::EncryptedSession
+                )
+                .map(ReceivedBundleStagingBlockReason::as_str),
+                Some("sensitive_bundle_requires_authenticated_session")
+            );
+            assert!(can_stage_received_bundle_for_import(
+                bundle_type,
+                TransferSecurityMode::AuthenticatedEncryptedSession
+            ));
+            assert_eq!(
+                received_bundle_staging_block_reason(
+                    bundle_type,
+                    TransferSecurityMode::AuthenticatedEncryptedSession
+                ),
+                None
+            );
+        }
+
+        assert!(!can_stage_received_bundle_for_import(
+            BundleType::ConfigSnapshot,
+            TransferSecurityMode::LegacyPlain
+        ));
+        assert_eq!(
+            received_bundle_staging_block_reason(
+                BundleType::ConfigSnapshot,
+                TransferSecurityMode::LegacyPlain
+            )
+            .map(ReceivedBundleStagingBlockReason::as_str),
+            Some("legacy_plain")
+        );
+        assert!(can_stage_received_bundle_for_import(
+            BundleType::ConfigSnapshot,
+            TransferSecurityMode::EncryptedSession
+        ));
+        assert_eq!(
+            received_bundle_staging_block_reason(
+                BundleType::ConfigSnapshot,
+                TransferSecurityMode::EncryptedSession
+            ),
+            None
+        );
+        assert!(can_stage_received_bundle_for_import(
+            BundleType::ConfigSnapshot,
+            TransferSecurityMode::AuthenticatedEncryptedSession
+        ));
+        assert_eq!(
+            received_bundle_staging_block_reason(
+                BundleType::ConfigSnapshot,
+                TransferSecurityMode::AuthenticatedEncryptedSession
+            ),
+            None
+        );
     }
 
     #[test]
@@ -2165,6 +2369,88 @@ mod tests {
             receive_report.sender_device_id.as_deref(),
             Some("neko-device-sender")
         );
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn authenticated_session_receive_stages_bundle_for_import() {
+        let dir = unique_temp_dir("service-authenticated-bundle-staging");
+        let source_root = create_valid_bundle_source(&dir);
+        let receive_dir = dir.join("receive");
+        let staging_root = dir.join("staging");
+        fs::create_dir_all(&receive_dir).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = Endpoint::tcp("127.0.0.1", listener.local_addr().unwrap().port());
+        let sender_key = DeviceIdentitySigningKey::from_seed([12_u8; 32]);
+        let receiver_key = DeviceIdentitySigningKey::from_seed([13_u8; 32]);
+        let sender =
+            test_identity_with_signing_key("neko-device-sender", "Sender Mac", &sender_key);
+        let receiver_identity = test_identity_with_signing_key(
+            "neko-device-receiver",
+            "Receiver Windows",
+            &receiver_key,
+        );
+
+        let receiver = thread::spawn({
+            let receive_dir = receive_dir.clone();
+            let staging_root = staging_root.clone();
+            let receiver_identity = receiver_identity.clone();
+            let receiver_key = receiver_key.clone();
+            move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                accept_incoming_stream_with_authenticated_control_bundle_staging_and_cancel(
+                    &mut stream,
+                    &receive_dir,
+                    &staging_root,
+                    &receiver_identity,
+                    |binding| {
+                        nekolink_protocol::SignedSessionIdentityBinding::sign(
+                            binding,
+                            &receiver_key,
+                        )
+                        .map_err(protocol_error_to_service)
+                    },
+                    |_| true,
+                    |_| panic!("pairing should not be handled on authenticated transfer path"),
+                    |_| {},
+                    || false,
+                )
+            }
+        });
+
+        let plan = create_transfer_plan(&[source_root]).unwrap();
+        send_plan_with_authenticated_session_and_cancel(
+            &endpoint,
+            plan,
+            &sender,
+            |binding| {
+                nekolink_protocol::SignedSessionIdentityBinding::sign(binding, &sender_key)
+                    .map_err(protocol_error_to_service)
+            },
+            |_| {},
+            || false,
+        )
+        .unwrap();
+        let receive_report = match receiver.join().unwrap().unwrap() {
+            IncomingSessionReport::Transfer(report) => report,
+            IncomingSessionReport::Pairing(_) => panic!("expected transfer report"),
+        };
+        let bundle = receive_report.bundle.expect("bundle should be staged");
+
+        assert_eq!(
+            receive_report.security_mode,
+            TransferSecurityMode::AuthenticatedEncryptedSession
+        );
+        assert_eq!(bundle.bundle_id, "bundle_1234567890");
+        assert_eq!(bundle.bundle_type, BundleType::Skill);
+        assert_eq!(bundle.display_name, "voice_transcribe");
+        assert_eq!(bundle.source_app, "OpenNeko");
+        assert_eq!(bundle.file_count, 2);
+        assert_eq!(bundle.total_bytes, 28);
+        assert_eq!(bundle.staging_path, staging_root.join("bundle_1234567890"));
+        assert!(bundle.import_allowed);
+        assert!(bundle.staging_path.join("bundle.json").is_file());
 
         fs::remove_dir_all(dir).unwrap();
     }

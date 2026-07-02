@@ -147,11 +147,17 @@ Incoming dialog must show:
 
 ## Overwrite Policy
 
-Default:
+Ordinary file receive:
 
 - do not overwrite existing files silently
 - if a name exists, create a unique name such as `file (1).ext`
-- later versions can offer overwrite/skip/rename options
+
+Bundle import:
+
+- default strategy is `reject`
+- `rename` imports into a new destination directory
+- `skip_conflicts` keeps existing files and imports missing files
+- no path silently overwrites an existing imported bundle file
 
 ## Integrity
 
@@ -194,6 +200,8 @@ Show clear transfer states from real wire modes:
 
 Avoid vague states such as "secure". Old history records may not have a recorded transfer mode; in that case the UI should show no security badge instead of guessing.
 
+Plain compatibility is only for ordinary manual file transfer. If a received directory looks like a NekoLink bundle, the legacy plain path keeps it as normal files and does not stage it for import. Bundle staging and local-bridge import are allowed only after an encrypted session path; sensitive upper-layer data such as session, skill, workspace, and agent profile must not rely on `legacy_plain`. Adapters must keep `require_trusted_device=true` for these sensitive bundle types; NekoDrop also rejects local bridge sends that try to bypass that requirement.
+
 ## Local Bridge
 
 The desktop local bridge is a loopback API for local apps. It is not a LAN API and must not be advertised to nearby devices.
@@ -203,14 +211,15 @@ Current desktop behavior:
 - binds only to `127.0.0.1`
 - accepts only `POST /bridge/request`
 - rejects oversized request bodies
-- allows read-only requests for devices, staged bundle details, and transfer status
-- lets local apps request scopes with a short authorization code
-- persists confirmed authorizations locally and restores only unexpired records on restart
+- keeps read requests scoped: `devices.list` requires `device.read`; staged bundle summaries and `bundle.detail` require `bundle.read`; `transfer.status` requires `transfer.status.read`
+- lets local apps request non-duplicated scopes with a short authorization code
+- persists confirmed authorizations locally, restores only unexpired records on restart, and tracks last-used time only for scopes used by a successful response
+- matches authorization by `client_id`, `app_kind`, requested scope, and expiration
 - lets the user list, revoke, and prune local bridge authorizations from Settings
 - keeps `bundle.send` and `bundle.import` behind authorization; authorized requests enter an in-memory pending-action queue that Settings can inspect and remove
 - executes `bundle.import` only into the NekoDrop local import directory; it does not write third-party app directories
 - keeps `bundle.send` behind authorization and trusted-target checks; desktop execution still goes through the existing send path, and result records do not expose local paths
-- lets authorized clients query their own action results without exposing local import paths
+- lets authorized clients observe their own action events and query their own action results without exposing local import paths; action event/result lookup is bound to the same `client_id` and `app_kind`
 
 Loopback access is still not the same as trust. Any future mutating bridge action must keep user confirmation, scoped authorization, and clear UI state.
 
