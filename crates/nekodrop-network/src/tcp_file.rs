@@ -1546,9 +1546,7 @@ fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Neko
     let mut len_bytes = [0_u8; 4];
     stream.read_exact(&mut len_bytes).map_err(|error| {
         if error.kind() == ErrorKind::UnexpectedEof {
-            NekoDropError::Network(
-                "peer closed connection before sending JSON frame length".into(),
-            )
+            NekoDropError::Network("peer closed connection before sending JSON frame length".into())
         } else {
             NekoDropError::Network(format!("failed to read JSON frame length: {error}"))
         }
@@ -1563,9 +1561,7 @@ fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Neko
     let mut payload = vec![0_u8; len];
     stream.read_exact(&mut payload).map_err(|error| {
         if error.kind() == ErrorKind::UnexpectedEof {
-            NekoDropError::Network(
-                "peer closed connection while sending JSON frame payload".into(),
-            )
+            NekoDropError::Network("peer closed connection while sending JSON frame payload".into())
         } else {
             NekoDropError::Network(format!("failed to read JSON frame payload: {error}"))
         }
@@ -2279,8 +2275,7 @@ mod tests {
 
     #[test]
     fn json_frame_reader_reports_peer_close_before_frame_length() {
-        let error = read_json_frame::<serde_json::Value>(&mut Cursor::new(Vec::new()))
-            .unwrap_err();
+        let error = read_json_frame::<serde_json::Value>(&mut Cursor::new(Vec::new())).unwrap_err();
 
         assert!(error
             .to_string()
