@@ -2,10 +2,12 @@ import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { formatBytes } from "../transferProgress";
+import { bundleTypeLabel } from "../bundleState";
 import { platformBadge } from "../platformDisplay";
 import type { IconName } from "./Icon";
 
 type TabType = "transfer" | "agent" | "vlan" | "state";
+type SendMode = "file" | "bundle";
 
 interface ComingSoonCopy {
   mascot: string;
@@ -40,9 +42,18 @@ const COMING_SOON: Record<Exclude<TabType, "transfer">, ComingSoonCopy> = {
 export function TransferZone() {
   const {
     selectedPaths,
-    manualPaths,
     plan,
     scanStatus,
+    manualBundleType,
+    manualBundleSourcePath,
+    manualBundleDisplayName,
+    manualBundleSourceApp,
+    createdManualBundle,
+    setManualBundleType,
+    setManualBundleDisplayName,
+    setManualBundleSourceApp,
+    chooseManualBundleSourceDir,
+    createManualBundleForSend,
     removePath,
     clearQueue,
     pickFiles,
@@ -61,6 +72,7 @@ export function TransferZone() {
   } = useAppContext();
 
   const [activeTab, setActiveTab] = useState<TabType>("transfer");
+  const [sendMode, setSendMode] = useState<SendMode>("file");
 
   const trustedNearbyDevices = nearbyDevices.filter((d) => d.trust_state === "Trusted");
   const selectedDevice =
@@ -133,6 +145,29 @@ export function TransferZone() {
         {/* 1. 文件传输页签 / File Transfer Tab */}
         {activeTab === "transfer" && (
           <div className="tab-pane-content transfer-pane">
+            <div className="send-mode-switch" role="tablist" aria-label="发送类型">
+              <button
+                className={sendMode === "file" ? "send-mode-btn is-active" : "send-mode-btn"}
+                onClick={() => setSendMode("file")}
+                role="tab"
+                type="button"
+              >
+                <Icon name="file" />
+                <span>文件 / 文件夹</span>
+              </button>
+              <button
+                className={sendMode === "bundle" ? "send-mode-btn is-active" : "send-mode-btn"}
+                onClick={() => setSendMode("bundle")}
+                role="tab"
+                type="button"
+              >
+                <Icon name="package" />
+                <span>资料包</span>
+              </button>
+            </div>
+
+            {sendMode === "file" ? (
+              <>
             {/* 连接码输入区（仅在备用码模式下显示） / Connection Code Input */}
             {connectionCodeOpen && !selectedDevice && (
               <div className="connection-code-input-box">
@@ -215,6 +250,72 @@ export function TransferZone() {
                   </div>
                 )}
               </div>
+            )}
+              </>
+            ) : (
+              <section className="manual-bundle-composer">
+                <div className="bundle-composer-header">
+                  <strong>资料包目录</strong>
+                  <span>{manualBundleSourcePath ? manualBundleSourcePath : "把一个目录打包后发送"}</span>
+                </div>
+
+                <div className="bundle-composer-grid">
+                  <label>
+                    <span>类型</span>
+                    <select value={manualBundleType} onChange={(event) => setManualBundleType(event.target.value)}>
+                      <option value="workspace">Workspace</option>
+                      <option value="session">Session</option>
+                      <option value="skill">Skill</option>
+                      <option value="agent_profile">Agent profile</option>
+                      <option value="config_snapshot">Config</option>
+                    </select>
+                  </label>
+                  <label>
+                    <span>名称</span>
+                    <input
+                      value={manualBundleDisplayName}
+                      onChange={(event) => setManualBundleDisplayName(event.target.value)}
+                      placeholder="资料包名称"
+                    />
+                  </label>
+                  <label>
+                    <span>来源</span>
+                    <input
+                      value={manualBundleSourceApp}
+                      onChange={(event) => setManualBundleSourceApp(event.target.value)}
+                      placeholder="NekoDrop"
+                    />
+                  </label>
+                </div>
+
+                <div className="bundle-composer-actions">
+                  <button
+                    className="btn-secondary"
+                    disabled={busy === "pick-folders"}
+                    onClick={chooseManualBundleSourceDir}
+                    type="button"
+                  >
+                    <Icon name="folder" />
+                    选目录
+                  </button>
+                  <button
+                    className="btn-primary"
+                    disabled={!manualBundleSourcePath || busy === "scan"}
+                    onClick={createManualBundleForSend}
+                    type="button"
+                  >
+                    <Icon name="package" />
+                    加入发送
+                  </button>
+                </div>
+
+                {createdManualBundle ? (
+                  <div className="bundle-created-summary">
+                    {createdManualBundle.display_name} · {bundleTypeLabel(createdManualBundle.bundle_type)} ·{" "}
+                    {createdManualBundle.file_count} 个文件 · {formatBytes(createdManualBundle.total_bytes)}
+                  </div>
+                ) : null}
+              </section>
             )}
 
             {/* 底部发送控制栏 / Send Controls */}

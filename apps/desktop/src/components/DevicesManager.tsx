@@ -1,6 +1,7 @@
 import React from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
+import { buildDiscoveryCopy } from "../networkPermissionHints";
 import { platformBadge } from "../platformDisplay";
 import type { TrustedDeviceDto } from "../types";
 
@@ -13,12 +14,15 @@ export function DevicesManager() {
     snapshot,
     trustedDevices,
     nearbyDevices,
+    discoveryStatus,
     forgetTrustedDevice,
     requestPairing,
     pendingPairingRequest,
     respondPairingRequest,
     busy
   } = useAppContext();
+  const localPlatform = snapshot?.device_identity.platform ?? null;
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
 
   const handleForget = async (device: TrustedDeviceDto) => {
     if (window.confirm(`确定要解除对设备 "${device.device_name}" 的信任吗？`)) {
@@ -145,7 +149,9 @@ export function DevicesManager() {
 
         {/* 2. 附近发现的设备列表 / Discovered Nearby Devices */}
         <div className="manager-section">
-          <h3 className="section-title">附近发现的设备 · {nearbyDevices.length}</h3>
+          <h3 className="section-title">
+            附近发现的设备 · {nearbyDevices.length > 0 ? nearbyDevices.length : discoveryCopy.label}
+          </h3>
           {nearbyDevices.length > 0 ? (
             <div className="table-wrapper">
               <table className="standard-table">
@@ -201,7 +207,7 @@ export function DevicesManager() {
           ) : (
             <div className="manager-empty-state">
               <Icon name="devices" className="empty-icon" />
-              <p>未在局域网内发现其他 NekoDrop 节点。请确保对方已开启客户端，并在同一 Wi-Fi 下。</p>
+              <p>{discoveryCopy.emptyBody || "未在局域网内发现其他 NekoDrop 节点。请确保对方已开启客户端，并在同一 Wi-Fi 下。"}</p>
             </div>
           )}
         </div>

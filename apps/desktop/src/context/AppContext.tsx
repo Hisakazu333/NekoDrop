@@ -4,6 +4,12 @@ import { bindWindowDragDrop } from "../dragDrop";
 import { invokeCommand, isTauriRuntime } from "../tauri";
 import { findCurrentRecoverableTransfer } from "../currentTransferRecovery";
 import {
+  bundleImportStrategyLabel,
+  markBundleDeleted,
+  markBundleImportFailed
+} from "../bundleState";
+import { localBridgeStatusLabel } from "../localBridgeState";
+import {
   shouldRunDiagnosticsRefresh,
   REALTIME_REFRESH_INTERVAL_MS,
   shouldRefreshDirectoryOnModeActivation,
@@ -111,12 +117,24 @@ function buildPathPayload(selectedPaths: string[], manualPaths: string): string[
 }
 
 function keepIfEqual<T>(current: T, next: T): T {
-  if (JSON.stringify(current) === JSON.stringify(next)) return current;
-  return next;
+  if (Object.is(current, next)) return current;
+  if (current == null || next == null) return next;
+  return stableJson(current) === stableJson(next) ? current : next;
 }
 
-function resetTransferMetrics(setter: React.Dispatch<React.SetStateAction<TransferMetrics>>) {
-  setter(EMPTY_TRANSFER_METRICS);
+function resetTransferMetrics(
+  setTransferMetrics: (updater: (current: TransferMetrics) => TransferMetrics) => void
+) {
+  setTransferMetrics((current) => keepIfEqual(current, EMPTY_TRANSFER_METRICS));
+}
+
+function stableJson(value: unknown) {
+  return JSON.stringify(value);
+}
+
+function lastPathSegment(path: string) {
+  const normalized = path.replace(/\\/g, "/");
+  return normalized.split("/").filter(Boolean).pop() ?? path;
 }
 
 function isReceiveTransferActivePhase(phase: string): boolean {
@@ -160,6 +178,11 @@ interface AppContextType {
   snapshot: AppSnapshot | null;
   selectedPaths: string[];
   manualPaths: string;
+  manualBundleType: string;
+  manualBundleSourcePath: string;
+  manualBundleDisplayName: string;
+  manualBundleSourceApp: string;
+  createdManualBundle: ManualBundleCreateDto | null;
   connectionCode: string;
   receiveDir: string;
   receivePolicy: ReceivePolicyMode;
@@ -200,6 +223,9 @@ interface AppContextType {
   transferMetrics: TransferMetrics;
 
   setManualPaths: (val: string) => void;
+  setManualBundleType: (val: string) => void;
+  setManualBundleDisplayName: (val: string) => void;
+  setManualBundleSourceApp: (val: string) => void;
   setConnectionCode: (val: string) => void;
   setBindPort: (val: string) => void;
   setDeviceNameInput: (val: string) => void;
@@ -216,6 +242,8 @@ interface AppContextType {
   refreshReceiveState: (options?: { includeDiagnostics?: boolean; includeDirectoryState?: boolean }) => Promise<void>;
   pickFiles: () => Promise<void>;
   pickFolders: () => Promise<void>;
+  chooseManualBundleSourceDir: () => Promise<void>;
+  createManualBundleForSend: () => Promise<void>;
   removePath: (path: string) => void;
   clearQueue: () => void;
   chooseReceiveDir: () => Promise<void>;
@@ -246,7 +274,8 @@ interface AppContextType {
   removeLocalBridgePendingAction: (action: LocalBridgePendingActionDto) => Promise<void>;
   revokeLocalBridgeAuthorization: (auth: LocalBridgeAuthorizationDto, scope: string) => Promise<void>;
   pruneLocalBridgeAuthorizations: () => Promise<void>;
-  importCurrentStagedBundle: (bundle: ReceivedBundleDto) => Promise<void>;
+  importCurrentStagedBundle: (bundle: ReceivedBundleDto, conflictStrategy?: string) => Promise<void>;
+  rollbackCurrentBundle: (bundle: ReceivedBundleDto) => Promise<void>;
   deleteCurrentStagedBundle: (bundle: ReceivedBundleDto) => Promise<void>;
 }
 
@@ -260,6 +289,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [manualPaths, setManualPaths] = useState("");
+  const [manualBundleType, setManualBundleType] = useState("workspace");
+  const [manualBundleSourcePath, setManualBundleSourcePath] = useState("");
+  const [manualBundleDisplayName, setManualBundleDisplayName] = useState("");
+  const [manualBundleSourceApp, setManualBundleSourceApp] = useState("NekoDrop");
+  const [createdManualBundle, setCreatedManualBundle] = useState<ManualBundleCreateDto | null>(null);
   const [connectionCode, setConnectionCode] = useState("");
   const [receiveDir, setReceiveDir] = useState("~/Downloads/NekoDrop");
   const [receivePolicy, setReceivePolicy] = useState<ReceivePolicyMode>("always_ask");
@@ -592,6 +626,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const paths = await invokeCommand<string[]>("select_send_folders");
       await applyPickedPaths(paths);
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function chooseManualBundleSourceDir() {
+    setBusy("pick-folders");
+    setError(null);
+    try {
+      const picked = await invokeCommand<string | null>("select_manual_bundle_source_dir");
+      if (!picked) return;
+      setManualBundleSourcePath(picked);
+      if (!manualBundleDisplayName.trim()) {
+        setManualBundleDisplayName(lastPathSegment(picked));
+      }
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function createManualBundleForSend() {
+    const sourcePath = manualBundleSourcePath.trim();
+    if (!sourcePath) {
+      setError("选择来源目录");
+      return;
+    }
+    setBusy("scan");
+    setError(null);
+    setCreatedManualBundle(null);
+    try {
+      const bundle = await invokeCommand<ManualBundleCreateDto>("create_manual_bundle", {
+        request: {
+          source_path: sourcePath,
+          bundle_type: manualBundleType,
+          display_name: manualBundleDisplayName.trim() || lastPathSegment(sourcePath),
+          source_app: manualBundleSourceApp.trim() || "NekoDrop"
+        }
+      });
+      setCreatedManualBundle(bundle);
+      setToast(`已创建资料包：${bundle.display_name}`);
+      await applyPickedPaths([bundle.staging_path]);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -1089,18 +1168,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const response = await invokeCommand<LocalBridgeResponseDto>("handle_local_bridge_request", {
         requestJson: JSON.stringify({
-          kind: "devices.list",
-          payload: {
+          "kind": "devices.list",
+          "payload": {
             request_id: `settings-self-check-${Date.now()}`,
             trusted_only: true,
-            client: { client_id: "nekodrop.settings", display_name: "NekoDrop Settings" }
+            client: {
+              client_id: "nekodrop.settings",
+              display_name: "NekoDrop Settings"
+            }
           }
         })
       });
       setLocalBridgeCheck(
         response.authorization_code
-          ? `授权就绪 · 授权码 ${response.authorization_code}`
-          : `自测成功 · ${response.devices.length} 台可信设备`
+          ? `${localBridgeStatusLabel(response.status)} · 授权码 ${response.authorization_code}`
+          : `${localBridgeStatusLabel(response.status)} · ${response.devices.length} 台可信设备 · ${response.staged_bundles.length} 个暂存资料包`
       );
       await refreshLocalBridgeStatus();
     } catch (nextError) {
@@ -1176,8 +1258,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       const response = await invokeCommand<LocalBridgeAuthorizationListDto>("prune_local_bridge_authorizations");
       setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
+      setLocalBridgeCheck(response.pruned_count > 0 ? `已清理 ${response.pruned_count} 条过期授权` : "没有过期授权");
       setToast("已清理过期授权");
       await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -1185,13 +1269,57 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  async function importCurrentStagedBundle(bundle: ReceivedBundleDto) {
+  async function importCurrentStagedBundle(bundle: ReceivedBundleDto, conflictStrategy = "reject") {
     setBusy("bundle-import");
     setError(null);
     try {
-      const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", { bundleId: bundle.bundle_id });
+      const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", {
+        request: {
+          bundle_id: bundle.bundle_id,
+          conflict_strategy: conflictStrategy
+        }
+      });
       setStagedBundles((current) => current.map((item) => (item.bundle_id === imported.bundle_id ? imported : item)));
-      setToast(`已导入：${imported.display_name}`);
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: imported };
+      });
+      const strategyLabel = imported.imported_with_strategy
+        ? ` · ${bundleImportStrategyLabel(imported.imported_with_strategy)}`
+        : "";
+      const skipped = imported.import_skipped_file_count > 0 ? `，跳过 ${imported.import_skipped_file_count} 个` : "";
+      setToast(`已导入：${imported.display_name}${skipped}${strategyLabel}`);
+    } catch (nextError) {
+      setStagedBundles((current) =>
+        current.map((item) => (item.bundle_id === bundle.bundle_id ? markBundleImportFailed(item) : item))
+      );
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: markBundleImportFailed(current.bundle) };
+      });
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rollbackCurrentBundle(bundle: ReceivedBundleDto) {
+    setBusy("bundle-import");
+    setError(null);
+    try {
+      const rolledBack = await invokeCommand<ReceivedBundleDto>("rollback_imported_bundle", {
+        request: {
+          bundle_id: bundle.bundle_id
+        }
+      });
+      setStagedBundles((current) =>
+        current.map((item) => (item.bundle_id === bundle.bundle_id ? rolledBack : item))
+      );
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: rolledBack };
+      });
+      setToast(`已撤回：${rolledBack.display_name}`);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -1205,6 +1333,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
     try {
       await invokeCommand<boolean>("delete_staged_bundle", { bundleId: bundle.bundle_id });
       setStagedBundles((current) => current.filter((item) => item.bundle_id !== bundle.bundle_id));
+      setReceiveReport((current) => {
+        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
+        return { ...current, bundle: markBundleDeleted(current.bundle) };
+      });
       setToast("已删除暂存资料包");
     } catch (nextError) {
       setError(errorMessage(nextError));
@@ -1221,6 +1353,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     snapshot,
     selectedPaths,
     manualPaths,
+    manualBundleType,
+    manualBundleSourcePath,
+    manualBundleDisplayName,
+    manualBundleSourceApp,
+    createdManualBundle,
     connectionCode,
     receiveDir,
     receivePolicy,
@@ -1261,6 +1398,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     transferMetrics,
 
     setManualPaths,
+    setManualBundleType,
+    setManualBundleDisplayName,
+    setManualBundleSourceApp,
     setConnectionCode,
     setBindPort,
     setDeviceNameInput,
@@ -1277,6 +1417,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     refreshReceiveState,
     pickFiles,
     pickFolders,
+    chooseManualBundleSourceDir,
+    createManualBundleForSend,
     removePath,
     clearQueue,
     chooseReceiveDir,
@@ -1307,6 +1449,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     revokeLocalBridgeAuthorization,
     pruneLocalBridgeAuthorizations,
     importCurrentStagedBundle,
+    rollbackCurrentBundle,
     deleteCurrentStagedBundle
   };
 

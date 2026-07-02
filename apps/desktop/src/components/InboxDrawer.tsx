@@ -1,6 +1,12 @@
 import React from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
+import {
+  bundleCanUseImportStrategy,
+  bundleImportPlanLine,
+  bundleImportStatusView,
+  bundleTypeLabel
+} from "../bundleState";
 import { formatBytes } from "../transferProgress";
 import type { LocalBridgePendingActionDto, ReceivedBundleDto } from "../types";
 
@@ -19,15 +25,15 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
     stagedBundles,
     removeLocalBridgePendingAction,
     importCurrentStagedBundle,
+    rollbackCurrentBundle,
     deleteCurrentStagedBundle,
-    error,
     setError
   } = useAppContext();
 
   if (!isOpen) return null;
 
   // 待处理任务总数 / Total pending notifications count
-  const pendingBundles = stagedBundles.filter((b) => b.staging_status === "saved");
+  const pendingBundles = stagedBundles.filter((b) => b.staging_status !== "deleted" && b.staging_status !== "expired");
   const totalCount = localBridgePendingActions.length + pendingBundles.length;
 
   const handleAction = async (action: LocalBridgePendingActionDto, accept: boolean) => {
@@ -38,9 +44,17 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
     }
   };
 
-  const handleImportBundle = async (bundle: ReceivedBundleDto) => {
+  const handleImportBundle = async (bundle: ReceivedBundleDto, conflictStrategy?: string) => {
     try {
-      await importCurrentStagedBundle(bundle);
+      await importCurrentStagedBundle(bundle, conflictStrategy);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleRollbackBundle = async (bundle: ReceivedBundleDto) => {
+    try {
+      await rollbackCurrentBundle(bundle);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -107,31 +121,67 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
               ))}
 
               {/* 2. 未导入的暂存资料包 / Staged Bundles */}
-              {pendingBundles.map((bundle) => (
-                <div key={bundle.bundle_id} className="drawer-card bundle-card">
-                  <div className="card-tag bundle-tag">暂存资料包</div>
-                  <h4 className="card-title">{bundle.display_name}</h4>
-                  <p className="card-desc">
-                    来源应用: {bundle.source_app} · 大小: {formatBytes(bundle.total_bytes)}
-                  </p>
-                  <div className="card-actions">
-                    <button
-                      className="btn-pill btn-reject"
-                      onClick={() => handleDeleteBundle(bundle)}
-                      type="button"
-                    >
-                      删除
-                    </button>
-                    <button
-                      className="btn-pill btn-accept"
-                      onClick={() => handleImportBundle(bundle)}
-                      type="button"
-                    >
-                      导入
-                    </button>
+              {pendingBundles.map((bundle) => {
+                const importStatus = bundleImportStatusView(bundle);
+                const importPlanLine = bundleImportPlanLine(bundle);
+                return (
+                  <div key={bundle.bundle_id} className="drawer-card bundle-card">
+                    <div className="card-tag bundle-tag">暂存资料包</div>
+                    <h4 className="card-title">{bundle.display_name}</h4>
+                    <p className="card-desc">
+                      {bundleTypeLabel(bundle.bundle_type)} · 来源应用: {bundle.source_app} · 大小:{" "}
+                      {formatBytes(bundle.total_bytes)}
+                    </p>
+                    <p className="card-desc">{importStatus.detail}</p>
+                    {importPlanLine ? <p className="card-desc">{importPlanLine}</p> : null}
+                    <div className="card-actions">
+                      <button
+                        className="btn-pill btn-reject"
+                        onClick={() => handleDeleteBundle(bundle)}
+                        type="button"
+                      >
+                        删除
+                      </button>
+                      {bundle.can_import_now ? (
+                        <button
+                          className="btn-pill btn-accept"
+                          onClick={() => handleImportBundle(bundle)}
+                          type="button"
+                        >
+                          导入
+                        </button>
+                      ) : null}
+                      {!bundle.can_import_now && bundleCanUseImportStrategy(bundle, "rename") ? (
+                        <button
+                          className="btn-pill btn-accept"
+                          onClick={() => handleImportBundle(bundle, "rename")}
+                          type="button"
+                        >
+                          重命名
+                        </button>
+                      ) : null}
+                      {!bundle.can_import_now && bundleCanUseImportStrategy(bundle, "skip_conflicts") ? (
+                        <button
+                          className="btn-pill btn-accept"
+                          onClick={() => handleImportBundle(bundle, "skip_conflicts")}
+                          type="button"
+                        >
+                          跳过冲突
+                        </button>
+                      ) : null}
+                      {bundle.staging_status === "imported" && bundle.can_rollback_now ? (
+                        <button
+                          className="btn-pill btn-accept"
+                          onClick={() => handleRollbackBundle(bundle)}
+                          type="button"
+                        >
+                          撤回
+                        </button>
+                      ) : null}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

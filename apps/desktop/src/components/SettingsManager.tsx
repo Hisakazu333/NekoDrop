@@ -1,6 +1,15 @@
 import React from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
+import {
+  localBridgeActionResultLifecycleView,
+  localBridgeActionResultSummary,
+  localBridgePendingActionStateLine,
+  localBridgePendingActionSummary,
+  localBridgePendingActionTitle,
+  localBridgeRuntimeStatusLine,
+  localBridgeScopeLabel
+} from "../localBridgeState";
 
 const RECEIVE_POLICY_OPTIONS = [
   { value: "always_ask", label: "需要每次询问" },
@@ -27,17 +36,21 @@ export function SettingsManager() {
     saveDeviceName,
     localBridgeStatus,
     localBridgeAuthorizations,
+    localBridgePendingActions,
+    localBridgeActionResults,
     localBridgeCheck,
     localBridgeAuthorizationCode,
     setLocalBridgeAuthorizationCode,
     runLocalBridgeSelfCheck,
     confirmLocalBridgeAuthorization,
+    removeLocalBridgePendingAction,
     revokeLocalBridgeAuthorization,
     pruneLocalBridgeAuthorizations,
     busy,
     appearance,
     setAppearance
   } = useAppContext();
+  const localBridgeRuntimeLine = localBridgeRuntimeStatusLine(localBridgeStatus);
 
   return (
     <div className="manager-pane settings-manager">
@@ -157,18 +170,19 @@ export function SettingsManager() {
 
               <div className="form-item">
                 <label htmlFor="receive-policy">未配对设备接收策略</label>
-                <select
-                  id="receive-policy"
-                  value={receivePolicy}
-                  onChange={(e) => updateReceivePolicy(e.target.value as any)}
-                  disabled={busy === "receive-policy"}
-                >
+                <div className="policy-segment" id="receive-policy">
                   {RECEIVE_POLICY_OPTIONS.map((opt) => (
-                    <option key={opt.value} value={opt.value}>
+                    <button
+                      key={opt.value}
+                      className={receivePolicy === opt.value ? "is-active" : ""}
+                      onClick={() => updateReceivePolicy(opt.value as any)}
+                      disabled={busy === "receive-policy"}
+                      type="button"
+                    >
                       {opt.label}
-                    </option>
+                    </button>
                   ))}
-                </select>
+                </div>
               </div>
             </div>
           </div>
@@ -191,6 +205,7 @@ export function SettingsManager() {
               <div className="status-metric">
                 <span className="metric-label">接口监听端口</span>
                 <strong className="metric-val">{localBridgeStatus?.port || "未启用"}</strong>
+                <small className="metric-subline" title={localBridgeRuntimeLine}>{localBridgeRuntimeLine}</small>
               </div>
               <div className="status-metric">
                 <span className="metric-label">外部已授权应用</span>
@@ -242,6 +257,63 @@ export function SettingsManager() {
               </div>
             </div>
 
+            {/* 待执行动作与最近结果 / Pending actions and recent action results */}
+            <div className="local-bridge-work-queue">
+              <div className="queue-column">
+                <h4>待执行</h4>
+                {localBridgePendingActions.length > 0 ? (
+                  <div className="local-bridge-list">
+                    {localBridgePendingActions.map((action) => (
+                      <div className="console-row" key={action.request_id}>
+                        <div className="console-copy">
+                          <span title={localBridgePendingActionTitle(action)}>
+                            {action.client_display_name} · {localBridgePendingActionSummary(action)}
+                          </span>
+                          <small>{localBridgePendingActionStateLine(action)}</small>
+                        </div>
+                        <button
+                          className="btn-text-muted"
+                          disabled={busy === "open"}
+                          onClick={() => removeLocalBridgePendingAction(action)}
+                          type="button"
+                        >
+                          移除
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="clients-empty">暂无待执行</div>
+                )}
+              </div>
+
+              <div className="queue-column">
+                <h4>执行结果</h4>
+                {localBridgeActionResults.length > 0 ? (
+                  <div className="local-bridge-list">
+                    {localBridgeActionResults.slice(0, 5).map((result) => {
+                      const lifecycle = localBridgeActionResultLifecycleView(result);
+                      return (
+                        <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
+                          <div className="console-copy">
+                            <span title={result.message}>
+                              {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                            </span>
+                            <small>{lifecycle.detail}</small>
+                          </div>
+                          <span className={`local-bridge-result-status is-${lifecycle.tone}`}>
+                            {lifecycle.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="clients-empty">暂无结果</div>
+                )}
+              </div>
+            </div>
+
             {/* 已授权外部客户端列表 / Authorized Clients */}
             <div className="authorized-clients-section">
               <div className="clients-header">
@@ -268,7 +340,7 @@ export function SettingsManager() {
                       <div className="client-scopes">
                         {auth.scopes.map((scope) => (
                           <div key={scope} className="scope-tag">
-                            <span>{scope}</span>
+                            <span>{localBridgeScopeLabel(scope)}</span>
                             <button
                               className="btn-scope-revoke"
                               onClick={() => revokeLocalBridgeAuthorization(auth, scope)}

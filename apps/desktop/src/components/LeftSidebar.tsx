@@ -11,6 +11,7 @@ import type { DeviceDto, TrustedDeviceDto } from "../types";
  */
 export function LeftSidebar() {
   const {
+    snapshot,
     nearbyDevices,
     trustedDevices,
     selectedDeviceId,
@@ -28,7 +29,8 @@ export function LeftSidebar() {
   const [trustedExpanded, setTrustedExpanded] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
 
-  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length);
+  const localPlatform = snapshot?.device_identity.platform ?? null;
+  const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
 
   // 过滤设备列表 / Filter devices based on search query
   const filteredNearby = nearbyDevices.filter((d) =>
