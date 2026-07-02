@@ -205,6 +205,16 @@ textarea {
   border-bottom: 1px solid var(--border-color);
   z-index: 100;
   flex-shrink: 0;
+  /* Overlay 无边框窗口靠此实现整条标题栏可拖动 / drag the frameless window */
+  -webkit-app-region: drag;
+}
+
+/* 标题栏内的可交互控件不参与拖动，否则点不动 / interactive controls must opt out */
+.app-titlebar button,
+.app-titlebar input,
+.app-titlebar select,
+.app-titlebar a {
+  -webkit-app-region: no-drag;
 }
 
 .titlebar-mac-spacer {
@@ -1167,6 +1177,12 @@ html[data-theme="dark"] .connection-code-input-box {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.active-message {
+  font-size: 12px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+  word-break: break-word;
 }
 
 .active-progress-stats {

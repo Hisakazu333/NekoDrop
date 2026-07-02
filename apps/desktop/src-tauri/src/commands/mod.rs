@@ -5984,6 +5984,15 @@ fn friendly_transfer_error(error: &str) -> String {
     if lower.contains("transfer cancelled") {
         return "传输已取消".to_string();
     }
+    if lower.contains("peer closed connection before sending json frame")
+        || lower.contains("peer closed connection while sending json frame")
+        || lower.contains("failed to read json frame length")
+        || lower.contains("failed to read json frame payload")
+        || lower.contains("failed to fill whole buffer")
+        || lower.contains("unexpected eof")
+    {
+        return "对方连接已中断。请确认对方 NekoDrop 正在运行、收件已开启；如果设备显示离线，请刷新附近设备或重新复制连接码后再发送。".to_string();
+    }
     if lower.contains("insufficient receive space") || lower.contains("disk full") {
         return "接收目录所在磁盘空间不足。请清理空间，或在设置里选择另一个接收目录后重试。"
             .to_string();
@@ -6096,6 +6105,16 @@ mod tests {
         );
         assert!(timeout.contains("连接超时"));
         assert!(timeout.contains("防火墙"));
+    }
+
+    #[test]
+    fn friendly_transfer_error_explains_peer_close_before_decision() {
+        let message = friendly_transfer_error(
+            "network error: failed to read JSON frame length: failed to fill whole buffer",
+        );
+
+        assert!(message.contains("对方连接已中断"));
+        assert!(message.contains("重新复制连接码"));
     }
 
     #[test]

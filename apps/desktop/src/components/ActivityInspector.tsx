@@ -1,7 +1,7 @@
 import React from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
-import { formatBytes } from "../transferProgress";
+import { formatBytes, shouldShowActiveTransferBar } from "../transferProgress";
 
 /**
  * 格式化传输速率 / Format transfer speed
@@ -40,17 +40,15 @@ export function ActivityInspector() {
   } = useAppContext();
 
   // 判断是否处于活跃传输状态 / Check if there is an active transfer
-  const isActive =
-    transferStatus &&
-    (transferStatus.phase === "transferring" ||
-      transferStatus.phase === "connecting" ||
-      transferStatus.phase === "verifying");
+  const isActive = Boolean(transferStatus && shouldShowActiveTransferBar(transferStatus));
 
   const progressPercent = transferStatus
     ? Math.round((transferStatus.bytes_transferred / transferStatus.total_bytes) * 100) || 0
     : 0;
 
   const isReceiving = transferStatus?.direction === "receive";
+  const canCancelActiveTransfer =
+    transferStatus && !["completed", "failed", "cancelled", "closed", "declined", "expired"].includes(transferStatus.phase);
 
   return (
     <section className="activity-inspector">
@@ -74,6 +72,7 @@ export function ActivityInspector() {
             <div className="active-filename" title={transferStatus.root_name ?? undefined}>
               {transferStatus.root_name}
             </div>
+            <div className="active-message">{transferStatus.message}</div>
 
             <div className="active-progress-stats">
               <span>
@@ -89,14 +88,16 @@ export function ActivityInspector() {
 
             <div className="active-eta-cancel">
               <span className="active-eta">剩余 {formatEta(transferMetrics.etaSeconds)}</span>
-              <button
-                className="btn-cancel-transfer"
-                onClick={cancelCurrentTransfer}
-                disabled={busy === "cancel-transfer"}
-                type="button"
-              >
-                取消
-              </button>
+              {canCancelActiveTransfer && (
+                <button
+                  className="btn-cancel-transfer"
+                  onClick={cancelCurrentTransfer}
+                  disabled={busy === "cancel-transfer"}
+                  type="button"
+                >
+                  取消
+                </button>
+              )}
             </div>
           </div>
         ) : (

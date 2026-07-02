@@ -56,7 +56,8 @@ export function TransferZone() {
     connectionCode,
     setConnectionCode,
     connectionCodeOpen,
-    setConnectionCodeOpen
+    setConnectionCodeOpen,
+    transferStatus
   } = useAppContext();
 
   const [activeTab, setActiveTab] = useState<TabType>("transfer");
@@ -69,6 +70,20 @@ export function TransferZone() {
 
   const totalPaths = selectedPaths.length;
   const canSend = totalPaths > 0 && !busy && (Boolean(selectedDevice) || connectionCode.trim().length > 0);
+  const sendButtonLabel =
+    busy === "send"
+      ? transferStatus?.phase === "awaiting_approval"
+        ? "等待对方确认..."
+        : transferStatus?.phase === "connecting"
+        ? "正在连接..."
+        : transferStatus?.phase === "transferring"
+        ? "正在发送..."
+        : "正在发送..."
+      : selectedDevice
+      ? `发送至 ${selectedDevice.name}`
+      : connectionCode.trim()
+      ? "通过连接码发送"
+      : "请选择接收目标";
 
   const tabs: { id: TabType; icon: IconName; label: string; soon: boolean }[] = [
     { id: "transfer", icon: "upload", label: "文件传输", soon: false },
@@ -211,13 +226,7 @@ export function TransferZone() {
                 type="button"
               >
                 <Icon name="send" />
-                <span>
-                  {selectedDevice
-                    ? `发送至 ${selectedDevice.name}`
-                    : connectionCode.trim()
-                    ? "通过连接码发送"
-                    : "请选择接收目标"}
-                </span>
+                <span>{sendButtonLabel}</span>
               </button>
             </div>
           </div>
