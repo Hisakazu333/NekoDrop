@@ -2,6 +2,10 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  bundleImportPlanLine,
+  bundleImportStatusView,
+  bundleCanUseImportStrategy,
+  bundleImportStrategyLabel,
   bundleStatusLabel,
   markBundleDeleted,
   markBundleImportFailed,
@@ -23,6 +27,22 @@ function bundle(overrides: Partial<ReceivedBundleDto> = {}): ReceivedBundleDto {
     staging_status: "saved",
     can_import_now: true,
     import_path: null,
+    import_destination: "/tmp/imports/bundle_123",
+    import_conflict: false,
+    import_blocking_reason: null,
+    import_plan_files: [],
+    import_conflict_count: 0,
+    import_conflict_strategies: ["reject"],
+    imported_with_strategy: null,
+    import_skipped_file_count: 0,
+    import_receipt_path: null,
+    has_import_receipt: false,
+    imported_manifest_paths: [],
+    skipped_manifest_paths: [],
+    rollback_file_count: 0,
+    can_rollback_now: false,
+    can_request_rollback: false,
+    rollback_blocking_reason: null,
     ...overrides
   };
 }
@@ -47,6 +67,12 @@ test("labels deleted staged bundles without hiding the receive history", () => {
   assert.equal(deleted.staging_status, "deleted");
   assert.equal(deleted.can_import_now, false);
   assert.equal(bundleStatusLabel(deleted), "已删除");
+  assert.deepEqual(bundleImportStatusView(deleted), {
+    label: "已删除",
+    detail: "暂存已删除，历史记录保留",
+    tone: "muted",
+    nextAction: "none"
+  });
   assert.equal(receiveBundleStatusLabel(report(deleted)), "已删除");
   assert.equal(receiveBundleImportHint(deleted), "暂存已删除，历史记录保留");
 });
@@ -56,6 +82,7 @@ test("keeps failed imports retryable when the bundle allows import", () => {
 
   assert.equal(failed.staging_status, "import_failed");
   assert.equal(failed.can_import_now, true);
+  assert.equal(bundleImportStatusView(failed).nextAction, "retry_import");
   assert.equal(receiveBundleStatusLabel(report(failed)), "导入失败");
   assert.equal(receiveBundleImportHint(failed), "导入没有完成，暂存仍可重试");
 });
@@ -68,4 +95,147 @@ test("labels expired staged bundles as cleaned up", () => {
 
   assert.equal(receiveBundleStatusLabel(report(expired)), "已过期");
   assert.equal(receiveBundleImportHint(expired), "暂存已过期清理");
+});
+
+test("labels import conflicts before the user retries import", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_blocking_reason: "destination_exists"
+  });
+
+  assert.equal(bundleStatusLabel(conflicted), "已存在");
+  assert.equal(bundleImportStatusView(conflicted).nextAction, "choose_conflict_strategy");
+  assert.equal(receiveBundleImportHint(conflicted), "同名资料已存在，可重命名导入");
+  assert.equal(markBundleImportFailed(conflicted).can_import_now, false);
+});
+
+test("labels import conflicts with conflicting file counts", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_blocking_reason: "destination_exists",
+    import_conflict_count: 2
+  });
+
+  assert.equal(receiveBundleImportHint(conflicted), "有 2 个目标文件已存在，可重命名或跳过冲突");
+});
+
+test("labels import conflict strategies for compact receive actions", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_conflict_strategies: ["reject", "rename", "skip_conflicts"]
+  });
+
+  assert.equal(bundleCanUseImportStrategy(conflicted, "rename"), true);
+  assert.equal(bundleCanUseImportStrategy(conflicted, "skip_conflicts"), true);
+  assert.equal(bundleImportStrategyLabel("rename"), "重命名");
+  assert.equal(bundleImportStrategyLabel("skip_conflicts"), "跳过冲突");
+});
+
+test("summarizes renamed imports and skipped conflict counts", () => {
+  const imported = bundle({
+    staging_status: "imported",
+    import_path: "/tmp/imports/bundle_123-2",
+    imported_with_strategy: "skip_conflicts",
+    import_skipped_file_count: 2,
+    import_receipt_path: "/tmp/imports/.nekodrop_import_receipts/bundle_123-1.json",
+    has_import_receipt: true,
+    rollback_file_count: 1,
+    can_rollback_now: true,
+    can_request_rollback: true
+  });
+
+  const view = bundleImportStatusView(imported);
+  assert.equal(view.label, "已导入");
+  assert.equal(view.tone, "success");
+  assert.equal(view.nextAction, "request_rollback");
+  assert.equal(view.detail, "已导入 · 跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
+  assert.doesNotMatch(view.detail, /\/tmp\/imports/);
+  assert.equal(receiveBundleImportHint(imported), "已导入 · 跳过 2 个冲突 · 跳过冲突 · 可撤回 1 个");
+});
+
+test("summarizes imported bundle rollback state without a local receipt path", () => {
+  const imported = bundle({
+    staging_status: "imported",
+    import_path: null,
+    import_receipt_path: null,
+    has_import_receipt: true,
+    rollback_file_count: 1,
+    can_rollback_now: true,
+    can_request_rollback: true
+  });
+
+  assert.equal(receiveBundleImportHint(imported), "已导入 · 可撤回 1 个");
+});
+
+test("summarizes import plan file counts for importable bundles", () => {
+  const importable = bundle({
+    import_plan_files: [
+      {
+        manifest_path: "sessions/main.json",
+        destination_path: "/tmp/imports/sessions/main.json",
+        size: 12,
+        sha256: "a".repeat(64),
+        destination_exists: false
+      },
+      {
+        manifest_path: "workspace/state.json",
+        destination_path: "/tmp/imports/workspace/state.json",
+        size: 30,
+        sha256: "b".repeat(64),
+        destination_exists: false
+      }
+    ]
+  });
+
+  assert.equal(bundleImportPlanLine(importable), "将导入 2 个文件");
+});
+
+test("does not expose local import destinations in compact plan lines", () => {
+  const planned = bundle({
+    import_destination: "/tmp/imports/private/session"
+  });
+
+  assert.equal(bundleImportPlanLine(planned), "已生成导入计划");
+});
+
+test("summarizes concrete import plan conflicts before import", () => {
+  const conflicted = bundle({
+    can_import_now: false,
+    import_conflict: true,
+    import_blocking_reason: "destination_exists",
+    import_conflict_count: 3,
+    import_plan_files: [
+      {
+        manifest_path: "sessions/main.json",
+        destination_path: "/tmp/imports/sessions/main.json",
+        size: 12,
+        sha256: "a".repeat(64),
+        destination_exists: true
+      },
+      {
+        manifest_path: "workspace/state.json",
+        destination_path: "/tmp/imports/workspace/state.json",
+        size: 30,
+        sha256: "b".repeat(64),
+        destination_exists: true
+      },
+      {
+        manifest_path: "skills/code.json",
+        destination_path: "/tmp/imports/skills/code.json",
+        size: 9,
+        sha256: "c".repeat(64),
+        destination_exists: true
+      }
+    ]
+  });
+
+  assert.equal(bundleImportPlanLine(conflicted), "冲突：sessions/main.json、workspace/state.json 等");
+});
+
+test("does not show import plan lines for closed staged bundle states", () => {
+  assert.equal(bundleImportPlanLine(bundle({ staging_status: "imported" })), null);
+  assert.equal(bundleImportPlanLine(bundle({ staging_status: "deleted" })), null);
 });

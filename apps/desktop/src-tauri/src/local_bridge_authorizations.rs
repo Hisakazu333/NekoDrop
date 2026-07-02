@@ -17,6 +17,8 @@ struct PersistedLocalBridgeAuthorizationRecord {
     app_kind: Option<String>,
     scopes: Vec<LocalBridgePermissionScope>,
     granted_at_ms: u128,
+    #[serde(default)]
+    last_used_at_ms: Option<u128>,
     expires_at_ms: Option<u128>,
 }
 
@@ -83,8 +85,9 @@ fn normalize_authorizations(
     records.retain(|record| validate_local_bridge_authorization(record, now_ms).is_ok());
     records.sort_by(|left, right| {
         right
-            .granted_at_ms
-            .cmp(&left.granted_at_ms)
+            .last_used_at_ms
+            .cmp(&left.last_used_at_ms)
+            .then_with(|| right.granted_at_ms.cmp(&left.granted_at_ms))
             .then_with(|| left.client_id.cmp(&right.client_id))
     });
     records
@@ -99,6 +102,13 @@ fn validate_local_bridge_authorization(
     }
     if record.display_name.trim().is_empty() {
         return Err("本机接入授权缺少 display_name".to_string());
+    }
+    if record
+        .app_kind
+        .as_deref()
+        .is_some_and(|app_kind| app_kind.trim().is_empty())
+    {
+        return Err("本机接入授权 app_kind 不能为空".to_string());
     }
     if record.scopes.is_empty() {
         return Err("本机接入授权缺少 scope".to_string());
@@ -127,6 +137,7 @@ fn authorization_from_persisted(
         app_kind: record.app_kind,
         scopes: record.scopes,
         granted_at_ms: record.granted_at_ms,
+        last_used_at_ms: record.last_used_at_ms.unwrap_or(record.granted_at_ms),
         expires_at_ms: record.expires_at_ms,
     })
 }
@@ -141,6 +152,7 @@ fn authorization_to_persisted(
         app_kind: record.app_kind,
         scopes: record.scopes,
         granted_at_ms: record.granted_at_ms,
+        last_used_at_ms: Some(record.last_used_at_ms),
         expires_at_ms: record.expires_at_ms,
     }
 }
@@ -178,6 +190,37 @@ mod tests {
 
         assert_eq!(loaded, records);
         assert_eq!(value[0]["schema_version"], 1);
+        assert_eq!(value[0]["last_used_at_ms"], 1_000);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn loading_local_bridge_authorizations_defaults_missing_last_used_to_granted_at() {
+        let dir = unique_temp_dir("local-bridge-authorizations-legacy-last-used");
+        let path = dir.join("local_bridge_authorizations.json");
+        fs::write(
+            &path,
+            r#"[
+  {
+    "schema_version": 1,
+    "client_id": "legacy-app",
+    "display_name": "Legacy App",
+    "app_kind": "generic",
+    "scopes": ["bundle.send"],
+    "granted_at_ms": 1000,
+    "expires_at_ms": 10000
+  }
+]"#,
+        )
+        .unwrap();
+
+        let loaded = load_local_bridge_authorizations_at(&path, 2_000).unwrap();
+
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].client_id, "legacy-app");
+        assert_eq!(loaded[0].granted_at_ms, 1_000);
+        assert_eq!(loaded[0].last_used_at_ms, 1_000);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -246,6 +289,7 @@ mod tests {
             app_kind: Some("generic".to_string()),
             scopes: scopes.to_vec(),
             granted_at_ms,
+            last_used_at_ms: granted_at_ms,
             expires_at_ms,
         }
     }

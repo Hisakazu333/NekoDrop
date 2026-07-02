@@ -87,8 +87,8 @@ v1 的判断标准是：多端可以传上层数据，但不会因为收到一�
 
 | 能力 | 为什么需要 | 当前策略 |
 | --- | --- | --- |
-| 加密文件流 | bundle 可能包含 session、workspace 或 agent profile，payload 不能长期依赖明文 TCP | encrypted session 路径已有加密 file frames 和接收端 streaming 解密；敏感 bundle 进入主流程前还要完成长期身份认证和导入确认 |
-| 长期身份密钥认证 | 当前 encrypted control 还不是完整长期设备身份认证 | sender 字段只用于展示，真实身份以后绑定 verified session |
+| 加密文件流 | bundle 可能包含 session、workspace 或 agent profile，payload 不能依赖明文 TCP | encrypted session 路径已有加密 file frames 和接收端 streaming 解密；敏感 bundle 只允许 authenticated encrypted session 进入 staging / import |
+| 长期身份密钥认证 | bundle 不能只信任自报 sender | 桌面传输主线已交换并验签 session identity；sender 字段用于展示，真实信任来自 verified session |
 | replay protection | 防止旧 bundle 或旧控制帧被重放 | v1 记录 `bundle_id` 和 `created_at`，后续加 nonce / replay window |
 | bundle 版本迁移 | v1、v2 需要可兼容演进 | `schema` 固定为 `nekolink.bundle.v1`，未知 schema 拒绝导入 |
 | bundle 签名 | 公开分发 skill 或跨设备转发时，不能只依赖传输 session | v1 不做签名，但保留 source app、sender、checksum 边界 |
@@ -99,7 +99,7 @@ v1 的判断标准是：多端可以传上层数据，但不会因为收到一�
 | 多端冲突处理 | 两台设备可能有同名 workspace、session 或 skill | v1 只做保存和预览，不自动合并 |
 | iroh / relay / P2P | 不同网络下传 bundle | transport 阶段接入，不改变 bundle 语义 |
 
-这些缺口不应该现在全部塞进 v1。v1 先把“可识别、可校验、可保存、不可自动导入”的闭环做稳。
+这些缺口不应该现在全部塞进 v1。v1 先把“可识别、可校验、可保存、可确认导入、可保守撤回”的闭环做稳。
 
 ## `bundle.json`
 
@@ -292,6 +292,7 @@ bridge 可以做：
   - `bundle.send`
   - `bundle.detail`
   - `bundle.import`
+  - `bundle.rollback`
   - `transfer.status`
   - `events.poll`
   - `actions.results`
@@ -301,7 +302,7 @@ bridge 可以做：
   - `action.updated`
   - `transfer.updated`
 
-这些是本机 API 的稳定 JSON 模型。桌面端已有只绑定 `127.0.0.1` 的 localhost runtime，可以处理只读请求、授权申请和授权后的事件轮询；已授权的 `bundle.send`、`bundle.import` 会进入桌面端内存待执行队列，设置页可以查看并移除这些待执行动作。后台 worker 会按 FIFO 自动消费队列。`bundle.send` 执行前会做 preflight，并交给现有发送主线；执行要求有目标设备，并按可信设备和 bundle 校验结果决定是否继续。`bundle.import` 会把 staged bundle 导入 NekoDrop 本机导入区，并记录成功或失败结果；同名导入不会覆盖，结果会标记为 `bundle_import_conflict`。动作生命周期会通过 `action.updated` 暴露 `queued`、`running`、`succeeded`、`failed`、`conflict`、`cancelled`。
+这些是本机 API 的稳定 JSON 模型。桌面端已有只绑定 `127.0.0.1` 的 localhost runtime，可以处理只读请求、授权申请和授权后的事件轮询；已授权的 `bundle.send`、`bundle.import`、`bundle.rollback` 会进入桌面端内存待执行队列，设置页可以查看并移除这些待执行动作。后台 worker 会按 FIFO 自动消费队列。`bundle.send` 执行前会做 preflight，并交给现有发送主线；执行要求有目标设备，并按可信设备和 bundle 校验结果决定是否继续。`bundle.import` 会把 staged bundle 导入 NekoDrop 本机导入区，默认拒绝覆盖，也支持 `rename` 和 `skip_conflicts`。导入成功会写入本机 import receipt，记录目标目录、策略、实际导入和跳过的 payload 路径；storage 层可以基于 receipt 生成回滚计划，也能执行保守撤回。撤回只删除 receipt 中本次导入的文件；`skip_conflicts` 跳过的既有文件不会被删除。冲突仍会标记为 `bundle_import_conflict`。动作生命周期会通过 `action.updated` 暴露 `queued`、`running`、`succeeded`、`failed`、`conflict`、`cancelled`。
 
 bridge 请求可以带可选 `client`：
 
@@ -325,7 +326,7 @@ bridge 请求可以带可选 `client`：
 
 授权请求必须带 `client`、`requested_scopes`、`reason`，可以带 `ttl_seconds`。这一步只定义申请模型，不发 token，也不写入授权记录。
 
-桌面端现在有一个只绑定 `127.0.0.1` 的 localhost runtime，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；设置页可以确认授权码，runtime 会记录该 client 的限时权限并写入本机授权文件，下次启动只恢复未过期授权。设置页也可以查看、撤销和清理这些本机授权。真实发送/接收主流程会向 runtime 内存队列写入 `transfer.updated`，收到 staged bundle 时会写入 `bundle.received`。已授权 client 可以通过 `events.poll` 轮询这些事件：`bundle.read` 可读 `bundle.received`，`transfer.status.read` 可读 `transfer.updated`，`bundle.send` 可读 `bundle.send.preflight` 和发送动作的 `action.updated`，`bundle.import.request` 可读导入动作的 `action.updated`；`timeout_ms` 可用于短等待，默认仍是快照。已授权 client 调用 `bundle.send` / `bundle.import` 时，runtime 会把请求放入内存待执行队列，后台 worker 会自动执行；设置页可以查看待授权、待执行、最近结果和失败原因，也可以移除队列项。`bundle.send` 会 preflight 后发送到可信目标；`bundle.import` 会导入到 NekoDrop 本机导入区。同名导入不覆盖，返回 `bundle_import_conflict`。已授权 client 也可以用 `actions.results` 查询自己的动作结果；结果按 client 和 scope 过滤，不返回本机 `bundle_root`。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是局域网服务，也不会绕过用户确认去发送或写入第三方应用目录。
+桌面端现在有一个只绑定 `127.0.0.1` 的 localhost runtime，可以处理 `devices.list`、`bundle.detail` 和 `transfer.status` 的只读快照，但这些只读请求也必须有对应 scope：`device.read`、`bundle.read` 或 `transfer.status.read`。`bundle.detail` 会优先看 staged bundle；如果暂存已不在但本机导入区有 import receipt，也会返回已导入、可撤回或已撤回状态。`authorization.request` 会返回申请的 scope、reason、ttl 和短授权码；设置页可以确认授权码，runtime 会记录该 client 的限时权限并写入本机授权文件，下次启动只恢复未过期授权。设置页也可以查看、撤销和清理这些本机授权。真实发送/接收主流程会向 runtime 内存队列写入 `transfer.updated`，收到 staged bundle 时会写入 `bundle.received`。已授权 client 可以通过 `events.poll` 轮询这些事件：`bundle.read` 可读 `bundle.received`，`transfer.status.read` 可读 `transfer.updated`，`bundle.send` 可读 `bundle.send.preflight` 和发送动作的 `action.updated`，`bundle.import.request` 可读导入和撤回动作的 `action.updated`；`timeout_ms` 可用于短等待，默认仍是快照。已授权 client 调用 `bundle.send` / `bundle.import` / `bundle.rollback` 时，runtime 会把请求放入内存待执行队列，后台 worker 会自动执行；设置页可以查看待授权、待执行、最近结果和失败原因，也可以移除队列项。`bundle.send` 会 preflight 后发送到可信目标；`bundle.import` 会导入到 NekoDrop 本机导入区，支持 `reject`、`rename`、`skip_conflicts`，成功后写入 import receipt，并返回可撤回文件数预览；`bundle.rollback` 按 bundle id 找最新 receipt，保守删除本次导入的文件。已授权 client 也可以用 `actions.results` 查询自己的动作结果；传 `action_request_id` 时只查指定动作，不传时按时间游标返回最近结果；结果按 client 和 scope 过滤，不返回本机 `bundle_root`。响应会标记 `read_only`、`requires_user_confirmation` 或 `authorized`。它不是局域网服务，也不会绕过用户确认去发送或写入第三方应用目录。
 
 上层应用和 bundle 的适配边界见 [ADAPTER_SPEC.md](ADAPTER_SPEC.md)。NekoLink bundle 保持通用，不绑定某个具体应用；具体应用只在 adapter 层处理自己的导出和导入。
 
@@ -361,7 +362,7 @@ bundle
 4. `nekodrop-service` 在接收完成后产生 bundle detected 事件
 5. 桌面 UI 只展示 bundle 预览和保存状态
 6. 本机 local bridge 增加 bundle 发送和接收通知
-7. 桌面端接入手动导入确认和失败回滚
+7. 上层应用 adapter 接入真实导入确认和第三方应用写入回滚
 8. 本机 local bridge 再接导入动作
 
 第一版测试必须覆盖：

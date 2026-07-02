@@ -44,6 +44,67 @@ desktop UI
 `nekolink-protocol` must stay free of Tauri, React, sockets, local filesystem
 rules, and NekoDrop UI state.
 
+## Architecture Health
+
+The repository is not treated as a rewrite target. The current layering is
+usable, tests exist across the protocol, network, storage, service, and desktop
+surfaces, and the main flows are still understandable. The risk is different:
+several files became catch-all implementation points during fast iteration.
+
+Current hotspots:
+
+```text
+apps/desktop/src-tauri/src/commands/mod.rs
+crates/nekolink-protocol/src/lib.rs
+apps/desktop/src/App.tsx
+apps/desktop/src/styles.css
+crates/nekodrop-network/src/tcp_file.rs
+crates/nekodrop-service/src/lib.rs
+```
+
+These files can still receive small fixes, but new feature work should not make
+them larger by default. When a change adds another workflow, command group,
+view, or protocol domain, split the target first or as part of the same PR.
+
+Preferred next splits:
+
+```text
+apps/desktop/src-tauri/src/commands/
+  mod.rs
+  transfer.rs
+  devices.rs
+  bundles.rs
+  bridge.rs
+  settings.rs
+  security.rs
+
+apps/desktop/src/views/
+  OverviewView.tsx
+  SendView.tsx
+  ReceiveView.tsx
+  DevicesView.tsx
+  TransfersView.tsx
+  SettingsView.tsx
+
+apps/desktop/src/styles/
+  base.css
+  layout.css
+  views.css
+  components.css
+
+crates/nekolink-protocol/src/
+  envelope.rs
+  identity.rs
+  session.rs
+  bundle.rs
+  bridge.rs
+  crypto.rs
+```
+
+Do not split just to move code around. Split when the new boundary makes the
+next feature smaller, gives tests a clearer target, or keeps product code out of
+protocol code.
+
 ## Runtime Services
 
 The desktop app starts these runtime pieces from the Tauri side:
@@ -208,3 +269,30 @@ Use this rule when adding code:
 
 If a feature is only useful for one third-party application, keep it behind an
 adapter or local bridge layer. NekoLink itself should stay application-neutral.
+
+## When To Stop And Split
+
+Use this rule before adding a new feature:
+
+```text
+If the change only fixes a bug in an existing flow:
+  keep it local.
+
+If the change adds a new command family:
+  create or extend a command module, not the central commands file.
+
+If the change adds a new page state machine:
+  create a view module and keep App.tsx as shell/routing glue.
+
+If the change adds a new protocol object:
+  put protocol types and validation in nekolink-protocol, then call them from
+  service/network code.
+
+If the change adds third-party app behavior:
+  model it as bundle/adapter/local-bridge behavior, not as a hard-coded product
+  path in NekoLink.
+```
+
+The goal is not a perfect folder tree. The goal is that a contributor can open
+one feature area, understand the owning module, run the relevant tests, and make
+a change without touching unrelated product flows.
