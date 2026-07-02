@@ -89,6 +89,7 @@ test("hides idle receive listening from the active transfer bar", () => {
   assert.equal(shouldShowActiveTransferBar(status({ phase: "closed" })), false);
   assert.equal(shouldShowActiveTransferBar(status({ phase: "transferring" })), true);
   assert.equal(shouldShowActiveTransferBar(status({ phase: "connecting" })), true);
+  assert.equal(shouldShowActiveTransferBar(status({ phase: "awaiting_approval" })), true);
   assert.equal(shouldShowActiveTransferBar(status({ phase: "failed" })), true);
 });
 
