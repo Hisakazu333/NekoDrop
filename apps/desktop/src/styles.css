@@ -1273,6 +1273,30 @@ html[data-theme="dark"] .connection-code-input-box {
   line-height: 1.45;
   word-break: break-word;
 }
+.active-receive-offer {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background-color: var(--bg-sunken);
+}
+.active-offer-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.active-decision-actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.active-decision-actions .btn-pill {
+  width: 100%;
+}
 
 .active-progress-stats {
   display: flex;

@@ -31,6 +31,8 @@ export function ActivityInspector() {
     transferStatus,
     transferMetrics,
     transfers,
+    pendingReceiveOffer,
+    respondReceiveOffer,
     cancelCurrentTransfer,
     resendTransfer,
     openTransferLocation,
@@ -47,6 +49,8 @@ export function ActivityInspector() {
     : 0;
 
   const isReceiving = transferStatus?.direction === "receive";
+  const showReceiveDecision =
+    Boolean(pendingReceiveOffer) && isReceiving && transferStatus?.phase === "awaiting_approval";
   const canCancelActiveTransfer =
     transferStatus && !["completed", "failed", "cancelled", "closed", "declined", "expired"].includes(transferStatus.phase);
 
@@ -73,6 +77,34 @@ export function ActivityInspector() {
               {transferStatus.root_name}
             </div>
             <div className="active-message">{transferStatus.message}</div>
+
+            {showReceiveDecision && pendingReceiveOffer && (
+              <div className="active-receive-offer">
+                <div className="active-offer-meta">
+                  <span>{pendingReceiveOffer.file_count} 个文件</span>
+                  <span>{formatBytes(pendingReceiveOffer.total_bytes)}</span>
+                  {pendingReceiveOffer.sender_device_name && <span>来自 {pendingReceiveOffer.sender_device_name}</span>}
+                </div>
+                <div className="active-decision-actions">
+                  <button
+                    className="btn-pill btn-reject"
+                    onClick={() => respondReceiveOffer(false)}
+                    disabled={busy === "receive"}
+                    type="button"
+                  >
+                    拒绝
+                  </button>
+                  <button
+                    className="btn-pill btn-accept"
+                    onClick={() => respondReceiveOffer(true)}
+                    disabled={busy === "receive"}
+                    type="button"
+                  >
+                    接受
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="active-progress-stats">
               <span>
