@@ -59,6 +59,9 @@ test("NekoBuddy workspace adapter exports a sanitized workspace bundle", () => {
   assert.equal(manifest.schema, "nekolink.bundle.v1");
   assert.equal(manifest.bundle_type, "workspace");
   assert.equal(manifest.source_app, "NekoBuddy");
+  assert.equal(manifest.application_schema.schema_id, "nekobuddy.workspace");
+  assert.equal(manifest.application_schema.version, 1);
+  assert.equal(result.workspace_schema_version, 1);
   assert.equal(manifest.summary.file_count, 2);
   assert.equal(permissions.transport.requires_trusted_device, true);
   assert.equal(permissions.transport.requires_authenticated_encrypted_session, true);
@@ -103,6 +106,16 @@ test("NekoBuddy workspace adapter descriptor and app manifest are concrete and p
   assert.equal(descriptor.bundle_types[0].bundle_type, "workspace");
   assert.equal(descriptor.bundle_types[0].sensitive, true);
   assert.equal(descriptor.bundle_types[0].requires_trusted_device, true);
+  assert.equal(descriptor.workspace_schema.current_version, 1);
+  assert.equal(descriptor.transactions.receipt_version, 1);
+  assert.equal(descriptor.transactions.transaction_schema, "nekobuddy.workspace.adapter.import_transaction.v1");
+  assert.deepEqual(descriptor.transactions.rollback_blocking_reasons, [
+    "target_missing",
+    "receipt_already_rolled_back",
+    "imported_path_unsafe",
+    "imported_file_missing",
+    "imported_file_changed"
+  ]);
   assert.equal(descriptor.security.refuses_untrusted_sensitive_send, true);
   assertNoLocalPaths(descriptor);
 
@@ -246,12 +259,20 @@ test("NekoBuddy workspace adapter imports with receipts and rolls back conservat
   assert.equal(imported.status, "imported");
   assert.equal(imported.target_path, targetPath);
   assert.equal(imported.imported_file_count, 2);
-  assert.equal(readJson(imported.receipt_path).schema, "nekobuddy.workspace.adapter.import_receipt.v1");
+  assert.equal(imported.workspace_schema_version, 1);
+  assert.equal(imported.migration.status, "not_required");
+  assert.equal(readJson(imported.transaction_path).schema, "nekobuddy.workspace.adapter.import_transaction.v1");
+  const receipt = readJson(imported.receipt_path);
+  assert.equal(receipt.schema, "nekobuddy.workspace.adapter.import_receipt.v1");
+  assert.equal(receipt.receipt_version, 1);
+  assert.equal(receipt.workspace_schema_version, 1);
+  assert.equal(receipt.transaction_id, imported.transaction_id);
 
   writeFileSync(join(targetPath, "notes.md"), "user changed this\n");
   const blocked = runAdapter("rollback", ["--receipt", imported.receipt_path]);
   assert.equal(blocked.status, "blocked");
-  assert.equal(blocked.reason, "imported_file_missing_changed_or_not_file");
+  assert.equal(blocked.reason, "imported_file_changed");
+  assert.equal(blocked.rollback_blocking_reason, "imported_file_changed");
   assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "user changed this\n");
 
   const renamed = runAdapter("import-confirm", [
@@ -267,7 +288,78 @@ test("NekoBuddy workspace adapter imports with receipts and rolls back conservat
   const rolledBack = runAdapter("rollback", ["--receipt", renamed.receipt_path]);
   assert.equal(rolledBack.status, "rolled_back");
   assert.equal(rolledBack.removed_file_count, 2);
+  const alreadyRolledBack = runAdapter("rollback", ["--receipt", renamed.receipt_path]);
+  assert.equal(alreadyRolledBack.status, "blocked");
+  assert.equal(alreadyRolledBack.rollback_blocking_reason, "receipt_already_rolled_back");
   assert.equal(readFileSync(join(targetPath, "notes.md"), "utf8"), "user changed this\n");
+
+  rmSync(tempRoot, { recursive: true, force: true });
+});
+
+test("NekoBuddy workspace adapter enforces transaction and migration contract", () => {
+  const tempRoot = mkdtempSync(join(tmpdir(), "nekodrop-nekobuddy-workspace-contract-"));
+  const source = join(tempRoot, "workspace");
+  const output = join(tempRoot, "out");
+  const targetRoot = join(tempRoot, "target");
+  mkdirSync(source, { recursive: true });
+  writeFileSync(join(source, "workspace.json"), JSON.stringify({ title: "Contract" }));
+  writeFileSync(join(source, "notes.md"), "contract\n");
+
+  const contract = runAdapter("contract");
+  assert.equal(contract.workspace_schema.current_version, 1);
+  assert.deepEqual(contract.import_transaction.states, ["prepared", "copied", "committed", "failed", "recovered"]);
+  assert.deepEqual(contract.rollback.blocking_reasons, [
+    "target_missing",
+    "receipt_already_rolled_back",
+    "imported_path_unsafe",
+    "imported_file_missing",
+    "imported_file_changed"
+  ]);
+
+  runAdapter("export", [
+    "--source",
+    source,
+    "--output",
+    output,
+    "--bundle-id",
+    "bundle_workspace_contract",
+    "--name",
+    "Contract"
+  ]);
+  const bundleRoot = join(output, "bundle_workspace_contract");
+  const manifestPath = join(bundleRoot, "bundle.json");
+  const manifest = readJson(manifestPath);
+  manifest.application_schema.version = 2;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+
+  const blocked = runAdapter("import-dry-run", [
+    "--bundle-root",
+    bundleRoot,
+    "--target-root",
+    targetRoot
+  ]);
+  assert.equal(blocked.status, "cannot_import");
+  assert.equal(blocked.migration.status, "unsupported_source_version");
+  assert.equal(blocked.reason, "unsupported_workspace_schema_version");
+
+  manifest.application_schema.version = 1;
+  writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  const failed = runAdapter("import-confirm", [
+    "--bundle-root",
+    bundleRoot,
+    "--target-root",
+    targetRoot,
+    "--simulate-fail-after-copy",
+    "true"
+  ]);
+  assert.equal(failed.status, "failed");
+  assert.equal(failed.recovery_action, "recover-import");
+  assert.equal(readJson(failed.transaction_path).state, "failed");
+
+  const recovered = runAdapter("recover-import", ["--transaction", failed.transaction_path]);
+  assert.equal(recovered.status, "recovered");
+  assert.equal(recovered.removed_temp, true);
+  assert.equal(readJson(failed.transaction_path).state, "recovered");
 
   rmSync(tempRoot, { recursive: true, force: true });
 });

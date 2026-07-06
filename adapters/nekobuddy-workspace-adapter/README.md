@@ -9,6 +9,7 @@ It is intentionally narrower than `docs/examples/generic-adapter/`: the generic 
 ```bash
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs descriptor
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs app-manifest
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs contract
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs export \
   --source ./workspace \
   --output ./out \
@@ -23,6 +24,8 @@ node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs import
   --conflict-strategy reject
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs rollback \
   --receipt ./adapter-data/workspaces/bundle_workspace_demo/.nekobuddy-workspace-import-receipt-*.json
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs recover-import \
+  --transaction ./adapter-data/workspaces/.nekobuddy-workspace-import-transactions/bundle_workspace_demo-*.json
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs discover-bridge
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs post events \
   --bridge-url http://127.0.0.1:45921/bridge/request \
@@ -51,8 +54,12 @@ node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs rollba
 - `contains_secrets=true` bundles can be saved and previewed but are rejected by adapter import.
 - Import must be preceded by `import-dry-run`.
 - Conflict strategies are only `reject`, `rename`, and `skip_conflicts`.
-- Import writes an adapter-owned receipt.
+- Workspace schema is `nekobuddy.workspace` version 1; unsupported source or target versions return `cannot_import`.
+- Schema migration policy is explicit. `manual_only` blocks mismatched versions; `adapter_managed` is accepted only when this adapter has an implemented migration route.
+- Import writes an adapter-owned receipt with `receipt_version=1`, workspace schema metadata, migration status, and transaction id.
+- Import is transaction-journaled. Failed imports can be cleaned with `recover-import`.
 - Rollback only deletes files recorded in the receipt and refuses to delete files that were changed after import.
+- Rollback blocking reasons are stable: `target_missing`, `receipt_already_rolled_back`, `imported_path_unsafe`, `imported_file_missing`, and `imported_file_changed`.
 
 ## Local Bridge Flow
 

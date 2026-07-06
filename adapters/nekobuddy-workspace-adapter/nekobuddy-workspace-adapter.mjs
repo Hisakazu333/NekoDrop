@@ -6,6 +6,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   statSync,
   writeFileSync
@@ -19,10 +20,16 @@ const ADAPTER_DESCRIPTOR_SCHEMA = "nekolink.adapter.v1";
 const APP_MANIFEST_SCHEMA = "nekolink.adapter.app_manifest.v1";
 const RECEIPT_SCHEMA = "nekobuddy.workspace.adapter.import_receipt.v1";
 const IMPORT_PLAN_SCHEMA = "nekobuddy.workspace.adapter.import_plan.v1";
+const IMPORT_TRANSACTION_SCHEMA = "nekobuddy.workspace.adapter.import_transaction.v1";
 const CHECKSUM_ALGORITHM = "sha256";
 const BUNDLE_TYPE = "workspace";
 const PERMISSION_SCOPE = "workspace.import";
 const WRITE_TARGET = "nekobuddy.workspace";
+const WORKSPACE_SCHEMA_ID = "nekobuddy.workspace";
+const WORKSPACE_SCHEMA_VERSION = 1;
+const SUPPORTED_WORKSPACE_SCHEMA_VERSIONS = [WORKSPACE_SCHEMA_VERSION];
+const RECEIPT_VERSION = 1;
+const IMPORT_TRANSACTION_VERSION = 1;
 const DEFAULT_BRIDGE_HOST = "127.0.0.1";
 const DEFAULT_BRIDGE_PORT = 45921;
 const DEFAULT_BRIDGE_REQUEST_PATH = "/bridge/request";
@@ -37,8 +44,17 @@ const BRIDGE_SCOPES = [
   "bundle.import.request",
   "transfer.status.read"
 ];
+const MIGRATION_POLICIES = new Set(["manual_only", "adapter_managed"]);
 const CONFLICT_STRATEGIES = new Set(["reject", "rename", "skip_conflicts"]);
 const IMPORT_PLAN_STATES = ["would_import", "would_conflict", "would_skip", "cannot_import"];
+const IMPORT_TRANSACTION_STATES = ["prepared", "copied", "committed", "failed", "recovered"];
+const ROLLBACK_BLOCKING_REASONS = [
+  "target_missing",
+  "receipt_already_rolled_back",
+  "imported_path_unsafe",
+  "imported_file_missing",
+  "imported_file_changed"
+];
 const SECRET_KEY_PARTS = [
   "token",
   "cookie",
@@ -85,6 +101,14 @@ async function main() {
   }
   if (command === "rollback") {
     printJson(rollbackWorkspaceImport(flags));
+    return;
+  }
+  if (command === "recover-import") {
+    printJson(recoverWorkspaceImport(flags));
+    return;
+  }
+  if (command === "contract") {
+    printJson(buildTransactionContract());
     return;
   }
   if (command === "request") {
@@ -174,11 +198,18 @@ function buildDescriptor(flags) {
     transactions: {
       dry_run_required: true,
       receipt_required: true,
+      receipt_schema: RECEIPT_SCHEMA,
+      receipt_version: RECEIPT_VERSION,
       rollback_supported: true,
       rollback_requires_receipt: true,
       conflict_resolution_required: true,
-      migration_policy: flags["migration-policy"] ?? "manual_only"
+      migration_policy: migrationPolicy(flags["migration-policy"] ?? "manual_only"),
+      transaction_schema: IMPORT_TRANSACTION_SCHEMA,
+      transaction_version: IMPORT_TRANSACTION_VERSION,
+      failure_recovery_action: "recover-import",
+      rollback_blocking_reasons: ROLLBACK_BLOCKING_REASONS
     },
+    workspace_schema: workspaceSchemaDescriptor(flags),
     bundle_types: [
       {
         bundle_type: BUNDLE_TYPE,
@@ -188,7 +219,9 @@ function buildDescriptor(flags) {
         write_target: WRITE_TARGET,
         sensitive: true,
         requires_trusted_device: true,
-        conflict_strategies: Array.from(CONFLICT_STRATEGIES)
+        conflict_strategies: Array.from(CONFLICT_STRATEGIES),
+        workspace_schema_id: WORKSPACE_SCHEMA_ID,
+        supported_workspace_schema_versions: SUPPORTED_WORKSPACE_SCHEMA_VERSIONS
       }
     ],
     security: {
@@ -225,7 +258,10 @@ function buildAppManifest(flags) {
         sensitive: true,
         requires_trusted_device: true,
         conflict_strategies: Array.from(CONFLICT_STRATEGIES),
-        migration_policy: flags["migration-policy"] ?? "manual_only"
+        migration_policy: migrationPolicy(flags["migration-policy"] ?? "manual_only"),
+        workspace_schema_id: WORKSPACE_SCHEMA_ID,
+        workspace_schema_version: WORKSPACE_SCHEMA_VERSION,
+        supported_workspace_schema_versions: SUPPORTED_WORKSPACE_SCHEMA_VERSIONS
       }
     ],
     safety: {
@@ -246,12 +282,51 @@ function buildAppManifest(flags) {
   return manifest;
 }
 
+function buildTransactionContract() {
+  return {
+    schema: "nekobuddy.workspace.adapter.transaction_contract.v1",
+    adapter_id: CLIENT.client_id,
+    workspace_schema: {
+      schema_id: WORKSPACE_SCHEMA_ID,
+      current_version: WORKSPACE_SCHEMA_VERSION,
+      supported_versions: SUPPORTED_WORKSPACE_SCHEMA_VERSIONS,
+      default_migration_policy: "manual_only",
+      supported_migration_policies: Array.from(MIGRATION_POLICIES),
+      unsupported_version_state: "cannot_import"
+    },
+    import_plan: {
+      schema: IMPORT_PLAN_SCHEMA,
+      stable_states: IMPORT_PLAN_STATES,
+      migration_fields_required: true
+    },
+    import_transaction: {
+      schema: IMPORT_TRANSACTION_SCHEMA,
+      version: IMPORT_TRANSACTION_VERSION,
+      states: IMPORT_TRANSACTION_STATES,
+      failure_recovery_action: "recover-import"
+    },
+    receipt: {
+      schema: RECEIPT_SCHEMA,
+      version: RECEIPT_VERSION,
+      records_workspace_schema_version: true,
+      records_migration_status: true,
+      records_transaction_id: true
+    },
+    rollback: {
+      blocking_reasons: ROLLBACK_BLOCKING_REASONS,
+      changed_files_block_rollback: true,
+      missing_files_block_rollback: true
+    }
+  };
+}
+
 function exportWorkspaceBundle(flags) {
   const source = requireFlag(flags, "source");
   const output = requireFlag(flags, "output");
   const bundleId = requireFlag(flags, "bundle-id");
   const displayName = requireFlag(flags, "name");
   const containsSecrets = flags["contains-secrets"] === "true";
+  const workspaceSchema = workspaceSchemaDescriptor(flags);
   assertSafeBundleId(bundleId);
   if (!existsSync(source) || !statSync(source).isDirectory()) {
     throw new Error(`--source must be a workspace directory: ${source}`);
@@ -297,7 +372,15 @@ function exportWorkspaceBundle(flags) {
     },
     compatibility: {
       min_nekolink_version: 1,
-      required_capabilities: ["bundle_transfer", "authenticated_encrypted_session"]
+      required_capabilities: ["bundle_transfer", "authenticated_encrypted_session"],
+      workspace_schema_id: workspaceSchema.schema_id,
+      workspace_schema_version: workspaceSchema.current_version
+    },
+    application_schema: {
+      schema_id: workspaceSchema.schema_id,
+      version: workspaceSchema.current_version,
+      supported_versions: workspaceSchema.supported_versions,
+      migration_policy: workspaceSchema.migration_policy
     },
     summary: {
       file_count: payloadFiles.length,
@@ -336,6 +419,8 @@ function exportWorkspaceBundle(flags) {
     bundle_root: bundleRoot,
     bundle_id: bundleId,
     bundle_type: BUNDLE_TYPE,
+    workspace_schema_id: workspaceSchema.schema_id,
+    workspace_schema_version: workspaceSchema.current_version,
     file_count: payloadFiles.length,
     total_bytes: manifest.summary.total_bytes,
     redacted_fields: permissions.secrets.redacted_fields,
@@ -402,8 +487,12 @@ function planWorkspaceImport(flags, dryRun) {
   const checksums = readJson(join(bundleRoot, "checksums.json"));
   const permissions = readJson(join(bundleRoot, "permissions.json"));
   validateImportableWorkspaceBundle(manifest, checksums, permissions);
+  const migration = workspaceMigrationPlan(manifest, flags);
 
   const target = workspaceTargetPath(targetRoot, manifest, strategy);
+  if (!migration.can_import) {
+    return importSchemaBlockedResponse(manifest, targetRoot, target, strategy, migration, dryRun);
+  }
   const files = manifest.files.map((file) => {
     assertSafeBundlePath(file.path);
     const source = join(bundleRoot, file.path);
@@ -425,7 +514,7 @@ function planWorkspaceImport(flags, dryRun) {
   });
   const conflicts = files.filter((file) => file.destination_exists);
   if (dryRun) {
-    return importPlanResponse(manifest, targetRoot, target, files, conflicts, strategy);
+    return importPlanResponse(manifest, targetRoot, target, files, conflicts, strategy, migration);
   }
   const targetExists = existsSync(target);
   if ((targetExists || conflicts.length > 0) && strategy === "reject") {
@@ -437,6 +526,9 @@ function planWorkspaceImport(flags, dryRun) {
       target_path: target,
       status: "conflict",
       conflict_strategy: strategy,
+      workspace_schema_id: migration.schema_id,
+      workspace_schema_version: migration.source_version,
+      migration,
       imported_file_count: 0,
       skipped_file_count: 0,
       conflict_count: Math.max(conflicts.length, targetExists ? 1 : 0),
@@ -445,25 +537,30 @@ function planWorkspaceImport(flags, dryRun) {
     };
   }
 
-  mkdirSync(target, { recursive: true });
-  const imported = [];
-  const skipped = [];
-  for (const file of files) {
-    if (file.destination_exists && strategy === "skip_conflicts") {
-      skipped.push(file.manifest_path);
-      continue;
-    }
-    mkdirSync(dirname(file.destination), { recursive: true });
-    copyFileSync(join(bundleRoot, file.manifest_path), file.destination);
-    imported.push(file);
+  const transaction = beginImportTransaction(targetRoot, target, manifest, strategy, migration, files);
+  let imported = [];
+  let skipped = [];
+  try {
+    ({ imported, skipped } = commitWorkspaceImportTransaction(bundleRoot, target, files, strategy, transaction, flags));
+  } catch (error) {
+    return failedImportResponse(manifest, targetRoot, target, strategy, migration, transaction, error);
   }
 
   const receipt = {
     schema: RECEIPT_SCHEMA,
+    receipt_version: RECEIPT_VERSION,
     bundle_id: manifest.bundle_id,
     bundle_type: BUNDLE_TYPE,
     display_name: manifest.display_name,
     source_app: manifest.source_app,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.target_version,
+    source_workspace_schema_version: migration.source_version,
+    migration_policy: migration.migration_policy,
+    migration_status: migration.status,
+    transaction_id: transaction.transaction_id,
+    transaction_schema: IMPORT_TRANSACTION_SCHEMA,
+    transaction_version: IMPORT_TRANSACTION_VERSION,
     target_path: target,
     conflict_strategy: strategy,
     imported_manifest_paths: imported.map((file) => file.manifest_path),
@@ -478,10 +575,20 @@ function planWorkspaceImport(flags, dryRun) {
   const receiptPath = workspaceReceiptPath(target, manifest.bundle_id, strategy);
   writeJson(receiptPath, receipt);
   writeJson(join(target, ".nekobuddy-workspace-latest-import-receipt.json"), receipt);
+  updateImportTransaction(transaction, {
+    state: "committed",
+    receipt_path: receiptPath,
+    committed_at: new Date().toISOString()
+  });
   return {
     bundle_id: manifest.bundle_id,
     bundle_type: BUNDLE_TYPE,
     display_name: manifest.display_name,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.target_version,
+    migration,
+    transaction_id: transaction.transaction_id,
+    transaction_path: transaction.transaction_path,
     target_root: targetRoot,
     target_path: target,
     status: "imported",
@@ -494,7 +601,7 @@ function planWorkspaceImport(flags, dryRun) {
   };
 }
 
-function importPlanResponse(manifest, targetRoot, target, files, conflicts, strategy) {
+function importPlanResponse(manifest, targetRoot, target, files, conflicts, strategy, migration) {
   const skipped = strategy === "skip_conflicts"
     ? conflicts.map((file) => file.manifest_path)
     : [];
@@ -510,6 +617,10 @@ function importPlanResponse(manifest, targetRoot, target, files, conflicts, stra
     bundle_id: manifest.bundle_id,
     bundle_type: BUNDLE_TYPE,
     display_name: manifest.display_name,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.source_version,
+    target_workspace_schema_version: migration.target_version,
+    migration,
     conflict_strategy: strategy,
     target_root: targetRoot,
     target_path: target,
@@ -525,6 +636,10 @@ function importPlanResponse(manifest, targetRoot, target, files, conflicts, stra
     bundle_id: manifest.bundle_id,
     bundle_type: BUNDLE_TYPE,
     display_name: manifest.display_name,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.source_version,
+    target_workspace_schema_version: migration.target_version,
+    migration,
     target_root: targetRoot,
     target_path: target,
     status: state,
@@ -537,6 +652,189 @@ function importPlanResponse(manifest, targetRoot, target, files, conflicts, stra
     receipt_path: null,
     plan
   };
+}
+
+function importSchemaBlockedResponse(manifest, targetRoot, target, strategy, migration, dryRun) {
+  const plan = {
+    schema: IMPORT_PLAN_SCHEMA,
+    state: "cannot_import",
+    next_action: "cancel_import_or_run_manual_migration",
+    bundle_id: manifest.bundle_id,
+    bundle_type: BUNDLE_TYPE,
+    display_name: manifest.display_name,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.source_version,
+    target_workspace_schema_version: migration.target_version,
+    migration,
+    conflict_strategy: strategy,
+    target_root: targetRoot,
+    target_path: target,
+    file_count: Array.isArray(manifest.files) ? manifest.files.length : 0,
+    would_import_file_count: 0,
+    would_skip_file_count: 0,
+    conflict_count: 0,
+    conflicts: [],
+    would_import_paths: [],
+    would_skip_paths: [],
+    reason: migration.blocking_reason
+  };
+  return {
+    bundle_id: manifest.bundle_id,
+    bundle_type: BUNDLE_TYPE,
+    display_name: manifest.display_name,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.source_version,
+    target_workspace_schema_version: migration.target_version,
+    migration,
+    target_root: targetRoot,
+    target_path: target,
+    status: "cannot_import",
+    dry_run: dryRun,
+    conflict_strategy: strategy,
+    would_import_file_count: 0,
+    would_skip_file_count: 0,
+    conflict_count: 0,
+    conflicts: [],
+    receipt_path: null,
+    reason: migration.blocking_reason,
+    plan
+  };
+}
+
+function failedImportResponse(manifest, targetRoot, target, strategy, migration, transaction, error) {
+  const reason = error instanceof Error ? error.message : String(error);
+  updateImportTransaction(transaction, {
+    state: "failed",
+    failed_at: new Date().toISOString(),
+    failure_reason: reason,
+    recovery_action: "recover-import"
+  });
+  return {
+    bundle_id: manifest.bundle_id,
+    bundle_type: BUNDLE_TYPE,
+    display_name: manifest.display_name,
+    workspace_schema_id: migration.schema_id,
+    workspace_schema_version: migration.source_version,
+    target_workspace_schema_version: migration.target_version,
+    migration,
+    target_root: targetRoot,
+    target_path: target,
+    status: "failed",
+    reason,
+    recovery_action: "recover-import",
+    transaction_id: transaction.transaction_id,
+    transaction_path: transaction.transaction_path,
+    temp_path: transaction.temp_path,
+    conflict_strategy: strategy,
+    imported_file_count: 0,
+    skipped_file_count: 0,
+    conflict_count: 0,
+    conflicts: [],
+    receipt_path: null
+  };
+}
+
+function beginImportTransaction(targetRoot, target, manifest, strategy, migration, files) {
+  const transactionId = newTransactionId(manifest.bundle_id);
+  const transaction = {
+    schema: IMPORT_TRANSACTION_SCHEMA,
+    transaction_version: IMPORT_TRANSACTION_VERSION,
+    transaction_id: transactionId,
+    bundle_id: manifest.bundle_id,
+    bundle_type: BUNDLE_TYPE,
+    workspace_schema_id: migration.schema_id,
+    source_workspace_schema_version: migration.source_version,
+    target_workspace_schema_version: migration.target_version,
+    migration_policy: migration.migration_policy,
+    migration_status: migration.status,
+    conflict_strategy: strategy,
+    state: "prepared",
+    target_path: target,
+    temp_path: join(workspaceImportTempRoot(targetRoot), transactionId),
+    transaction_path: join(workspaceImportTransactionRoot(targetRoot), `${transactionId}.json`),
+    manifest_paths: files.map((file) => file.manifest_path),
+    files: files.map((file) => ({
+      manifest_path: file.manifest_path,
+      size: file.size,
+      sha256: file.sha256
+    })),
+    copied_manifest_paths: [],
+    committed_manifest_paths: [],
+    skipped_manifest_paths: [],
+    receipt_path: null,
+    recovery_action: "recover-import",
+    rollback_blocking_reasons: ROLLBACK_BLOCKING_REASONS,
+    created_at: new Date().toISOString()
+  };
+  mkdirSync(dirname(transaction.transaction_path), { recursive: true });
+  mkdirSync(dirname(transaction.temp_path), { recursive: true });
+  writeJson(transaction.transaction_path, transaction);
+  return transaction;
+}
+
+function commitWorkspaceImportTransaction(bundleRoot, target, files, strategy, transaction, flags) {
+  const imported = [];
+  const skipped = [];
+  rmSync(transaction.temp_path, { recursive: true, force: true });
+  mkdirSync(transaction.temp_path, { recursive: true });
+  for (const file of files) {
+    if (file.destination_exists && strategy === "skip_conflicts") {
+      skipped.push(file.manifest_path);
+      continue;
+    }
+    const relativePath = file.manifest_path.replace(/^files\//, "");
+    const stagedDestination = join(transaction.temp_path, relativePath);
+    mkdirSync(dirname(stagedDestination), { recursive: true });
+    copyFileSync(join(bundleRoot, file.manifest_path), stagedDestination);
+    imported.push(file);
+  }
+  updateImportTransaction(transaction, {
+    state: "copied",
+    copied_manifest_paths: imported.map((file) => file.manifest_path),
+    skipped_manifest_paths: skipped,
+    copied_at: new Date().toISOString()
+  });
+  if (flags["simulate-fail-after-copy"] === "true") {
+    throw new Error("simulated_failure_after_copy");
+  }
+  if (strategy === "skip_conflicts" && existsSync(target)) {
+    const committed = [];
+    try {
+      for (const file of imported) {
+        const relativePath = file.manifest_path.replace(/^files\//, "");
+        const destination = join(target, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(join(transaction.temp_path, relativePath), destination);
+        committed.push(file);
+      }
+      updateImportTransaction(transaction, {
+        committed_manifest_paths: committed.map((file) => file.manifest_path)
+      });
+      rmSync(transaction.temp_path, { recursive: true, force: true });
+    } catch (error) {
+      recoverCommittedFiles(target, committed);
+      throw error;
+    }
+  } else {
+    renameSync(transaction.temp_path, target);
+    updateImportTransaction(transaction, {
+      committed_manifest_paths: imported.map((file) => file.manifest_path)
+    });
+  }
+  return { imported, skipped };
+}
+
+function recoverCommittedFiles(target, committed) {
+  for (const file of [...committed].reverse()) {
+    const destination = join(target, file.manifest_path.replace(/^files\//, ""));
+    if (!existsSync(destination) || !statSync(destination).isFile()) {
+      continue;
+    }
+    const bytes = readFileSync(destination);
+    if (bytes.byteLength === file.size && sha256(bytes) === file.sha256) {
+      rmSync(destination);
+    }
+  }
 }
 
 function rollbackWorkspaceImport(flags) {
@@ -554,25 +852,28 @@ function rollbackWorkspaceImport(flags) {
   if (!existsSync(target) || !statSync(target).isDirectory()) {
     return rollbackBlocked(receipt, "target_missing", []);
   }
+  if (existsSync(join(target, ".nekobuddy-workspace-rollback-receipt.json"))) {
+    return rollbackBlocked(receipt, "receipt_already_rolled_back", []);
+  }
 
   const blocked = [];
   for (const file of receipt.imported_files) {
     const destination = join(target, file.manifest_path.replace(/^files\//, ""));
     if (!pathIsInside(resolve(destination), resolvedTarget)) {
-      blocked.push(file.manifest_path);
+      blocked.push({ manifest_path: file.manifest_path, reason: "imported_path_unsafe" });
       continue;
     }
     if (!existsSync(destination) || !statSync(destination).isFile()) {
-      blocked.push(file.manifest_path);
+      blocked.push({ manifest_path: file.manifest_path, reason: "imported_file_missing" });
       continue;
     }
     const bytes = readFileSync(destination);
     if (bytes.byteLength !== file.size || sha256(bytes) !== file.sha256) {
-      blocked.push(file.manifest_path);
+      blocked.push({ manifest_path: file.manifest_path, reason: "imported_file_changed" });
     }
   }
   if (blocked.length > 0) {
-    return rollbackBlocked(receipt, "imported_file_missing_changed_or_not_file", blocked);
+    return rollbackBlocked(receipt, blocked[0].reason, blocked.map((file) => file.manifest_path), blocked);
   }
 
   const removed = [];
@@ -589,9 +890,14 @@ function rollbackWorkspaceImport(flags) {
   return {
     bundle_id: receipt.bundle_id,
     bundle_type: BUNDLE_TYPE,
+    workspace_schema_id: receipt.workspace_schema_id ?? WORKSPACE_SCHEMA_ID,
+    workspace_schema_version: receipt.workspace_schema_version ?? WORKSPACE_SCHEMA_VERSION,
+    receipt_version: receipt.receipt_version ?? RECEIPT_VERSION,
+    transaction_id: receipt.transaction_id ?? null,
     target_path: target,
     status: "rolled_back",
     reason: null,
+    rollback_blocking_reason: null,
     removed_file_count: removed.length,
     removed_manifest_paths: removed,
     skipped_manifest_paths: receipt.skipped_manifest_paths
@@ -602,13 +908,76 @@ function rollbackBlocked(receipt, reason, blocked) {
   return {
     bundle_id: receipt.bundle_id,
     bundle_type: BUNDLE_TYPE,
+    workspace_schema_id: receipt.workspace_schema_id ?? WORKSPACE_SCHEMA_ID,
+    workspace_schema_version: receipt.workspace_schema_version ?? WORKSPACE_SCHEMA_VERSION,
+    receipt_version: receipt.receipt_version ?? RECEIPT_VERSION,
+    transaction_id: receipt.transaction_id ?? null,
     target_path: receipt.target_path,
     status: "blocked",
     reason,
+    rollback_blocking_reason: reason,
     removed_file_count: 0,
     removed_manifest_paths: [],
     skipped_manifest_paths: receipt.skipped_manifest_paths,
     blocked_manifest_paths: blocked
+  };
+}
+
+function recoverWorkspaceImport(flags) {
+  const transactionPath = requireFlag(flags, "transaction");
+  if (!existsSync(transactionPath) || !statSync(transactionPath).isFile()) {
+    throw new Error(`--transaction must be an import transaction file: ${transactionPath}`);
+  }
+  const transaction = readJson(transactionPath);
+  validateImportTransaction(transaction);
+  const target = transaction.target_path;
+  const temp = transaction.temp_path;
+  const removedManifestPaths = [];
+  if (transaction.state === "committed") {
+    return {
+      schema: IMPORT_TRANSACTION_SCHEMA,
+      transaction_id: transaction.transaction_id,
+      bundle_id: transaction.bundle_id,
+      status: "not_recovered",
+      reason: "transaction_already_committed",
+      removed_temp: false,
+      removed_file_count: 0,
+      removed_manifest_paths: []
+    };
+  }
+  if (Array.isArray(transaction.committed_manifest_paths) && existsSync(target)) {
+    for (const manifestPath of [...transaction.committed_manifest_paths].reverse()) {
+      assertSafeBundlePath(manifestPath);
+      const transactionFile = transaction.files.find((file) => file.manifest_path === manifestPath);
+      if (!transactionFile) {
+        continue;
+      }
+      const destination = join(target, manifestPath.replace(/^files\//, ""));
+      if (existsSync(destination) && statSync(destination).isFile()) {
+        const bytes = readFileSync(destination);
+        if (bytes.byteLength === transactionFile.size && sha256(bytes) === transactionFile.sha256) {
+          rmSync(destination);
+          removedManifestPaths.push(manifestPath);
+        }
+      }
+    }
+  }
+  const removedTemp = existsSync(temp);
+  rmSync(temp, { recursive: true, force: true });
+  updateImportTransaction(transaction, {
+    state: "recovered",
+    recovered_at: new Date().toISOString(),
+    removed_manifest_paths: removedManifestPaths
+  });
+  return {
+    schema: IMPORT_TRANSACTION_SCHEMA,
+    transaction_id: transaction.transaction_id,
+    bundle_id: transaction.bundle_id,
+    status: "recovered",
+    reason: null,
+    removed_temp: removedTemp,
+    removed_file_count: removedManifestPaths.length,
+    removed_manifest_paths: removedManifestPaths
   };
 }
 
@@ -1192,12 +1561,93 @@ function buildWorkflow(flags) {
   };
 }
 
+function workspaceSchemaDescriptor(flags) {
+  const version = Number(flags["workspace-schema-version"] ?? WORKSPACE_SCHEMA_VERSION);
+  if (!SUPPORTED_WORKSPACE_SCHEMA_VERSIONS.includes(version)) {
+    throw new Error(`unsupported workspace schema version for export: ${version}`);
+  }
+  return {
+    schema_id: WORKSPACE_SCHEMA_ID,
+    current_version: version,
+    supported_versions: SUPPORTED_WORKSPACE_SCHEMA_VERSIONS,
+    migration_policy: migrationPolicy(flags["migration-policy"] ?? "manual_only")
+  };
+}
+
+function workspaceMigrationPlan(manifest, flags) {
+  const sourceVersion = workspaceSchemaVersionFromManifest(manifest);
+  const targetVersion = Number(flags["target-schema-version"] ?? WORKSPACE_SCHEMA_VERSION);
+  const policy = migrationPolicy(flags["migration-policy"] ?? manifest.application_schema?.migration_policy ?? "manual_only");
+  const base = {
+    schema_id: manifest.application_schema?.schema_id ?? manifest.compatibility?.workspace_schema_id ?? WORKSPACE_SCHEMA_ID,
+    source_version: sourceVersion,
+    target_version: targetVersion,
+    supported_versions: SUPPORTED_WORKSPACE_SCHEMA_VERSIONS,
+    migration_policy: policy,
+    migration_required: sourceVersion !== targetVersion
+  };
+  if (!SUPPORTED_WORKSPACE_SCHEMA_VERSIONS.includes(sourceVersion)) {
+    return {
+      ...base,
+      status: "unsupported_source_version",
+      can_import: false,
+      blocking_reason: "unsupported_workspace_schema_version"
+    };
+  }
+  if (!SUPPORTED_WORKSPACE_SCHEMA_VERSIONS.includes(targetVersion)) {
+    return {
+      ...base,
+      status: "unsupported_target_version",
+      can_import: false,
+      blocking_reason: "unsupported_target_workspace_schema_version"
+    };
+  }
+  if (sourceVersion === targetVersion) {
+    return {
+      ...base,
+      status: "not_required",
+      can_import: true,
+      blocking_reason: null
+    };
+  }
+  if (policy === "manual_only") {
+    return {
+      ...base,
+      status: "manual_migration_required",
+      can_import: false,
+      blocking_reason: "workspace_schema_migration_required"
+    };
+  }
+  return {
+    ...base,
+    status: "adapter_migration_unavailable",
+    can_import: false,
+    blocking_reason: "workspace_schema_migration_unavailable"
+  };
+}
+
+function workspaceSchemaVersionFromManifest(manifest) {
+  const rawVersion = manifest.application_schema?.version ??
+    manifest.compatibility?.workspace_schema_version ??
+    manifest.workspace_schema_version ??
+    WORKSPACE_SCHEMA_VERSION;
+  const version = Number(rawVersion);
+  if (!Number.isInteger(version) || version <= 0) {
+    throw new Error(`invalid workspace schema version: ${rawVersion}`);
+  }
+  return version;
+}
+
 function validateImportableWorkspaceBundle(manifest, checksums, permissions) {
   if (manifest.schema !== BUNDLE_SCHEMA) {
     throw new Error(`unsupported bundle schema: ${manifest.schema}`);
   }
   if (manifest.bundle_type !== BUNDLE_TYPE) {
     throw new Error(`bundle type mismatch: expected workspace, got ${manifest.bundle_type}`);
+  }
+  const schemaId = manifest.application_schema?.schema_id ?? manifest.compatibility?.workspace_schema_id ?? WORKSPACE_SCHEMA_ID;
+  if (schemaId !== WORKSPACE_SCHEMA_ID) {
+    throw new Error(`workspace schema id mismatch: expected ${WORKSPACE_SCHEMA_ID}, got ${schemaId}`);
   }
   if (!Array.isArray(manifest.files) || manifest.files.length === 0) {
     throw new Error("workspace bundle must contain files");
@@ -1229,9 +1679,20 @@ function validateWorkspaceReceipt(receipt) {
   if (receipt.schema !== RECEIPT_SCHEMA) {
     throw new Error(`unsupported adapter import receipt schema: ${receipt.schema}`);
   }
+  const receiptVersion = Number(receipt.receipt_version ?? RECEIPT_VERSION);
+  if (receiptVersion !== RECEIPT_VERSION) {
+    throw new Error(`unsupported adapter import receipt version: ${receipt.receipt_version}`);
+  }
   assertSafeBundleId(receipt.bundle_id);
   if (receipt.bundle_type !== BUNDLE_TYPE) {
     throw new Error(`receipt bundle_type must be ${BUNDLE_TYPE}`);
+  }
+  if ((receipt.workspace_schema_id ?? WORKSPACE_SCHEMA_ID) !== WORKSPACE_SCHEMA_ID) {
+    throw new Error(`receipt workspace_schema_id must be ${WORKSPACE_SCHEMA_ID}`);
+  }
+  const schemaVersion = Number(receipt.workspace_schema_version ?? WORKSPACE_SCHEMA_VERSION);
+  if (!SUPPORTED_WORKSPACE_SCHEMA_VERSIONS.includes(schemaVersion)) {
+    throw new Error(`unsupported receipt workspace schema version: ${schemaVersion}`);
   }
   if (typeof receipt.target_path !== "string" || receipt.target_path.trim() === "") {
     throw new Error("receipt target_path is required");
@@ -1243,6 +1704,37 @@ function validateWorkspaceReceipt(receipt) {
     assertSafeBundlePath(file.manifest_path);
     if (!Number.isFinite(file.size) || !/^[a-f0-9]{64}$/.test(file.sha256)) {
       throw new Error(`invalid receipt file entry: ${file.manifest_path}`);
+    }
+  }
+}
+
+function validateImportTransaction(transaction) {
+  if (transaction.schema !== IMPORT_TRANSACTION_SCHEMA) {
+    throw new Error(`unsupported import transaction schema: ${transaction.schema}`);
+  }
+  if (Number(transaction.transaction_version ?? IMPORT_TRANSACTION_VERSION) !== IMPORT_TRANSACTION_VERSION) {
+    throw new Error(`unsupported import transaction version: ${transaction.transaction_version}`);
+  }
+  assertSafeBundleId(transaction.bundle_id);
+  if (transaction.bundle_type !== BUNDLE_TYPE) {
+    throw new Error(`transaction bundle_type must be ${BUNDLE_TYPE}`);
+  }
+  if (!IMPORT_TRANSACTION_STATES.includes(transaction.state)) {
+    throw new Error(`unsupported import transaction state: ${transaction.state}`);
+  }
+  if (typeof transaction.target_path !== "string" || transaction.target_path.trim() === "") {
+    throw new Error("transaction target_path is required");
+  }
+  if (typeof transaction.temp_path !== "string" || transaction.temp_path.trim() === "") {
+    throw new Error("transaction temp_path is required");
+  }
+  if (!Array.isArray(transaction.files) || !Array.isArray(transaction.committed_manifest_paths)) {
+    throw new Error("transaction committed_manifest_paths is required");
+  }
+  for (const file of transaction.files) {
+    assertSafeBundlePath(file.manifest_path);
+    if (!Number.isFinite(file.size) || !/^[a-f0-9]{64}$/.test(file.sha256)) {
+      throw new Error(`invalid transaction file entry: ${file.manifest_path}`);
     }
   }
 }
@@ -1368,6 +1860,24 @@ function workspaceTargetPath(targetRoot, manifest, strategy) {
   throw new Error(`could not choose a renamed target for ${manifest.bundle_id}`);
 }
 
+function workspaceImportTransactionRoot(targetRoot) {
+  return join(targetRoot, "workspaces", ".nekobuddy-workspace-import-transactions");
+}
+
+function workspaceImportTempRoot(targetRoot) {
+  return join(targetRoot, "workspaces", ".nekobuddy-workspace-import-tmp");
+}
+
+function newTransactionId(bundleId) {
+  assertSafeBundleId(bundleId);
+  return `${bundleId}-${Date.now()}-${process.pid}`;
+}
+
+function updateImportTransaction(transaction, patch) {
+  Object.assign(transaction, patch);
+  writeJson(transaction.transaction_path, transaction);
+}
+
 function workspaceReceiptPath(target, bundleId, strategy) {
   const prefix = `.nekobuddy-workspace-import-receipt-${bundleId}-${strategy}-${Date.now()}`;
   let candidate = join(target, `${prefix}.json`);
@@ -1380,6 +1890,11 @@ function workspaceReceiptPath(target, bundleId, strategy) {
 function conflictStrategy(value) {
   if (CONFLICT_STRATEGIES.has(value)) return value;
   throw new Error("--conflict-strategy must be reject, rename, or skip_conflicts");
+}
+
+function migrationPolicy(value) {
+  if (MIGRATION_POLICIES.has(value)) return value;
+  throw new Error("--migration-policy must be manual_only or adapter_managed");
 }
 
 function assertSafeBundleId(bundleId) {
@@ -1460,6 +1975,8 @@ function usage() {
   nekobuddy-workspace-adapter import-dry-run --bundle-root <dir> --target-root <dir>
   nekobuddy-workspace-adapter import-confirm --bundle-root <dir> --target-root <dir>
   nekobuddy-workspace-adapter rollback --receipt <path>
+  nekobuddy-workspace-adapter recover-import --transaction <path>
+  nekobuddy-workspace-adapter contract
   nekobuddy-workspace-adapter request <auth|send|events|results|detail|import|rollback>
   nekobuddy-workspace-adapter discover-bridge [--status-file <path>|--bridge-config <path>|--port <port>]
   nekobuddy-workspace-adapter post <auth|send|events|results|detail|import|rollback> [--bridge-url <url>|--port <port>]
