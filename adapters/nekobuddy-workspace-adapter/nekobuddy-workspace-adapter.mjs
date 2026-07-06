@@ -10,6 +10,8 @@ import {
   statSync,
   writeFileSync
 } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { homedir } from "node:os";
 import { dirname, extname, join, relative, resolve, sep } from "node:path";
 
 const BUNDLE_SCHEMA = "nekolink.bundle.v1";
@@ -21,6 +23,9 @@ const CHECKSUM_ALGORITHM = "sha256";
 const BUNDLE_TYPE = "workspace";
 const PERMISSION_SCOPE = "workspace.import";
 const WRITE_TARGET = "nekobuddy.workspace";
+const DEFAULT_BRIDGE_HOST = "127.0.0.1";
+const DEFAULT_BRIDGE_PORT = 45921;
+const DEFAULT_BRIDGE_REQUEST_PATH = "/bridge/request";
 const CLIENT = {
   client_id: "nekobuddy.workspace.adapter",
   display_name: "NekoBuddy Workspace Adapter",
@@ -85,6 +90,27 @@ async function main() {
   if (command === "request") {
     const [kind, ...rest] = args;
     printJson(buildBridgeRequest(kind, parseFlags(rest)));
+    return;
+  }
+  if (command === "discover-bridge") {
+    printJson(discoverBridgeEndpoint(flags));
+    return;
+  }
+  if (command === "post") {
+    const [kind, ...rest] = args;
+    printJson(await postBridgeRequest(kind, parseFlags(rest)));
+    return;
+  }
+  if (command === "send-workspace") {
+    printJson(await sendWorkspace(flags));
+    return;
+  }
+  if (command === "receive-workspace") {
+    printJson(await receiveWorkspace(flags));
+    return;
+  }
+  if (command === "rollback-workspace") {
+    printJson(await rollbackWorkspace(flags));
     return;
   }
   if (command === "workflow") {
@@ -672,6 +698,382 @@ function buildBridgeRequest(kind, flags) {
   throw new Error("request kind must be auth, send, events, results, detail, import, or rollback");
 }
 
+async function postBridgeRequest(kind, flags) {
+  const request = buildBridgeRequest(kind, flags);
+  const endpoint = discoverBridgeEndpoint(flags);
+  const response = await postJson(endpoint, request);
+  return {
+    endpoint,
+    request,
+    response
+  };
+}
+
+async function sendWorkspace(flags) {
+  const bundle = exportWorkspaceBundle(flags);
+  const bundleId = bundle.bundle_id;
+  const sendRequestId = flags["send-request-id"] ?? `${bundleId}-send`;
+  const auth = await postBridgeRequest("auth", {
+    ...flags,
+    "request-id": flags["auth-request-id"] ?? `${bundleId}-auth`
+  });
+  const send = await postBridgeRequest("send", {
+    ...flags,
+    "request-id": sendRequestId,
+    "bundle-root": bundle.bundle_root,
+    "target-device-id": requireFlag(flags, "target-device-id")
+  });
+  const events = await postBridgeRequest("events", {
+    ...flags,
+    "request-id": flags["events-request-id"] ?? `${bundleId}-send-events`,
+    "action-request-id": sendRequestId
+  });
+  const results = await postBridgeRequest("results", {
+    ...flags,
+    "request-id": flags["results-request-id"] ?? `${bundleId}-send-results`,
+    "action-request-id": sendRequestId
+  });
+  return {
+    schema: "nekobuddy.workspace.adapter.send_result.v1",
+    status: "send_requested",
+    bundle,
+    request_ids: {
+      auth: auth.request.payload.request_id,
+      send: sendRequestId,
+      events: events.request.payload.request_id,
+      results: results.request.payload.request_id
+    },
+    authorization: reconcileAuthorization(auth.request, auth.response),
+    send_action: reconcileActionObservation(sendRequestId, send.response, events.response, results.response),
+    authorization_response: auth.response,
+    send_response: send.response,
+    events_response: events.response,
+    results_response: results.response
+  };
+}
+
+async function receiveWorkspace(flags) {
+  const stagedBundleId = requireFlag(flags, "staged-bundle-id");
+  const bundleRoot = requireFlag(flags, "bundle-root");
+  const targetRoot = requireFlag(flags, "target-root");
+  const conflict = conflictStrategy(flags["conflict-strategy"] ?? "reject");
+  const importRequestId = flags["import-request-id"] ?? `${stagedBundleId}-import`;
+  const detail = await postBridgeRequest("detail", {
+    ...flags,
+    "request-id": flags["detail-request-id"] ?? `${stagedBundleId}-detail`,
+    "staged-bundle-id": stagedBundleId
+  });
+  const dryRun = dryRunWorkspaceImport({
+    ...flags,
+    "bundle-root": bundleRoot,
+    "target-root": targetRoot,
+    "conflict-strategy": conflict
+  });
+  if (!["would_import", "would_skip"].includes(dryRun.status)) {
+    return {
+      schema: "nekobuddy.workspace.adapter.receive_result.v1",
+      status: "dry_run_blocked",
+      request_ids: {
+        detail: detail.request.payload.request_id,
+        import: null,
+        results: null
+      },
+      detail_response: detail.response,
+      dry_run: dryRun,
+      import_response: null,
+      results_response: null,
+      adapter_import: null,
+      import_action: null
+    };
+  }
+  const bridgeImport = await postBridgeRequest("import", {
+    ...flags,
+    "request-id": importRequestId,
+    "staged-bundle-id": stagedBundleId,
+    "conflict-strategy": conflict
+  });
+  const results = await postBridgeRequest("results", {
+    ...flags,
+    "request-id": flags["results-request-id"] ?? `${stagedBundleId}-import-results`,
+    "action-request-id": importRequestId
+  });
+  const importAction = reconcileActionObservation(importRequestId, bridgeImport.response, null, results.response);
+  if (!actionSucceeded(importAction)) {
+    return {
+      schema: "nekobuddy.workspace.adapter.receive_result.v1",
+      status: "bridge_import_pending_or_failed",
+      request_ids: {
+        detail: detail.request.payload.request_id,
+        import: importRequestId,
+        results: results.request.payload.request_id
+      },
+      detail_response: detail.response,
+      dry_run: dryRun,
+      import_response: bridgeImport.response,
+      results_response: results.response,
+      adapter_import: null,
+      import_action: importAction
+    };
+  }
+  const imported = confirmWorkspaceImport({
+    ...flags,
+    "bundle-root": bundleRoot,
+    "target-root": targetRoot,
+    "conflict-strategy": conflict
+  });
+  return {
+    schema: "nekobuddy.workspace.adapter.receive_result.v1",
+    status: "import_requested",
+    request_ids: {
+      detail: detail.request.payload.request_id,
+      import: importRequestId,
+      results: results.request.payload.request_id
+    },
+    detail_response: detail.response,
+    dry_run: dryRun,
+    import_response: bridgeImport.response,
+    results_response: results.response,
+    adapter_import: imported,
+    import_action: importAction
+  };
+}
+
+async function rollbackWorkspace(flags) {
+  const bundleId = requireFlag(flags, "bundle-id");
+  const rollbackRequestId = flags["rollback-request-id"] ?? `${bundleId}-rollback`;
+  const bridgeRollback = await postBridgeRequest("rollback", {
+    ...flags,
+    "request-id": rollbackRequestId,
+    "bundle-id": bundleId
+  });
+  const results = await postBridgeRequest("results", {
+    ...flags,
+    "request-id": flags["results-request-id"] ?? `${bundleId}-rollback-results`,
+    "action-request-id": rollbackRequestId
+  });
+  const rollbackAction = reconcileActionObservation(rollbackRequestId, bridgeRollback.response, null, results.response);
+  const adapterRollback = flags.receipt && actionSucceeded(rollbackAction)
+    ? rollbackWorkspaceImport({ receipt: flags.receipt })
+    : null;
+  return {
+    schema: "nekobuddy.workspace.adapter.rollback_result.v1",
+    status: "rollback_requested",
+    request_ids: {
+      rollback: rollbackRequestId,
+      results: results.request.payload.request_id
+    },
+    rollback_response: bridgeRollback.response,
+    results_response: results.response,
+    adapter_rollback: adapterRollback,
+    rollback_action: rollbackAction
+  };
+}
+
+function actionSucceeded(action) {
+  return action?.latest_lifecycle_status === "succeeded" || action?.latest_status === "completed";
+}
+
+function reconcileAuthorization(request, response) {
+  const requestedScopes = request?.payload?.requested_scopes ?? [];
+  const responseScopes = Array.isArray(response?.authorization_scopes)
+    ? response.authorization_scopes
+    : Array.isArray(response?.granted_scopes)
+      ? response.granted_scopes
+      : [];
+  return {
+    request_id: request?.payload?.request_id ?? null,
+    requested_scopes: requestedScopes,
+    response_scopes: responseScopes,
+    missing_response_scopes: requestedScopes.filter((scope) => !responseScopes.includes(scope)),
+    requires_user_confirmation: Boolean(response?.requires_user_confirmation),
+    security_state: response?.security_state ?? null,
+    status: response?.status ?? null
+  };
+}
+
+function reconcileActionObservation(actionRequestId, mutationResponse, eventsResponse, resultsResponse) {
+  const mutationResults = actionResultsForRequest(mutationResponse, actionRequestId);
+  const actionEvents = actionEventsForRequest(eventsResponse, actionRequestId);
+  const exactResults = actionResultsForRequest(resultsResponse, actionRequestId);
+  const latest = exactResults.at(-1) ?? actionEvents.at(-1) ?? mutationResults.at(-1) ?? null;
+  return {
+    action_request_id: actionRequestId,
+    mutation_status: mutationResponse?.status ?? null,
+    event_count: actionEvents.length,
+    result_count: exactResults.length,
+    matched_result_count: mutationResults.length + actionEvents.length + exactResults.length,
+    latest_lifecycle_status: latest?.lifecycle_status ?? latest?.status ?? null,
+    latest_status: latest?.status ?? null,
+    final: ["succeeded", "failed", "conflict", "cancelled"].includes(
+      latest?.lifecycle_status ?? latest?.status ?? ""
+    ),
+    latest_result: latest
+  };
+}
+
+function actionResultsForRequest(response, actionRequestId) {
+  if (!Array.isArray(response?.action_results)) return [];
+  return response.action_results.filter((result) => result.request_id === actionRequestId);
+}
+
+function actionEventsForRequest(response, actionRequestId) {
+  if (!Array.isArray(response?.events)) return [];
+  return response.events
+    .filter((event) => event.kind === "action.updated" && event.payload)
+    .map((event) => event.payload)
+    .filter((payload) => payload.request_id === actionRequestId);
+}
+
+function discoverBridgeEndpoint(flags) {
+  if (flags["bridge-url"]) {
+    return endpointFromUrl(flags["bridge-url"], "bridge-url");
+  }
+  if (flags.port) {
+    return endpointFromParts({
+      host: flags.host ?? DEFAULT_BRIDGE_HOST,
+      port: Number(flags.port),
+      requestPath: flags["request-path"] ?? DEFAULT_BRIDGE_REQUEST_PATH,
+      source: "flags"
+    });
+  }
+  const statusFile = flags["status-file"] ??
+    process.env.NEKODROP_LOCAL_BRIDGE_STATUS_FILE ??
+    defaultBridgeStatusFile();
+  if (statusFile && existsSync(statusFile)) {
+    return endpointFromRuntimeStatus(readJson(statusFile), statusFile);
+  }
+  const configFile = flags["bridge-config"] ?? process.env.NEKODROP_LOCAL_BRIDGE_CONFIG_FILE;
+  if (configFile && existsSync(configFile)) {
+    return endpointFromRuntimeStatus(readJson(configFile), configFile);
+  }
+  if (process.env.NEKODROP_LOCAL_BRIDGE_PORT) {
+    return endpointFromParts({
+      host: process.env.NEKODROP_LOCAL_BRIDGE_HOST ?? DEFAULT_BRIDGE_HOST,
+      port: Number(process.env.NEKODROP_LOCAL_BRIDGE_PORT),
+      requestPath: process.env.NEKODROP_LOCAL_BRIDGE_REQUEST_PATH ?? DEFAULT_BRIDGE_REQUEST_PATH,
+      source: "env"
+    });
+  }
+  return endpointFromParts({
+    host: DEFAULT_BRIDGE_HOST,
+    port: DEFAULT_BRIDGE_PORT,
+    requestPath: DEFAULT_BRIDGE_REQUEST_PATH,
+    source: "default"
+  });
+}
+
+function endpointFromRuntimeStatus(value, source) {
+  const runtime = value.local_bridge_runtime ?? value.local_bridge ?? value;
+  if (runtime.active === false) {
+    throw new Error(`local bridge runtime is not active in ${source}`);
+  }
+  if (runtime.url) {
+    return endpointFromUrl(runtime.url, source);
+  }
+  return endpointFromParts({
+    host: runtime.bind_host ?? runtime.host ?? DEFAULT_BRIDGE_HOST,
+    port: Number(runtime.port),
+    requestPath: runtime.request_path ?? runtime.path ?? DEFAULT_BRIDGE_REQUEST_PATH,
+    source
+  });
+}
+
+function endpointFromUrl(rawUrl, source) {
+  const parsed = new URL(rawUrl);
+  return endpointFromParts({
+    host: parsed.hostname,
+    port: Number(parsed.port || DEFAULT_BRIDGE_PORT),
+    requestPath: parsed.pathname || DEFAULT_BRIDGE_REQUEST_PATH,
+    source,
+    protocol: parsed.protocol
+  });
+}
+
+function endpointFromParts({ host, port, requestPath, source, protocol = "http:" }) {
+  if (host !== DEFAULT_BRIDGE_HOST && host !== "localhost") {
+    throw new Error(`local bridge host must be loopback, got ${host}`);
+  }
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`invalid local bridge port: ${port}`);
+  }
+  if (!requestPath || !requestPath.startsWith("/")) {
+    throw new Error(`invalid local bridge request path: ${requestPath}`);
+  }
+  if (protocol !== "http:") {
+    throw new Error(`local bridge only supports http, got ${protocol}`);
+  }
+  return {
+    url: `http://${host}:${port}${requestPath}`,
+    bind_host: host,
+    port,
+    request_path: requestPath,
+    source
+  };
+}
+
+function defaultBridgeStatusFile() {
+  const home = homedir();
+  if (!home) return null;
+  if (process.platform === "darwin") {
+    return join(home, "Library", "Application Support", "NekoDrop", "local_bridge_runtime_status.json");
+  }
+  if (process.platform === "win32") {
+    const appData = process.env.APPDATA;
+    return appData ? join(appData, "NekoDrop", "local_bridge_runtime_status.json") : null;
+  }
+  const configHome = process.env.XDG_CONFIG_HOME ?? join(home, ".config");
+  return join(configHome, "NekoDrop", "local_bridge_runtime_status.json");
+}
+
+async function postJson(endpoint, requestBody) {
+  const url = new URL(endpoint.url);
+  const body = JSON.stringify(requestBody);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const req = httpRequest(
+      {
+        method: "POST",
+        hostname: url.hostname,
+        port: url.port,
+        path: `${url.pathname}${url.search}`,
+        headers: {
+          "content-type": "application/json",
+          "content-length": Buffer.byteLength(body)
+        },
+        timeout: 10_000
+      },
+      (res) => {
+        let data = "";
+        res.setEncoding("utf8");
+        res.on("data", (chunk) => {
+          data += chunk;
+        });
+        res.on("end", () => {
+          let parsed = null;
+          if (data.trim()) {
+            try {
+              parsed = JSON.parse(data);
+            } catch (error) {
+              rejectPromise(new Error(`local bridge returned non-JSON response: ${error.message}`));
+              return;
+            }
+          }
+          if (res.statusCode && res.statusCode >= 400) {
+            rejectPromise(new Error(`local bridge HTTP ${res.statusCode}: ${data}`));
+            return;
+          }
+          resolvePromise(parsed);
+        });
+      }
+    );
+    req.on("timeout", () => {
+      req.destroy(new Error("local bridge request timed out"));
+    });
+    req.on("error", rejectPromise);
+    req.write(body);
+    req.end();
+  });
+}
+
 function buildWorkflow(flags) {
   const bundleId = requireFlag(flags, "bundle-id");
   const sendRequestId = flags["send-request-id"] ?? `${bundleId}-send`;
@@ -1059,6 +1461,11 @@ function usage() {
   nekobuddy-workspace-adapter import-confirm --bundle-root <dir> --target-root <dir>
   nekobuddy-workspace-adapter rollback --receipt <path>
   nekobuddy-workspace-adapter request <auth|send|events|results|detail|import|rollback>
+  nekobuddy-workspace-adapter discover-bridge [--status-file <path>|--bridge-config <path>|--port <port>]
+  nekobuddy-workspace-adapter post <auth|send|events|results|detail|import|rollback> [--bridge-url <url>|--port <port>]
+  nekobuddy-workspace-adapter send-workspace --source <dir> --output <dir> --bundle-id <id> --name <name> --target-device-id <id>
+  nekobuddy-workspace-adapter receive-workspace --staged-bundle-id <id> --bundle-root <dir> --target-root <dir>
+  nekobuddy-workspace-adapter rollback-workspace --bundle-id <id> [--receipt <path>]
   nekobuddy-workspace-adapter workflow --source <dir> --output <dir> --bundle-id <id> --name <name> --target-device-id <id>
 `);
 }
