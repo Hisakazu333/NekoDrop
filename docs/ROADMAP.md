@@ -97,7 +97,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
-规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；`adapters/nekobuddy-workspace-adapter/` 已经接入第一条真实上层应用 workspace adapter。`session`、`skill`、`agent_profile` 的真实 adapter 还没有接入。
+规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；`adapters/nekobuddy-workspace-adapter/` 已经接入第一条真实上层应用 workspace adapter，并能发现 localhost bridge、直接 POST 发送/接收/回滚请求、按 `request_id` 对账事件和结果。`session`、`skill`、`agent_profile` 的真实 adapter 还没有接入。
 
 候选包类型：
 
@@ -134,7 +134,7 @@ permissions.json
 - 接收端能预览、校验、拒绝、保存。
 - local bridge 能授权请求发送、导入和查询动作结果。
 - 导入行为必须由上层应用显式触发，不能收到就自动改本机配置。
-- 第一个真实 workspace adapter 能导出 bundle、生成 bridge 请求、dry-run、写 adapter receipt 并保守 rollback。
+- 第一个真实 workspace adapter 能导出 bundle、发现 bridge、POST bridge 请求、dry-run、写 adapter receipt 并保守 rollback。
 
 后续完成标准：
 

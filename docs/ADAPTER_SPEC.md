@@ -222,6 +222,11 @@ app manifest 可以用来生成某个资源的 action plan：导出时先跑 ada
 - `import-dry-run`：只检查目标、校验和冲突，不写入
 - `import-confirm`：在 dry-run 和用户/应用确认后写入 adapter 自己的数据区
 - `rollback`：按 adapter 私有 receipt 保守撤回
+- `discover-bridge`：从显式 URL、端口、runtime status 或 bridge config 找到本机 bridge endpoint
+- `post`：把某一种 request envelope 直接 POST 到 NekoDrop local bridge
+- `send-workspace`：导出 workspace bundle，申请授权，发送 `bundle.send`，再用事件和 `actions.results` 对账
+- `receive-workspace`：读取 `bundle.detail`，先做 adapter dry-run，再请求 `bundle.import`，最后写 adapter 私有 receipt
+- `rollback-workspace`：请求 `bundle.rollback`，再按 adapter 私有 receipt 做应用侧保守撤回
 - `workflow`：输出 `authorization.request -> bundle.send -> events.poll / actions.results -> bundle.detail -> bundle.import -> actions.results -> bundle.rollback` 的请求顺序
 
 这个 adapter 的边界：

@@ -23,6 +23,24 @@ node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs import
   --conflict-strategy reject
 node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs rollback \
   --receipt ./adapter-data/workspaces/bundle_workspace_demo/.nekobuddy-workspace-import-receipt-*.json
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs discover-bridge
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs post events \
+  --bridge-url http://127.0.0.1:45921/bridge/request \
+  --action-request-id bundle_workspace_demo-send
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs send-workspace \
+  --source ./workspace \
+  --output ./out \
+  --bundle-id bundle_workspace_demo \
+  --name "Workspace demo" \
+  --target-device-id paired-device-1
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs receive-workspace \
+  --staged-bundle-id bundle_workspace_demo \
+  --bundle-root ./out/bundle_workspace_demo \
+  --target-root ./adapter-data \
+  --conflict-strategy reject
+node adapters/nekobuddy-workspace-adapter/nekobuddy-workspace-adapter.mjs rollback-workspace \
+  --bundle-id bundle_workspace_demo \
+  --receipt ./adapter-data/workspaces/bundle_workspace_demo/.nekobuddy-workspace-import-receipt-*.json
 ```
 
 ## Boundaries
@@ -60,3 +78,5 @@ transfer.status.read
 ```
 
 Use `workflow` to print the complete request sequence for one workspace handoff.
+
+Use `discover-bridge` to resolve the localhost endpoint from `--bridge-url`, `--port`, a runtime status file, a bridge config file, or the adapter default. `send-workspace`, `receive-workspace`, and `rollback-workspace` then POST the same request envelopes to the local bridge and return both the raw bridge responses and adapter-side reconciliation for scopes, `request_id`, events, and `actions.results`.
