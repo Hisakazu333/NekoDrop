@@ -14,10 +14,10 @@ NekoLink 安全层已经进入桌面传输主线：
 - encrypted session 路径的文件 payload 已经切成加密 file frames
 - `nekolink-protocol` 已有 session identity binding 的 canonical payload hash
 
-这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。bundle、local bridge 和通用 adapter 的基础闭环也已经接入，但还有三个边界没有收口：
+这意味着控制消息和 encrypted session 文件 payload 已经不再依赖明文 LAN 信任。bundle、local bridge 和真实 Rust adapter 的基础闭环也已经接入，但还有三个边界没有收口：
 
 - legacy plain file stream 仍然保留，需要迁移或拒绝策略
-- 真实上层应用 adapter 还没有接入，当前只有通用样例
+- NekoBuddy 上层产品 UI / 服务层还没有在对应应用仓库调用 sidecar adapter
 - local bridge 还是事件轮询和短等待，还没有真正长连接订阅
 
 所以现在不应该直接跳到 iroh、跨公网或 Agent 上层能力。跨网络 transport 解决的是“怎么连”，不能替代加密、权限和导入边界。
@@ -57,13 +57,16 @@ NekoLink 安全层已经进入桌面传输主线：
 
 bundle 要解决的是“上层数据怎么传”，不是“网络怎么连”。skills、session、workspace、agent profile 不能当普通散文件发，因为接收端需要知道它们是什么、能不能导入、会改哪些本机状态。
 
-仓库里已经有 bundle manifest、checksums、permissions、staging、手动创建入口、导入计划、冲突策略、NekoDrop 本机导入区、import receipt 和保守撤回。通用 adapter 样例已经演示导出、bridge 请求、adapter-owned 导入和 adapter 私有 receipt 回滚。下一阶段要补的是把这些样例接到真实上层应用：
+仓库里已经有 bundle manifest、checksums、permissions、staging、手动创建入口、导入计划、冲突策略、NekoDrop 本机导入区、import receipt 和保守撤回。通用 adapter 样例已经演示导出、bridge 请求、adapter-owned 导入和 adapter 私有 receipt 回滚。当前 Rust 实现已经把 workspace、session、skill、agent_profile 四类 NekoBuddy adapter 接到 sidecar，并抽出通用 adapter transaction / receipt / rollback 契约；workspace 还补了 app-entry 组合入口，应用层能拿到 send request、dry-run 结果、confirm 结果、receipt/transaction registry 和 registry 回滚状态。
 
-- 应用自己的导出入口
-- 应用自己的导入确认和事务写入
-- 应用自己的冲突策略
-- 应用自己的回滚记录
-- 上层数据版本迁移
+当前已补：
+
+- `crates/nekolink-adapter-contract`：共享 import plan、transaction、receipt、rollback blocking reason 和 migration policy
+- `crates/nekobuddy-workspace-adapter`：workspace 专用导出、dry-run、confirm、rollback、recover、bridge request，以及 app-export-send/app-import-review/app-import-confirm/app-rollback 应用层组合入口
+- `crates/nekobuddy-resource-adapters`：session、skill、agent_profile 的真实导出、dry-run、confirm、rollback、recover 和 bridge request
+- `nekodrop-sidecar workspace-adapter|session-adapter|skill-adapter|agent-profile-adapter ...`：真实应用可 spawn 的本机入口
+
+iroh 之前还剩的不是“再写一套 adapter”，而是把上层 NekoBuddy 产品 UI / 服务层按 app manifest 和 app-entry 组合入口接进对应应用仓库，并补更多真实数据样本兼容测试。
 
 主要风险：
 
@@ -92,12 +95,19 @@ local application
   -> paired device
 ```
 
-仓库里已经有 `LocalBridgeRequest` / `LocalBridgeEvent` 模型、权限 scope、localhost runtime、授权码、持久化授权、待执行队列、后台 worker、动作结果和 `events.poll`。下一阶段要补的是更稳定的订阅和真实应用接入：
+仓库里已经有 `LocalBridgeRequest` / `LocalBridgeEvent` 模型、权限 scope、localhost runtime、授权码、持久化授权、待执行队列、后台 worker、动作结果和 `events.poll`。当前事件边界已经收紧为稳定轮询契约：
 
-- 事件订阅或更低成本的长轮询
-- 上层 adapter 对动作结果、receipt 和回滚状态的持续观察
-- 本机接入 UI 的授权、待执行、结果和失败原因收口
-- 真实应用 adapter 的最小接入样例
+- cursor 状态固定为 `ok`、`missing`、`empty`
+- cursor 丢失时返回 `events_recovery_action=reset_cursor_and_poll_snapshot`
+- 分页时返回 `events_recovery_action=poll_with_events_next_after_id`
+- 终态 action event 返回 `events_result_followup_required=true` 和 `events_terminal_action_request_ids`
+- `actions.results.action_request_id` 用于 queued / running / terminal 精确对账
+- 设置页显示待授权、待执行、最近结果、失败原因和 adapter 导入聚合状态
+
+iroh 之前还可继续增强的点：
+
+- 真正长连接事件订阅或更低成本长轮询
+- 上层 NekoBuddy 产品 UI / 服务层对 receipt、rollback 状态的持续观察
 
 暂不开放：
 
@@ -168,9 +178,9 @@ NekoDrop / OpenNeko / other app
 
 短期建议按这个顺序开分支：
 
-1. `adapter/real-application-wiring`
-2. `bridge/event-stream-contract`
-3. `adapter/transaction-migration-contract`
+1. `app/nekobuddy-sidecar-wiring`
+2. `bridge/event-subscription-followup`
+3. `adapter/real-data-compatibility-tests`
 4. `transport/iroh-spike`
 
-已经完成的安全、bundle staging/import、local bridge runtime、bundle send/import/rollback 和 generic adapter 样例不要重复开新主线。每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](STATUS.md)、[ROADMAP.md](ROADMAP.md) 和相关协议文档。
+已经完成的安全、bundle staging/import、local bridge runtime、bundle send/import/rollback、generic adapter 样例、Rust workspace/session/skill/agent_profile adapter 和共享 adapter contract 不要重复开新主线。每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](STATUS.md)、[ROADMAP.md](ROADMAP.md) 和相关协议文档。

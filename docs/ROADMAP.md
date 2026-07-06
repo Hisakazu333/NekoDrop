@@ -97,7 +97,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
-规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；Rust 的 `crates/nekobuddy-workspace-adapter` 已经接入第一条真实上层应用 workspace adapter，并通过 `nekodrop-sidecar workspace-adapter` 提供 descriptor、app manifest、bundle 导出、dry-run、transaction-journaled import、versioned receipt、失败恢复、保守 rollback 和 local bridge request envelope 生成。`session`、`skill`、`agent_profile` 的真实 adapter 还没有接入。
+规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；Rust 的 `crates/nekobuddy-workspace-adapter` 已经接入真实 workspace adapter，并通过 `nekodrop-sidecar workspace-adapter` 提供 descriptor、app manifest、bundle 导出、dry-run、transaction-journaled import、versioned receipt、失败恢复、保守 rollback 和 local bridge request envelope 生成，并额外提供 app-export-send、app-import-review、app-import-confirm、app-rollback 这组应用层组合入口来追踪 receipt/transaction registry。`crates/nekolink-adapter-contract` 抽出了通用 import plan / transaction / receipt / rollback 契约；`crates/nekobuddy-resource-adapters` 已接入 `session`、`skill`、`agent_profile` 三类真实 Rust adapter，并通过 `nekodrop-sidecar session-adapter`、`skill-adapter`、`agent-profile-adapter` 暴露同一套 descriptor、app manifest、export、dry-run、confirm、rollback、recover 和 local bridge request 入口。
 
 候选包类型：
 
@@ -134,12 +134,12 @@ permissions.json
 - 接收端能预览、校验、拒绝、保存。
 - local bridge 能授权请求发送、导入和查询动作结果。
 - 导入行为必须由上层应用显式触发，不能收到就自动改本机配置。
-- 第一个真实 workspace adapter 能导出 bundle、生成 local bridge 请求、dry-run、transaction-journaled import、写 versioned adapter receipt、失败恢复并保守 rollback。
+- workspace / session / skill / agent_profile 的真实 Rust adapter 能导出 bundle、生成 local bridge 请求、dry-run、transaction-journaled import、写 versioned adapter receipt、失败恢复并保守 rollback。
 
 后续完成标准：
 
-- session / skill / agent_profile 也有真实 adapter 或明确不接入的边界。
-- session / skill / agent_profile 接入前，需要复用 workspace adapter 已验证的事务、版本迁移和 rollback 契约。
+- NekoBuddy 上层应用 UI / 服务层按 app manifest 调用 sidecar adapter，而不是人工复制命令。
+- 后续新增 adapter 必须复用 `nekolink-adapter-contract`，不能重新设计 receipt / rollback。
 
 ## 随后：本机 Local Bridge
 
@@ -156,10 +156,10 @@ local application
 
 本阶段要解决：
 
-- 当前优先把 NekoBuddy workspace adapter 接到真实应用调用入口，其次收紧 bridge event stream 和 adapter transaction / migration contract
+- 当前已经提供真实 adapter sidecar 调用入口、收紧 bridge event stream 和 adapter transaction / migration contract；上层 NekoBuddy 产品 UI / 服务层仍需在对应应用仓库接入这些入口
 - 更完整的事件订阅，不只依赖短等待轮询
-- 本机接入 UI 对待授权、待执行和失败原因的展示
-- 扩展真实上层应用 adapter，让应用按通用样例导出、发送、接收、导入和回滚
+- 本机接入 UI 已展示待授权、待执行、失败原因、adapter import 聚合状态、详情、重试和回滚入口；后续继续补更细的事件快照视图
+- 扩展真实上层应用 adapter 时继续按通用契约导出、发送、接收、导入和回滚
 - 导入到第三方应用后的事务、冲突和回滚契约
 
 不做：

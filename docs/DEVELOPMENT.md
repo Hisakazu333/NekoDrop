@@ -36,7 +36,7 @@
 - local bridge localhost runtime、授权码确认、限时授权持久化
 - local bridge `bundle.send` / `bundle.import` 待执行队列、后台 worker、动作生命周期事件
 
-当前还没有接入 iroh 真实运行时、Relay / P2P、手机端互传主流程、上层应用自动导出 / 真实导入、local bridge 长连接事件流和 Agent 指令通道。界面和文档应将这些能力标记为规划中或实验中，不应把占位数据描述为真实桌面能力。
+当前还没有接入 iroh 真实运行时、Relay / P2P、手机端互传主流程、NekoBuddy 产品 UI / 服务层一键调用 sidecar adapter、local bridge 长连接事件流和 Agent 指令通道。界面和文档应将这些能力标记为规划中或实验中，不应把占位数据描述为真实桌面能力。
 
 ## 本地检查
 

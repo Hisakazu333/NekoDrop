@@ -8,6 +8,8 @@ members = [
   "crates/nekodrop-service",
   "crates/nekodrop-storage",
   "crates/nekobuddy-workspace-adapter",
+  "crates/nekobuddy-resource-adapters",
+  "crates/nekolink-adapter-contract",
   "crates/nekolink-protocol",
 ]
 

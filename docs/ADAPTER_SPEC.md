@@ -210,39 +210,63 @@ descriptor 描述 adapter 能力。上层应用还应该提供一个 app manifes
 
 app manifest 可以用来生成某个资源的 action plan：导出时先跑 adapter 的 `export_bundle`，再请求 `bundle.send`；导入时先查 `bundle.detail`，再请求 `bundle.import`；撤回时先查 receipt 状态，再请求 `bundle.rollback` 或走 adapter 自己的回滚逻辑。
 
-## 当前真实 adapter：NekoBuddy Workspace
+## 当前真实 adapter：NekoBuddy 资源
 
-第一条真实上层应用 adapter 是 Rust 实现，放在 [../crates/nekobuddy-workspace-adapter](../crates/nekobuddy-workspace-adapter)，并通过 `nekodrop-sidecar workspace-adapter ...` 暴露 CLI。它只处理 `workspace`，不处理 `session`、`skill` 或 `agent_profile`。
+真实上层应用 adapter 现在都是 Rust 实现，不再依赖旧的 `.mjs` adapter。`workspace` 的专用实现放在 [../crates/nekobuddy-workspace-adapter](../crates/nekobuddy-workspace-adapter)；`session`、`skill`、`agent_profile` 复用 [../crates/nekobuddy-resource-adapters](../crates/nekobuddy-resource-adapters)。公共 dry-run / transaction / receipt / rollback 状态集合放在 [../crates/nekolink-adapter-contract](../crates/nekolink-adapter-contract)。
 
-它提供这些命令：
+sidecar 暴露这些真实应用可 spawn 的入口：
+
+- `nekodrop-sidecar workspace-adapter ...`
+- `nekodrop-sidecar session-adapter ...`
+- `nekodrop-sidecar skill-adapter ...`
+- `nekodrop-sidecar agent-profile-adapter ...`
+
+每个 adapter 都提供这些命令：
 
 - `descriptor`：输出 `nekolink.adapter.v1`
 - `app-manifest`：输出 `nekolink.adapter.app_manifest.v1`
-- `contract`：输出 workspace schema、migration policy、receipt、transaction 和 rollback blocking reason 的固定集合
-- `export`：把 NekoBuddy workspace 导出成 `workspace` bundle
+- `contract`：输出 resource schema、migration policy、receipt、transaction 和 rollback blocking reason 的固定集合
+- `export`：把 NekoBuddy 资源导出成对应 bundle
 - `import-dry-run`：只检查目标、校验和冲突，不写入
 - `import-confirm`：在 dry-run 和用户/应用确认后写入 adapter 自己的数据区
 - `rollback`：按 adapter 私有 receipt 保守撤回
 - `recover-import`：按 adapter import transaction journal 清理失败导入留下的临时内容
 - `request`：生成 `authorization.request`、`bundle.send`、`bundle.detail`、`bundle.import`、`bundle.rollback`、`events.poll`、`actions.results` 的 local bridge request envelope
 
-这个 adapter 的边界：
+`workspace` 还提供给真实应用调用层使用的组合入口，避免上层 UI 或服务手工拼多条命令：
 
-- `bundle_type` 固定为 `workspace`
-- descriptor 和 app manifest 不能包含本机绝对路径
-- `workspace` 是敏感 bundle，必须 `requires_trusted_device=true`
-- 导出时移除 token、cookie、私钥、密码、凭证和机器本地绝对路径
-- 无法确认已脱敏时设置 `contains_secrets=true`，这种 bundle 只能保存和预览，adapter import 必须拒绝
-- `import-dry-run` 的稳定状态只允许 `would_import`、`would_conflict`、`would_skip`、`cannot_import`
+- `app-export-send`：导出 workspace bundle，并返回可直接 POST 到 Local Bridge 的 `bundle.send` request；`bundle_root` 使用本机绝对路径，供 sidecar / desktop runtime 执行，不写入 descriptor 或 app manifest。
+- `app-import-review`：对收到的 workspace bundle 做 dry-run，返回 `can_confirm`、导入计划、冲突和下一步动作。
+- `app-import-confirm`：确认导入并把 receipt / transaction 路径写入应用层 registry。registry schema 是 `nekobuddy.workspace.app_entry_registry.v1`，用于让上层追踪“这次导入写了什么、receipt 在哪里、transaction 在哪里”。
+- `app-rollback`：按 registry 里某个 `bundle_id` 的最新成功导入记录回滚，并把 registry 记录更新为 `rolled_back` 或 `rollback_blocked`。
+
+这层入口证明 NekoBuddy UI / 服务层可以 spawn Rust sidecar 完成 workspace 的导出、发送请求生成、导入 dry-run、确认导入、receipt 跟踪和回滚，不需要人工复制命令。真正把按钮接到 NekoBuddy 产品仓库仍应在对应应用仓库里做；本仓库负责 sidecar 和 adapter 契约。
+
+所有真实 adapter 共用这些事务边界：
+
+- import plan schema 固定为 `nekolink.adapter.import_plan.v1`
+- transaction schema 固定为 `nekolink.adapter.import_transaction.v1`
+- receipt schema 固定为 `nekolink.adapter.import_receipt.v1`
+- `import-dry-run` 稳定状态只允许 `would_import`、`would_conflict`、`would_skip`、`cannot_import`
 - `import-confirm` 只允许 `reject`、`rename`、`skip_conflicts`
-- workspace schema 固定声明为 `nekobuddy.workspace` v1；不支持的 source / target version 必须进入 `cannot_import`
-- migration policy 只能是 `manual_only` 或 `adapter_managed`；当前没有实现的迁移路线不能假装自动迁移
-- 每次导入都先写 adapter import transaction journal；失败后用 `recover-import` 清理临时目录或未完成写入
-- 每次成功导入都写 adapter 私有 receipt，receipt 必须记录 `receipt_version`、workspace schema version、migration status 和 transaction id
-- `rollback` 只删除 receipt 记录的本次导入文件；如果文件已被用户或应用改写，必须拒绝撤回，并返回固定 blocking reason
+- migration policy 只能是 `manual_only` 或 `adapter_managed`
+- 每次导入都先写 adapter import transaction journal；失败后用 `recover-import`
+- 每次成功导入都写 adapter 私有 receipt，记录 receipt version、resource schema version、migration status 和 transaction id
+- `rollback` 只删除 receipt 记录的本次导入文件；如果文件已被用户或应用改写，必须拒绝撤回，并返回固定 blocking reason：`target_missing`、`receipt_already_rolled_back`、`imported_path_unsafe`、`imported_file_missing`、`imported_file_changed`
+
+各资源 adapter 的边界：
+
+- `workspace`：`bundle_type=workspace`，导出用户明确选择的 workspace 目录；导出时移除 token、cookie、私钥、密码、凭证和机器本地绝对路径。
+- `session`：`bundle_type=session`，只导出 `session.json` 代表的可移植会话结构；不导出 provider token、cookie、本机缓存路径、运行进程状态或临时缓存。
+- `skill`：`bundle_type=skill`，要求 source 目录包含 `skill.json`；记录 manifest 里的权限声明和脚本型 payload，但 import 只写文件，不执行脚本、不静默信任危险能力。
+- `agent_profile`：`bundle_type=agent_profile`，只导出 `profile.json` 代表的 profile 结构；剥离 provider token、账号标识、本机路径、keychain / credential-manager 引用。
+- descriptor 和 app manifest 不能包含本机绝对路径
+- `workspace`、`session`、`skill`、`agent_profile` 都是敏感 bundle，必须 `requires_trusted_device=true`
+- 无法确认已脱敏时设置 `contains_secrets=true`，这种 bundle 只能保存和预览，adapter import 必须拒绝
+- resource schema 固定声明为 `nekobuddy.workspace` / `nekobuddy.session` / `nekobuddy.skill` / `nekobuddy.agent_profile` v1；不支持的 source / target version 必须进入 `cannot_import`
 - Rust adapter 只生成 local bridge request envelope；真正 POST、授权、队列消费、事件和动作结果仍属于 NekoDrop desktop local bridge runtime
 
-NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动作结果。NekoBuddy workspace adapter 自己负责理解 workspace 格式、脱敏、schema/migration 判断、transaction journal、dry-run、adapter-owned import、failure recovery 和 adapter-owned rollback。
+NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动作结果。NekoBuddy adapter 自己负责理解资源格式、脱敏、schema/migration 判断、transaction journal、dry-run、adapter-owned import、failure recovery 和 adapter-owned rollback。
 
 ## Local Bridge 请求
 
@@ -286,7 +310,7 @@ NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动�
 
 `bundle.rollback` 使用 `bundle_id` 找最新 import receipt，需要 `bundle.import.request` 授权。回滚结果也通过 `actions.results` 返回给同一个授权 client，`rolled_back_file_count` 表示本次删除的文件数。如果结果里的 `reason` 是 `bundle_rollback_blocked`，会额外带 `rollback_blocking_reason`，当前可能是 `destination_missing`、`imported_file_missing` 或 `already_rolled_back`。这个字段只说明阻断类型，不暴露本机目标路径。`bundle.rollback` 适合撤回 NekoDrop 本机导入区里的临时导入结果，不等于撤回上层应用已经落库、合并或生成的内容。真实产品 adapter 如果把 bundle 写进自己的应用目录，还要实现自己的事务或回滚。
 
-adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。action 事件带 `client_id` 和 `client_app_kind`，runtime 会按当前请求的 client identity 和授权 scope 过滤。`events.poll` 可以传 `action_request_id` 只观察某个 `bundle.send`、`bundle.import` 或 `bundle.rollback` 动作；不传时返回当前授权视图里的普通事件流。`events.poll` 的 `after_event_id` 只对当前 client 可见的事件流有效；如果 cursor 指向已经裁剪、无权限或属于其他 client identity 的事件，响应会返回 `events_cursor_state=missing`，adapter 应把本地 cursor 清空后重新拉一页快照。事件响应还会带 `events_visible_first_id`、`events_visible_last_id` 和 `events_visible_count`，这三个字段只描述当前 client 当前过滤条件下可见的事件窗口，不是全局队列统计。`actions.results` 里的 `request_id` 是查询请求本身；要查某次动作的结果，同样传那次动作的 `request_id` 到 `action_request_id`。不传 `action_request_id` 时，runtime 会按 `after_claimed_at_ms` 和 `limit` 返回最近结果。传 `action_request_id` 时，如果结果表还没有终态记录，但动作仍在同一 client 的待执行队列里，runtime 会返回脱敏的 `queued` 状态；queued `bundle.import` 和 `bundle.rollback` 会带公开 `bundle_id`，方便 adapter 对账；如果 worker 已写入执行状态，则返回 `running` 或终态结果。结果按 `client_id`、`app_kind` 和授权 scope 过滤；查不到、没有对应 scope，或结果属于其他 client identity 时，只返回空结果，不暴露对方状态。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
+adapter 应优先用 `events.poll` 观察 `action.updated`，再用 `actions.results` 做补偿查询。action 事件带 `client_id` 和 `client_app_kind`，runtime 会按当前请求的 client identity 和授权 scope 过滤。`events.poll` 可以传 `action_request_id` 只观察某个 `bundle.send`、`bundle.import` 或 `bundle.rollback` 动作；不传时返回当前授权视图里的普通事件流。`events.poll` 的 `after_event_id` 只对当前 client 可见的事件流有效；如果 cursor 指向已经裁剪、无权限或属于其他 client identity 的事件，响应会返回 `events_cursor_state=missing` 和 `events_recovery_action=reset_cursor_and_poll_snapshot`，adapter 应把本地 cursor 清空后重新拉一页快照。如果本页还有后续事件，响应会返回 `events_has_more=true`、`events_next_after_id` 和 `events_recovery_action=poll_with_events_next_after_id`。事件响应还会带 `events_visible_first_id`、`events_visible_last_id` 和 `events_visible_count`，这三个字段只描述当前 client 当前过滤条件下可见的事件窗口，不是全局队列统计。返回的 `action.updated` 里如果出现 `succeeded`、`failed`、`conflict` 或 `cancelled` 终态，响应会设置 `events_result_followup_required=true`、`events_result_followup_action=actions.results`，并把需要补查的动作放进 `events_terminal_action_request_ids`。`actions.results` 里的 `request_id` 是查询请求本身；要查某次动作的结果，同样传那次动作的 `request_id` 到 `action_request_id`。不传 `action_request_id` 时，runtime 会按 `after_claimed_at_ms` 和 `limit` 返回最近结果。传 `action_request_id` 时，如果结果表还没有终态记录，但动作仍在同一 client 的待执行队列里，runtime 会返回脱敏的 `queued` 状态；queued `bundle.import` 和 `bundle.rollback` 会带公开 `bundle_id`，方便 adapter 对账；如果 worker 已写入执行状态，则返回 `running` 或终态结果。结果按 `client_id`、`app_kind` 和授权 scope 过滤；查不到、没有对应 scope，或结果属于其他 client identity 时，只返回空结果，不暴露对方状态。`events.poll` 默认是快照式轮询；调用方可以传 `timeout_ms` 做短等待。`timeout_ms` 最大 30000，主要用于减少本机应用频繁轮询，不是公网长连接。
 
 通用 adapter 示例会把这些结果再归纳成一个 `next_action` 提示，方便上层决定下一步是继续等、换冲突策略、查 receipt、请求回滚，还是直接报错。这个提示只属于示例层，不是协议字段。示例的 `contract` 命令会输出当前固定状态集合；adapter 控制流应优先读 `lifecycle_status`，把 `status` 当原始 bridge 结果保留。
 
@@ -322,10 +346,8 @@ Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plai
 
 ## 仍未实现
 
-- 上层应用自动导出
-- 上层应用真实导入
-- 上层应用从 NekoDrop 导入区读取并落到自己的数据目录
 - 真正的事件流订阅接口
 - 跨网络 iroh / relay / P2P 传输
+- NekoBuddy 产品 UI / 服务层一键调用这些 sidecar adapter 的集成需要在对应上层应用仓库接入；本仓库已经提供 descriptor、app manifest、sidecar argv 入口和 local bridge request envelope
 
 这些能力后面接，但不能改变 adapter 和 bundle 的边界。

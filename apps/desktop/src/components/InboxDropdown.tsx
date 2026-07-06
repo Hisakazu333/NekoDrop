@@ -36,9 +36,8 @@ export function InboxDropdown() {
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  const handleAction = async (action: LocalBridgePendingActionDto, accept: boolean) => {
+  const handleCancelAction = async (action: LocalBridgePendingActionDto) => {
     try {
-      // 确认或拒绝本地桥动作 / Approve or deny the local bridge action
       await removeLocalBridgePendingAction(action);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -96,22 +95,16 @@ export function InboxDropdown() {
                 {localBridgePendingActions.map((action) => (
                   <div key={action.request_id} className="inbox-item action-item">
                     <div className="inbox-item-meta">
-                      <span className="item-tag action-tag">应用授权</span>
+                      <span className="item-tag action-tag">待执行动作</span>
                       <strong className="item-title">{action.client_display_name || "外部应用"}</strong>
-                      <p className="item-desc">请求读取您的设备或发起文件流</p>
+                      <p className="item-desc">已授权动作正在等待后台执行</p>
                     </div>
                     <div className="inbox-item-ops">
                       <button
                         className="btn-pill btn-reject"
-                        onClick={() => handleAction(action, false)}
+                        onClick={() => handleCancelAction(action)}
                       >
                         拒绝
-                      </button>
-                      <button
-                        className="btn-pill btn-accept"
-                        onClick={() => handleAction(action, true)}
-                      >
-                        允许
                       </button>
                     </div>
                   </div>

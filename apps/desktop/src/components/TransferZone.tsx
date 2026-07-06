@@ -31,7 +31,7 @@ const COMING_SOON: Record<Exclude<TabType, "transfer">, ComingSoonCopy> = {
   state: {
     mascot: "🔄",
     title: "状态同步 NekoState",
-    desc: "session、workspace、skill、agent profile 的跨设备迁移会通过可校验的 bundle 进行。协议模型已在推进，自动同步入口尚未开放。"
+    desc: "session、workspace、skill、agent profile 的跨设备迁移会通过可校验的 bundle 和 Rust adapter 进行。自动同步入口尚未开放。"
   }
 };
 

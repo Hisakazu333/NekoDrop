@@ -326,6 +326,10 @@ pub struct LocalBridgeResponseDto {
     pub events_visible_first_id: Option<String>,
     pub events_visible_last_id: Option<String>,
     pub events_visible_count: usize,
+    pub events_recovery_action: Option<String>,
+    pub events_result_followup_required: bool,
+    pub events_result_followup_action: Option<String>,
+    pub events_terminal_action_request_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

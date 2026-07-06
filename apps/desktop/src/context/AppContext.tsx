@@ -274,6 +274,9 @@ interface AppContextType {
   removeLocalBridgePendingAction: (action: LocalBridgePendingActionDto) => Promise<void>;
   revokeLocalBridgeAuthorization: (auth: LocalBridgeAuthorizationDto, scope: string) => Promise<void>;
   pruneLocalBridgeAuthorizations: () => Promise<void>;
+  runNextLocalBridgeAction: () => Promise<void>;
+  retryLocalBridgeImportResult: (result: LocalBridgePendingActionResultDto, conflictStrategy?: string) => Promise<void>;
+  rollbackLocalBridgeImportResult: (result: LocalBridgePendingActionResultDto) => Promise<void>;
   importCurrentStagedBundle: (bundle: ReceivedBundleDto, conflictStrategy?: string) => Promise<void>;
   rollbackCurrentBundle: (bundle: ReceivedBundleDto) => Promise<void>;
   deleteCurrentStagedBundle: (bundle: ReceivedBundleDto) => Promise<void>;
@@ -1269,6 +1272,88 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function runNextLocalBridgeAction() {
+    setBusy("open");
+    setError(null);
+    try {
+      const result = await invokeCommand<LocalBridgePendingActionResultDto | null>("run_local_bridge_runtime_worker_once");
+      if (result) {
+        setToast(`已执行：${result.client_display_name}`);
+      } else {
+        setToast("暂无可执行动作");
+      }
+      await refreshLocalBridgeStatus();
+      await refreshLocalBridgePendingActions();
+      await refreshLocalBridgeActionResults();
+      await refreshDirectoryState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function retryLocalBridgeImportResult(result: LocalBridgePendingActionResultDto, conflictStrategy?: string) {
+    if (result.action_kind !== "bundle.import" || !result.bundle_id) {
+      setError("该动作结果不能重试导入");
+      return;
+    }
+    setBusy("bundle-import");
+    setError(null);
+    try {
+      const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", {
+        request: {
+          bundle_id: result.bundle_id,
+          conflict_strategy: conflictStrategy ?? result.conflict_strategy ?? "reject"
+        }
+      });
+      setStagedBundles((current) => {
+        const exists = current.some((item) => item.bundle_id === imported.bundle_id);
+        return exists
+          ? current.map((item) => (item.bundle_id === imported.bundle_id ? imported : item))
+          : [imported, ...current];
+      });
+      setToast(`已重试导入：${imported.display_name}`);
+      await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
+      await refreshDirectoryState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function rollbackLocalBridgeImportResult(result: LocalBridgePendingActionResultDto) {
+    if (result.action_kind !== "bundle.import" || !result.bundle_id || !result.can_request_rollback) {
+      setError("该动作结果不能回滚");
+      return;
+    }
+    setBusy("bundle-import");
+    setError(null);
+    try {
+      const rolledBack = await invokeCommand<ReceivedBundleDto>("rollback_imported_bundle", {
+        request: {
+          bundle_id: result.bundle_id
+        }
+      });
+      setStagedBundles((current) => {
+        const exists = current.some((item) => item.bundle_id === rolledBack.bundle_id);
+        return exists
+          ? current.map((item) => (item.bundle_id === rolledBack.bundle_id ? rolledBack : item))
+          : [rolledBack, ...current];
+      });
+      setToast(`已回滚：${rolledBack.display_name}`);
+      await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
+      await refreshDirectoryState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function importCurrentStagedBundle(bundle: ReceivedBundleDto, conflictStrategy = "reject") {
     setBusy("bundle-import");
     setError(null);
@@ -1448,6 +1533,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
     removeLocalBridgePendingAction,
     revokeLocalBridgeAuthorization,
     pruneLocalBridgeAuthorizations,
+    runNextLocalBridgeAction,
+    retryLocalBridgeImportResult,
+    rollbackLocalBridgeImportResult,
     importCurrentStagedBundle,
     rollbackCurrentBundle,
     deleteCurrentStagedBundle

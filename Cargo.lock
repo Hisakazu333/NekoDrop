@@ -2041,11 +2041,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "nekobuddy-resource-adapters"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "nekodrop-core",
+ "nekolink-adapter-contract",
+ "nekolink-protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "walkdir",
+]
+
+[[package]]
 name = "nekobuddy-workspace-adapter"
 version = "0.1.0"
 dependencies = [
  "hex",
  "nekodrop-core",
+ "nekolink-adapter-contract",
  "nekolink-protocol",
  "serde",
  "serde_json",
@@ -2102,9 +2117,11 @@ dependencies = [
 name = "nekodrop-sidecar"
 version = "0.1.0"
 dependencies = [
+ "nekobuddy-resource-adapters",
  "nekobuddy-workspace-adapter",
  "nekodrop-network",
  "nekodrop-service",
+ "nekolink-adapter-contract",
  "serde",
  "serde_json",
 ]
@@ -2123,6 +2140,15 @@ dependencies = [
  "sha2",
  "walkdir",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "nekolink-adapter-contract"
+version = "0.1.0"
+dependencies = [
+ "nekolink-protocol",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

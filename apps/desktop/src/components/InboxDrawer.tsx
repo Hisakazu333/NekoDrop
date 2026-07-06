@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import {
@@ -29,6 +29,7 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
     deleteCurrentStagedBundle,
     setError
   } = useAppContext();
+  const [expandedBundleIds, setExpandedBundleIds] = useState<Set<string>>(() => new Set());
 
   if (!isOpen) return null;
 
@@ -36,7 +37,7 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
   const pendingBundles = stagedBundles.filter((b) => b.staging_status !== "deleted" && b.staging_status !== "expired");
   const totalCount = localBridgePendingActions.length + pendingBundles.length;
 
-  const handleAction = async (action: LocalBridgePendingActionDto, accept: boolean) => {
+  const handleCancelAction = async (action: LocalBridgePendingActionDto) => {
     try {
       await removeLocalBridgePendingAction(action);
     } catch (err) {
@@ -67,6 +68,14 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+  const toggleBundleDetail = (bundleId: string) => {
+    setExpandedBundleIds((current) => {
+      const next = new Set(current);
+      if (next.has(bundleId)) next.delete(bundleId);
+      else next.add(bundleId);
+      return next;
+    });
+  };
 
   return (
     <div className="drawer-overlay" onClick={onClose}>
@@ -96,25 +105,18 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
               {/* 1. 本地桥外部应用请求 / Local Bridge Actions */}
               {localBridgePendingActions.map((action) => (
                 <div key={action.request_id} className="drawer-card action-card">
-                  <div className="card-tag action-tag">外部应用申请</div>
+                  <div className="card-tag action-tag">待执行动作</div>
                   <h4 className="card-title">{action.client_display_name || "本地应用"}</h4>
                   <p className="card-desc">
-                    申请获取本机设备列表或发起数据包传输。该权限为临时授权。
+                    已授权的本机动作正在队列中等待执行。拒绝会从队列移除。
                   </p>
                   <div className="card-actions">
                     <button
                       className="btn-pill btn-reject"
-                      onClick={() => handleAction(action, false)}
+                      onClick={() => handleCancelAction(action)}
                       type="button"
                     >
                       拒绝
-                    </button>
-                    <button
-                      className="btn-pill btn-accept"
-                      onClick={() => handleAction(action, true)}
-                      type="button"
-                    >
-                      允许
                     </button>
                   </div>
                 </div>
@@ -137,10 +139,17 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
                     <div className="card-actions">
                       <button
                         className="btn-pill btn-reject"
+                        onClick={() => toggleBundleDetail(bundle.bundle_id)}
+                        type="button"
+                      >
+                        查看详情
+                      </button>
+                      <button
+                        className="btn-pill btn-reject"
                         onClick={() => handleDeleteBundle(bundle)}
                         type="button"
                       >
-                        删除
+                        拒绝
                       </button>
                       {bundle.can_import_now ? (
                         <button
@@ -148,7 +157,7 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
                           onClick={() => handleImportBundle(bundle)}
                           type="button"
                         >
-                          导入
+                          {bundle.staging_status === "import_failed" ? "重试" : "确认导入"}
                         </button>
                       ) : null}
                       {!bundle.can_import_now && bundleCanUseImportStrategy(bundle, "rename") ? (
@@ -175,10 +184,26 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
                           onClick={() => handleRollbackBundle(bundle)}
                           type="button"
                         >
-                          撤回
+                          回滚
                         </button>
                       ) : null}
                     </div>
+                    {expandedBundleIds.has(bundle.bundle_id) ? (
+                      <div className="bundle-detail-grid">
+                        <span>Bundle ID</span>
+                        <strong>{bundle.bundle_id}</strong>
+                        <span>类型</span>
+                        <strong>{bundleTypeLabel(bundle.bundle_type)}</strong>
+                        <span>文件</span>
+                        <strong>{bundle.file_count} 个</strong>
+                        <span>导入计划</span>
+                        <strong>{importPlanLine ?? importStatus.detail}</strong>
+                        <span>Receipt</span>
+                        <strong>{bundle.has_import_receipt ? "已记录" : "无"}</strong>
+                        <span>回滚</span>
+                        <strong>{bundle.can_request_rollback ? `可回滚 ${bundle.rollback_file_count} 个文件` : "不可回滚"}</strong>
+                      </div>
+                    ) : null}
                   </div>
                 );
               })}

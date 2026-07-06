@@ -4699,6 +4699,10 @@ fn local_bridge_pending_authorization_response(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 
@@ -9079,6 +9083,11 @@ mod tests {
         assert_eq!(response.events_next_after_id, None);
         assert!(!response.events_has_more);
         assert_eq!(
+            response.events_recovery_action.as_deref(),
+            Some("reset_cursor_and_poll_snapshot")
+        );
+        assert!(!response.events_result_followup_required);
+        assert_eq!(
             response.events_visible_first_id.as_deref(),
             Some("bridge-action-send-visible")
         );
@@ -9209,6 +9218,99 @@ mod tests {
             Some("bridge-action-send-b-running")
         );
         assert_eq!(response.events_visible_count, 1);
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn local_bridge_event_poll_marks_terminal_action_events_for_results_followup() {
+        let dir = unique_bundle_temp_dir("local-bridge-terminal-action-event-followup");
+        let staging_root = dir.join("bundle_staging");
+        let import_root = dir.join("bundle_imports");
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime
+            .authorizations
+            .lock()
+            .unwrap()
+            .push(local_bridge_authorization(
+                "sender-app",
+                &[LocalBridgePermissionScope::BundleSend],
+                1_000,
+                5_000,
+            ));
+        for (event_id, status, updated_at_ms) in [
+            (
+                "bridge-action-send-running",
+                nekolink_protocol::LocalBridgeActionLifecycleStatus::Running,
+                2_000,
+            ),
+            (
+                "bridge-action-send-succeeded",
+                nekolink_protocol::LocalBridgeActionLifecycleStatus::Succeeded,
+                2_100,
+            ),
+        ] {
+            push_local_bridge_runtime_event(
+                &runtime,
+                nekolink_protocol::LocalBridgeEvent::ActionUpdated(
+                    nekolink_protocol::LocalBridgeActionUpdatedEvent {
+                        event_id: event_id.to_string(),
+                        request_id: "bridge-send-terminal".to_string(),
+                        action_kind: "bundle.send".to_string(),
+                        client_id: "sender-app".to_string(),
+                        client_app_kind: Some("agent".to_string()),
+                        status,
+                        reason: None,
+                        message: "send lifecycle update".to_string(),
+                        bundle_id: Some("bundle_send_terminal".to_string()),
+                        bundle_type: Some(BundleType::Skill),
+                        target_device_id: Some("device-a".to_string()),
+                        updated_at_ms,
+                    },
+                ),
+            )
+            .unwrap();
+        }
+        let poll_request = serde_json::json!({
+            "kind": "events.poll",
+            "payload": {
+                "request_id": "bridge-events-terminal-action",
+                "client": {
+                    "client_id": "sender-app",
+                    "display_name": "Sender App",
+                    "app_kind": "agent"
+                },
+                "after_event_id": null,
+                "action_request_id": "bridge-send-terminal",
+                "limit": 10
+            }
+        })
+        .to_string();
+
+        let response = handle_local_bridge_request_with_runtime_at(
+            &poll_request,
+            &[],
+            None,
+            &staging_root,
+            &import_root,
+            &runtime,
+            false,
+            2_500,
+        )
+        .unwrap();
+
+        assert_eq!(response.status, "ok");
+        assert_eq!(response.events.len(), 2);
+        assert!(response.events_result_followup_required);
+        assert_eq!(
+            response.events_result_followup_action.as_deref(),
+            Some("actions.results")
+        );
+        assert_eq!(
+            response.events_terminal_action_request_ids,
+            vec!["bridge-send-terminal"]
+        );
+        assert_eq!(response.events_recovery_action, None);
 
         fs::remove_dir_all(dir).unwrap();
     }
@@ -10298,6 +10400,10 @@ mod tests {
             Some("bridge-event-1")
         );
         assert!(first_page.events_has_more);
+        assert_eq!(
+            first_page.events_recovery_action.as_deref(),
+            Some("poll_with_events_next_after_id")
+        );
         assert_eq!(first_page.events_cursor_state, "ok");
         assert_eq!(
             first_page.events_visible_first_id.as_deref(),
@@ -10318,6 +10424,7 @@ mod tests {
             Some("bridge-event-3")
         );
         assert!(!second_page.events_has_more);
+        assert_eq!(second_page.events_recovery_action, None);
         assert_eq!(second_page.events_cursor_state, "ok");
         assert_eq!(
             second_page.events_visible_first_id.as_deref(),
@@ -10394,6 +10501,10 @@ mod tests {
         assert_eq!(response.events_last_id, None);
         assert_eq!(response.events_next_after_id, None);
         assert!(!response.events_has_more);
+        assert_eq!(
+            response.events_recovery_action.as_deref(),
+            Some("reset_cursor_and_poll_snapshot")
+        );
         assert_eq!(
             response.events_visible_first_id.as_deref(),
             Some("bridge-event-current")

@@ -1,4 +1,7 @@
-use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgeEvent};
+use nekolink_protocol::{
+    LocalBridgeClientIdentity, LocalBridgeEvent, LOCAL_BRIDGE_ACTION_RESULT_FOLLOWUP_ACTION,
+    LOCAL_BRIDGE_CURSOR_HAS_MORE_RECOVERY_ACTION, LOCAL_BRIDGE_CURSOR_MISSING_RECOVERY_ACTION,
+};
 
 use super::local_bridge_responses::LocalBridgeEventPage;
 
@@ -22,6 +25,7 @@ pub(super) fn local_bridge_events_after(
     let mut visible_first_event_id = None;
     let mut visible_last_event_id = None;
     let mut visible_event_count = 0;
+    let mut terminal_action_request_ids = Vec::new();
     for event in events {
         let is_allowed = local_bridge_event_is_allowed(
             event,
@@ -54,6 +58,13 @@ pub(super) fn local_bridge_events_after(
             has_more = true;
             continue;
         }
+        if let LocalBridgeEvent::ActionUpdated(action) = event {
+            if action.status.is_terminal()
+                && !terminal_action_request_ids.contains(&action.request_id)
+            {
+                terminal_action_request_ids.push(action.request_id.clone());
+            }
+        }
         output.push(serde_json::to_value(event).map_err(|error| error.to_string())?);
         last_event_id = Some(event_id.clone());
         next_after_event_id = Some(event_id);
@@ -65,6 +76,16 @@ pub(super) fn local_bridge_events_after(
     } else {
         "missing"
     };
+    let recovery_action = if cursor_state == "missing" {
+        Some(LOCAL_BRIDGE_CURSOR_MISSING_RECOVERY_ACTION.to_string())
+    } else if cursor_state == "ok" && has_more {
+        Some(LOCAL_BRIDGE_CURSOR_HAS_MORE_RECOVERY_ACTION.to_string())
+    } else {
+        None
+    };
+    let result_followup_required = !terminal_action_request_ids.is_empty();
+    let result_followup_action =
+        result_followup_required.then(|| LOCAL_BRIDGE_ACTION_RESULT_FOLLOWUP_ACTION.to_string());
     Ok(LocalBridgeEventPage {
         events: output,
         last_event_id,
@@ -74,6 +95,10 @@ pub(super) fn local_bridge_events_after(
         visible_first_event_id,
         visible_last_event_id,
         visible_event_count,
+        recovery_action,
+        result_followup_required,
+        result_followup_action,
+        terminal_action_request_ids,
     })
 }
 

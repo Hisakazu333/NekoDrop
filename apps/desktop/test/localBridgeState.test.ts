@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  localBridgeAdapterImportSummary,
+  localBridgeEventBoundaryLine,
   localBridgeActionResultDetailLine,
   localBridgeActionResultLifecycleView,
   localBridgeActionResultSummary,
@@ -11,6 +13,7 @@ import {
 import type {
   LocalBridgePendingActionDto,
   LocalBridgePendingActionResultDto,
+  LocalBridgeResponseDto,
   LocalBridgeRuntimeStatusDto
 } from "../src/types.ts";
 
@@ -72,6 +75,41 @@ function runtimeStatus(overrides: Partial<LocalBridgeRuntimeStatusDto> = {}): Lo
     authorization_count: 1,
     pending_action_count: 0,
     last_error: null,
+    ...overrides
+  };
+}
+
+function bridgeResponse(overrides: Partial<LocalBridgeResponseDto> = {}): LocalBridgeResponseDto {
+  return {
+    request_id: "bridge-events-1",
+    status: "ok",
+    message: "local bridge event snapshot",
+    security_state: "authorized",
+    requires_user_confirmation: false,
+    client_state: "authorized",
+    client_id: "sample.adapter",
+    client_display_name: "Sample Adapter",
+    authorization_scopes: [],
+    authorization_reason: null,
+    authorization_ttl_seconds: null,
+    authorization_code: null,
+    authorization_expires_at_ms: null,
+    devices: [],
+    staged_bundles: [],
+    transfer_status: null,
+    action_results: [],
+    events: [],
+    events_last_id: null,
+    events_next_after_id: null,
+    events_has_more: false,
+    events_cursor_state: "ok",
+    events_visible_first_id: null,
+    events_visible_last_id: null,
+    events_visible_count: 0,
+    events_recovery_action: null,
+    events_result_followup_required: false,
+    events_result_followup_action: null,
+    events_terminal_action_request_ids: [],
     ...overrides
   };
 }
@@ -177,4 +215,65 @@ test("local bridge action result labels sensitive bundle policy failures", () =>
   assert.equal(view.tone, "warning");
   assert.equal(view.label, "预检失败");
   assert.equal(view.detail, "预检失败：敏感资料需要可信设备");
+});
+
+test("local bridge adapter import summary counts actionable import states", () => {
+  const results = [
+    actionResult({
+      request_id: "bridge-import-ok",
+      status: "completed",
+      lifecycle_status: "succeeded",
+      reason: null,
+      import_receipt_path: "/tmp/private/receipt.json",
+      rollback_file_count: 2,
+      can_request_rollback: true
+    }),
+    actionResult({
+      request_id: "bridge-import-conflict",
+      lifecycle_status: "conflict",
+      reason: "bundle_import_conflict"
+    }),
+    actionResult({
+      request_id: "bridge-import-failed",
+      lifecycle_status: "failed",
+      reason: "bundle_import_failed"
+    }),
+    actionResult({
+      request_id: "bridge-send-ok",
+      action_kind: "bundle.send",
+      lifecycle_status: "succeeded",
+      reason: null
+    })
+  ];
+
+  assert.equal(
+    localBridgeAdapterImportSummary(results),
+    "导入 1 成功 · 1 可回滚 · 1 冲突 · 1 失败"
+  );
+});
+
+test("local bridge event boundary line explains cursor and result followup states", () => {
+  assert.equal(
+    localBridgeEventBoundaryLine(bridgeResponse({
+      events_cursor_state: "missing",
+      events_recovery_action: "reset_cursor_and_poll_snapshot"
+    })),
+    "事件游标已失效 · 需要清空 cursor 后重拉快照"
+  );
+  assert.equal(
+    localBridgeEventBoundaryLine(bridgeResponse({
+      events_result_followup_required: true,
+      events_result_followup_action: "actions.results",
+      events_terminal_action_request_ids: ["bridge-send-1", "bridge-import-1"]
+    })),
+    "动作已到终态 · 需要用 actions.results 补查 2 个结果"
+  );
+  assert.equal(
+    localBridgeEventBoundaryLine(bridgeResponse({
+      events_has_more: true,
+      events_recovery_action: "poll_with_events_next_after_id",
+      events_next_after_id: "bridge-event-1"
+    })),
+    "事件还有下一页 · 使用 events_next_after_id 继续拉取"
+  );
 });

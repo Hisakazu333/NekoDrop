@@ -6,6 +6,13 @@ use std::{
 };
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
+use nekolink_adapter_contract::{
+    transaction_contract, AdapterConflictStrategy, AdapterMigrationPolicy, AdapterResourceKind,
+    AdapterSchemaDescriptor, ADAPTER_APP_MANIFEST_SCHEMA, ADAPTER_DESCRIPTOR_SCHEMA,
+    ADAPTER_IMPORT_PLAN_SCHEMA, ADAPTER_IMPORT_RECEIPT_SCHEMA, ADAPTER_IMPORT_RECEIPT_VERSION,
+    ADAPTER_IMPORT_TRANSACTION_SCHEMA, ADAPTER_IMPORT_TRANSACTION_VERSION,
+    ADAPTER_ROLLBACK_BLOCKING_REASONS, ADAPTER_TRANSACTION_CONTRACT_SCHEMA,
+};
 use nekolink_protocol::{
     BundleChecksums, BundleCompatibility, BundleFile, BundleManifest, BundlePermissionScope,
     BundlePermissions, BundleSecretsPolicy, BundleSender, BundleSummary, BundleType,
@@ -20,8 +27,6 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
 
-pub const ADAPTER_DESCRIPTOR_SCHEMA: &str = "nekolink.adapter.v1";
-pub const APP_MANIFEST_SCHEMA: &str = "nekolink.adapter.app_manifest.v1";
 pub const WORKSPACE_ADAPTER_ID: &str = "nekobuddy.workspace.adapter";
 pub const WORKSPACE_ADAPTER_DISPLAY_NAME: &str = "NekoBuddy Workspace Adapter";
 pub const WORKSPACE_APP_KIND: &str = "nekobuddy";
@@ -29,14 +34,15 @@ pub const WORKSPACE_SOURCE_APP: &str = "NekoBuddy";
 pub const WORKSPACE_SCHEMA_ID: &str = "nekobuddy.workspace";
 pub const WORKSPACE_SCHEMA_VERSION: u16 = 1;
 pub const WORKSPACE_WRITE_TARGET: &str = "nekobuddy.workspace";
-pub const WORKSPACE_IMPORT_PLAN_SCHEMA: &str = "nekobuddy.workspace.adapter.import_plan.v1";
-pub const WORKSPACE_IMPORT_RECEIPT_SCHEMA: &str = "nekobuddy.workspace.adapter.import_receipt.v1";
-pub const WORKSPACE_IMPORT_TRANSACTION_SCHEMA: &str =
-    "nekobuddy.workspace.adapter.import_transaction.v1";
-pub const WORKSPACE_TRANSACTION_CONTRACT_SCHEMA: &str =
-    "nekobuddy.workspace.adapter.transaction_contract.v1";
-pub const WORKSPACE_IMPORT_RECEIPT_VERSION: u16 = 1;
-pub const WORKSPACE_IMPORT_TRANSACTION_VERSION: u16 = 1;
+pub const WORKSPACE_IMPORT_PLAN_SCHEMA: &str = ADAPTER_IMPORT_PLAN_SCHEMA;
+pub const WORKSPACE_IMPORT_RECEIPT_SCHEMA: &str = ADAPTER_IMPORT_RECEIPT_SCHEMA;
+pub const WORKSPACE_IMPORT_TRANSACTION_SCHEMA: &str = ADAPTER_IMPORT_TRANSACTION_SCHEMA;
+pub const WORKSPACE_TRANSACTION_CONTRACT_SCHEMA: &str = ADAPTER_TRANSACTION_CONTRACT_SCHEMA;
+pub const WORKSPACE_IMPORT_RECEIPT_VERSION: u16 = ADAPTER_IMPORT_RECEIPT_VERSION;
+pub const WORKSPACE_IMPORT_TRANSACTION_VERSION: u16 = ADAPTER_IMPORT_TRANSACTION_VERSION;
+pub const WORKSPACE_APP_ENTRY_SCHEMA: &str = "nekobuddy.workspace.app_entry.v1";
+pub const WORKSPACE_APP_ENTRY_REGISTRY_SCHEMA: &str = "nekobuddy.workspace.app_entry_registry.v1";
+pub const WORKSPACE_APP_ENTRY_REGISTRY_FILE: &str = ".nekobuddy-workspace-app-entry-registry.json";
 
 const WORKSPACES_DIR: &str = "workspaces";
 const IMPORT_TRANSACTIONS_DIR: &str = ".nekobuddy-workspace-import-transactions";
@@ -67,75 +73,10 @@ const LOCAL_PATH_KEY_PARTS: &[&str] = &[
     "cache",
     "keychain",
 ];
-const IMPORT_PLAN_STATES: &[&str] = &[
-    "would_import",
-    "would_conflict",
-    "would_skip",
-    "cannot_import",
-];
-const IMPORT_TRANSACTION_STATES: &[&str] =
-    &["prepared", "copied", "committed", "failed", "recovered"];
-const ROLLBACK_BLOCKING_REASONS: &[&str] = &[
-    "target_missing",
-    "receipt_already_rolled_back",
-    "imported_path_unsafe",
-    "imported_file_missing",
-    "imported_file_changed",
-];
+const ROLLBACK_BLOCKING_REASONS: &[&str] = ADAPTER_ROLLBACK_BLOCKING_REASONS;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum WorkspaceConflictStrategy {
-    Reject,
-    Rename,
-    SkipConflicts,
-}
-
-impl WorkspaceConflictStrategy {
-    pub fn parse(value: &str) -> NekoDropResult<Self> {
-        match value {
-            "reject" => Ok(Self::Reject),
-            "rename" => Ok(Self::Rename),
-            "skip_conflicts" => Ok(Self::SkipConflicts),
-            other => Err(storage_error(format!(
-                "workspace conflict_strategy must be reject, rename, or skip_conflicts: {other}"
-            ))),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Reject => "reject",
-            Self::Rename => "rename",
-            Self::SkipConflicts => "skip_conflicts",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum WorkspaceMigrationPolicy {
-    ManualOnly,
-    AdapterManaged,
-}
-
-impl WorkspaceMigrationPolicy {
-    pub fn parse(value: &str) -> NekoDropResult<Self> {
-        match value {
-            "manual_only" => Ok(Self::ManualOnly),
-            "adapter_managed" => Ok(Self::AdapterManaged),
-            other => Err(storage_error(format!(
-                "workspace migration_policy must be manual_only or adapter_managed: {other}"
-            ))),
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::ManualOnly => "manual_only",
-            Self::AdapterManaged => "adapter_managed",
-        }
-    }
-}
+pub type WorkspaceConflictStrategy = AdapterConflictStrategy;
+pub type WorkspaceMigrationPolicy = AdapterMigrationPolicy;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExportWorkspaceBundleRequest {
@@ -314,6 +255,100 @@ impl Default for BridgeRequestOptions {
             conflict_strategy: None,
         }
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceAppExportSendRequest {
+    pub source_path: PathBuf,
+    pub output_root: PathBuf,
+    pub bundle_id: String,
+    pub display_name: String,
+    pub contains_secrets: bool,
+    pub migration_policy: WorkspaceMigrationPolicy,
+    pub target_device_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WorkspaceAppExportSend {
+    pub schema: String,
+    pub exported: ExportedWorkspaceBundle,
+    pub bundle_root: PathBuf,
+    pub send_request: Value,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceAppImportReviewRequest {
+    pub bundle_root: PathBuf,
+    pub target_root: PathBuf,
+    pub conflict_strategy: WorkspaceConflictStrategy,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceAppImportReview {
+    pub schema: String,
+    pub dry_run: WorkspaceImportDryRun,
+    pub can_confirm: bool,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceAppImportConfirmRequest {
+    pub bundle_root: PathBuf,
+    pub target_root: PathBuf,
+    pub conflict_strategy: WorkspaceConflictStrategy,
+    pub registry_path: PathBuf,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceAppImportConfirm {
+    pub schema: String,
+    pub confirm: WorkspaceImportConfirm,
+    pub registry_path: PathBuf,
+    pub registry_record: Option<WorkspaceAppEntryRecord>,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WorkspaceAppRollbackRequest {
+    pub registry_path: PathBuf,
+    pub bundle_id: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WorkspaceAppRollback {
+    pub schema: String,
+    pub rollback: WorkspaceRollback,
+    pub registry_path: PathBuf,
+    pub registry_record: WorkspaceAppEntryRecord,
+    pub next_action: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceAppEntryRegistry {
+    pub schema: String,
+    pub records: Vec<WorkspaceAppEntryRecord>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceAppEntryRecord {
+    pub schema: String,
+    pub bundle_id: String,
+    pub display_name: String,
+    pub status: String,
+    pub conflict_strategy: String,
+    pub target_root: PathBuf,
+    pub target_path: PathBuf,
+    pub receipt_path: Option<PathBuf>,
+    pub transaction_path: Option<PathBuf>,
+    pub imported_file_count: usize,
+    pub skipped_file_count: usize,
+    pub conflict_count: usize,
+    pub recorded_at_ms: u128,
+    pub rolled_back_at_ms: Option<u128>,
+    pub rollback_status: Option<String>,
+    pub rollback_blocking_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -544,7 +579,7 @@ pub fn build_descriptor() -> Value {
 
 pub fn build_app_manifest() -> Value {
     json!({
-        "schema": APP_MANIFEST_SCHEMA,
+        "schema": ADAPTER_APP_MANIFEST_SCHEMA,
         "app_id": "nekobuddy.app",
         "display_name": "NekoBuddy",
         "app_kind": WORKSPACE_APP_KIND,
@@ -587,40 +622,184 @@ pub fn build_app_manifest() -> Value {
 }
 
 pub fn build_transaction_contract() -> Value {
-    json!({
-        "schema": WORKSPACE_TRANSACTION_CONTRACT_SCHEMA,
-        "adapter_id": WORKSPACE_ADAPTER_ID,
-        "workspace_schema": {
-            "schema_id": WORKSPACE_SCHEMA_ID,
-            "current_version": WORKSPACE_SCHEMA_VERSION,
-            "supported_versions": [WORKSPACE_SCHEMA_VERSION],
-            "default_migration_policy": "manual_only",
-            "supported_migration_policies": ["manual_only", "adapter_managed"],
-            "unsupported_version_state": "cannot_import"
+    let mut contract = transaction_contract(
+        WORKSPACE_ADAPTER_ID,
+        AdapterResourceKind::Workspace,
+        AdapterSchemaDescriptor {
+            schema_id: WORKSPACE_SCHEMA_ID.to_string(),
+            current_version: WORKSPACE_SCHEMA_VERSION,
+            supported_versions: vec![WORKSPACE_SCHEMA_VERSION],
+            default_migration_policy: WorkspaceMigrationPolicy::ManualOnly,
         },
-        "import_plan": {
-            "schema": WORKSPACE_IMPORT_PLAN_SCHEMA,
-            "stable_states": IMPORT_PLAN_STATES,
-            "migration_fields_required": true
+    );
+    contract["workspace_schema"] = json!({
+        "schema_id": WORKSPACE_SCHEMA_ID,
+        "current_version": WORKSPACE_SCHEMA_VERSION,
+        "supported_versions": [WORKSPACE_SCHEMA_VERSION],
+        "default_migration_policy": "manual_only",
+        "supported_migration_policies": ["manual_only", "adapter_managed"],
+        "unsupported_version_state": "cannot_import"
+    });
+    contract["receipt"]["records_workspace_schema_version"] = json!(true);
+    contract
+}
+
+pub fn workspace_app_export_send(
+    request: WorkspaceAppExportSendRequest,
+) -> NekoDropResult<WorkspaceAppExportSend> {
+    let exported = export_workspace_bundle(ExportWorkspaceBundleRequest {
+        source_path: request.source_path,
+        output_root: request.output_root,
+        bundle_id: request.bundle_id,
+        display_name: request.display_name,
+        contains_secrets: request.contains_secrets,
+        migration_policy: request.migration_policy,
+    })?;
+    let bundle_root = exported
+        .bundle_root
+        .canonicalize()
+        .unwrap_or_else(|_| exported.bundle_root.clone());
+    let send_request = build_bridge_request(
+        "send",
+        BridgeRequestOptions {
+            request_id: request.request_id,
+            target_device_id: request.target_device_id,
+            bundle_root: Some(bundle_root.clone()),
+            ..BridgeRequestOptions::default()
         },
-        "import_transaction": {
-            "schema": WORKSPACE_IMPORT_TRANSACTION_SCHEMA,
-            "version": WORKSPACE_IMPORT_TRANSACTION_VERSION,
-            "states": IMPORT_TRANSACTION_STATES,
-            "failure_recovery_action": "recover-import"
-        },
-        "receipt": {
-            "schema": WORKSPACE_IMPORT_RECEIPT_SCHEMA,
-            "version": WORKSPACE_IMPORT_RECEIPT_VERSION,
-            "records_workspace_schema_version": true,
-            "records_migration_status": true,
-            "records_transaction_id": true
-        },
-        "rollback": {
-            "blocking_reasons": ROLLBACK_BLOCKING_REASONS,
-            "changed_files_block_rollback": true,
-            "missing_files_block_rollback": true
-        }
+    )?;
+
+    Ok(WorkspaceAppExportSend {
+        schema: WORKSPACE_APP_ENTRY_SCHEMA.to_string(),
+        exported,
+        bundle_root,
+        send_request,
+        next_action: "submit_bundle_send_request".to_string(),
+    })
+}
+
+pub fn workspace_app_import_review(
+    request: WorkspaceAppImportReviewRequest,
+) -> NekoDropResult<WorkspaceAppImportReview> {
+    let dry_run = dry_run_workspace_import(ImportWorkspaceRequest {
+        bundle_root: request.bundle_root,
+        target_root: request.target_root,
+        conflict_strategy: request.conflict_strategy,
+        simulate_fail_after_copy: false,
+    })?;
+    let can_confirm = matches!(dry_run.status.as_str(), "would_import" | "would_skip");
+    let next_action = if can_confirm {
+        "show_import_plan_and_wait_for_user_confirm".to_string()
+    } else {
+        dry_run.plan.next_action.clone()
+    };
+
+    Ok(WorkspaceAppImportReview {
+        schema: WORKSPACE_APP_ENTRY_SCHEMA.to_string(),
+        dry_run,
+        can_confirm,
+        next_action,
+    })
+}
+
+pub fn workspace_app_import_confirm(
+    request: WorkspaceAppImportConfirmRequest,
+) -> NekoDropResult<WorkspaceAppImportConfirm> {
+    let registry_path = request.registry_path;
+    let confirm = confirm_workspace_import(ImportWorkspaceRequest {
+        bundle_root: request.bundle_root,
+        target_root: request.target_root,
+        conflict_strategy: request.conflict_strategy,
+        simulate_fail_after_copy: false,
+    })?;
+
+    let registry_record = if confirm.receipt_path.is_some() || confirm.transaction_path.is_some() {
+        let record = WorkspaceAppEntryRecord {
+            schema: WORKSPACE_APP_ENTRY_SCHEMA.to_string(),
+            bundle_id: confirm.bundle_id.clone(),
+            display_name: confirm.display_name.clone(),
+            status: confirm.status.clone(),
+            conflict_strategy: confirm.conflict_strategy.clone(),
+            target_root: confirm.target_root.clone(),
+            target_path: confirm.target_path.clone(),
+            receipt_path: confirm.receipt_path.clone(),
+            transaction_path: confirm.transaction_path.clone(),
+            imported_file_count: confirm.imported_file_count,
+            skipped_file_count: confirm.skipped_file_count,
+            conflict_count: confirm.conflict_count,
+            recorded_at_ms: now_ms(),
+            rolled_back_at_ms: None,
+            rollback_status: None,
+            rollback_blocking_reason: None,
+        };
+        append_workspace_app_entry_record(&registry_path, record.clone())?;
+        Some(record)
+    } else {
+        None
+    };
+
+    let next_action = match confirm.status.as_str() {
+        "imported" => "track_receipt_or_offer_rollback".to_string(),
+        "failed" => "show_failure_and_offer_recover_import".to_string(),
+        "conflict" => "show_conflict_and_request_new_strategy".to_string(),
+        "cannot_import" => "show_blocking_reason".to_string(),
+        _ => "show_import_result".to_string(),
+    };
+
+    Ok(WorkspaceAppImportConfirm {
+        schema: WORKSPACE_APP_ENTRY_SCHEMA.to_string(),
+        confirm,
+        registry_path,
+        registry_record,
+        next_action,
+    })
+}
+
+pub fn workspace_app_rollback_latest(
+    request: WorkspaceAppRollbackRequest,
+) -> NekoDropResult<WorkspaceAppRollback> {
+    validate_bundle_id(&request.bundle_id)?;
+    let mut registry = read_workspace_app_entry_registry(&request.registry_path)?;
+    let Some(index) = registry.records.iter().rposition(|record| {
+        record.bundle_id == request.bundle_id
+            && record.status == "imported"
+            && record.receipt_path.is_some()
+            && record.rollback_status.as_deref() != Some("rolled_back")
+    }) else {
+        return Err(storage_error(format!(
+            "no rollback-ready workspace import registry record for bundle_id: {}",
+            request.bundle_id
+        )));
+    };
+    let receipt_path = registry.records[index]
+        .receipt_path
+        .clone()
+        .ok_or_else(|| storage_error("workspace import registry record is missing receipt_path"))?;
+    let rollback = rollback_workspace_import(&receipt_path)?;
+    let mut record = registry.records[index].clone();
+    record.rolled_back_at_ms = Some(now_ms());
+    record.rollback_status = Some(rollback.status.clone());
+    record.rollback_blocking_reason = rollback.rollback_blocking_reason.clone();
+    if rollback.status == "rolled_back" {
+        record.status = "rolled_back".to_string();
+    } else if rollback.status == "blocked" {
+        record.status = "rollback_blocked".to_string();
+    }
+    registry.records[index] = record.clone();
+    write_workspace_app_entry_registry(&request.registry_path, &registry)?;
+
+    let next_action = if rollback.status == "rolled_back" {
+        "show_rollback_complete".to_string()
+    } else {
+        "show_rollback_blocking_reason".to_string()
+    };
+
+    Ok(WorkspaceAppRollback {
+        schema: WORKSPACE_APP_ENTRY_SCHEMA.to_string(),
+        rollback,
+        registry_path: request.registry_path,
+        registry_record: record,
+        next_action,
     })
 }
 
@@ -2199,6 +2378,45 @@ fn remove_empty_dirs(root: &Path, current: &Path) -> bool {
     }
 }
 
+fn read_workspace_app_entry_registry(path: &Path) -> NekoDropResult<WorkspaceAppEntryRegistry> {
+    if !path.exists() {
+        return Ok(WorkspaceAppEntryRegistry {
+            schema: WORKSPACE_APP_ENTRY_REGISTRY_SCHEMA.to_string(),
+            records: Vec::new(),
+        });
+    }
+    let registry: WorkspaceAppEntryRegistry = read_json_file(path)?;
+    if registry.schema != WORKSPACE_APP_ENTRY_REGISTRY_SCHEMA {
+        return Err(storage_error(format!(
+            "unsupported workspace app entry registry schema: {}",
+            registry.schema
+        )));
+    }
+    Ok(registry)
+}
+
+fn write_workspace_app_entry_registry(
+    path: &Path,
+    registry: &WorkspaceAppEntryRegistry,
+) -> NekoDropResult<()> {
+    if registry.schema != WORKSPACE_APP_ENTRY_REGISTRY_SCHEMA {
+        return Err(storage_error(format!(
+            "unsupported workspace app entry registry schema: {}",
+            registry.schema
+        )));
+    }
+    write_json_file(path, registry)
+}
+
+fn append_workspace_app_entry_record(
+    path: &Path,
+    record: WorkspaceAppEntryRecord,
+) -> NekoDropResult<()> {
+    let mut registry = read_workspace_app_entry_registry(path)?;
+    registry.records.push(record);
+    write_workspace_app_entry_registry(path, &registry)
+}
+
 fn read_json_file<T: for<'de> Deserialize<'de>>(path: &Path) -> NekoDropResult<T> {
     let bytes = fs::read(path)
         .map_err(|error| storage_error(format!("failed to read {}: {error}", path.display())))?;
@@ -2482,6 +2700,84 @@ mod tests {
             results["payload"]["action_request_id"],
             send["payload"]["request_id"]
         );
+    }
+
+    #[test]
+    fn app_entry_flow_exports_tracks_receipt_and_rolls_back() {
+        let root = unique_temp_dir("app-entry");
+        let source = root.join("workspace");
+        let output = root.join("out");
+        let target_root = root.join("target");
+        let registry_path = root.join(WORKSPACE_APP_ENTRY_REGISTRY_FILE);
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("workspace.json"), r#"{"title":"App entry"}"#).unwrap();
+        fs::write(source.join("notes.md"), "app entry flow\n").unwrap();
+
+        let send = workspace_app_export_send(WorkspaceAppExportSendRequest {
+            source_path: source,
+            output_root: output.clone(),
+            bundle_id: "bundle_workspace_app_entry".to_string(),
+            display_name: "App entry".to_string(),
+            contains_secrets: false,
+            migration_policy: WorkspaceMigrationPolicy::ManualOnly,
+            target_device_id: Some("paired-device-1".to_string()),
+            request_id: Some("workspace-send-app-entry".to_string()),
+        })
+        .unwrap();
+        assert_eq!(send.schema, WORKSPACE_APP_ENTRY_SCHEMA);
+        assert_eq!(
+            send.exported.bundle_root,
+            output.join("bundle_workspace_app_entry")
+        );
+        assert_eq!(send.send_request["kind"], "bundle.send");
+        assert_eq!(
+            send.send_request["payload"]["bundle_root"],
+            send.bundle_root.display().to_string()
+        );
+        assert_eq!(
+            send.send_request["payload"]["target_device_id"],
+            "paired-device-1"
+        );
+
+        let review = workspace_app_import_review(WorkspaceAppImportReviewRequest {
+            bundle_root: send.exported.bundle_root.clone(),
+            target_root: target_root.clone(),
+            conflict_strategy: WorkspaceConflictStrategy::Reject,
+        })
+        .unwrap();
+        assert_eq!(review.dry_run.status, "would_import");
+        assert!(review.can_confirm);
+
+        let confirmed = workspace_app_import_confirm(WorkspaceAppImportConfirmRequest {
+            bundle_root: send.exported.bundle_root,
+            target_root,
+            conflict_strategy: WorkspaceConflictStrategy::Reject,
+            registry_path: registry_path.clone(),
+        })
+        .unwrap();
+        assert_eq!(confirmed.confirm.status, "imported");
+        let record = confirmed.registry_record.clone().unwrap();
+        assert!(record.receipt_path.as_ref().unwrap().is_file());
+        assert!(record.transaction_path.as_ref().unwrap().is_file());
+        assert!(registry_path.is_file());
+        let registry: WorkspaceAppEntryRegistry = read_json_file(&registry_path).unwrap();
+        assert_eq!(registry.schema, WORKSPACE_APP_ENTRY_REGISTRY_SCHEMA);
+        assert_eq!(registry.records.len(), 1);
+        assert_eq!(registry.records[0].bundle_id, "bundle_workspace_app_entry");
+
+        let rollback = workspace_app_rollback_latest(WorkspaceAppRollbackRequest {
+            registry_path: registry_path.clone(),
+            bundle_id: "bundle_workspace_app_entry".to_string(),
+        })
+        .unwrap();
+        assert_eq!(rollback.rollback.status, "rolled_back");
+        assert_eq!(rollback.registry_record.status, "rolled_back");
+        assert_eq!(
+            rollback.registry_record.rollback_status.as_deref(),
+            Some("rolled_back")
+        );
+        let registry: WorkspaceAppEntryRegistry = read_json_file(&registry_path).unwrap();
+        assert_eq!(registry.records[0].status, "rolled_back");
     }
 
     fn unique_temp_dir(name: &str) -> PathBuf {

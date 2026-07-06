@@ -1,7 +1,8 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import {
+  localBridgeAdapterImportSummary,
   localBridgeActionResultLifecycleView,
   localBridgeActionResultSummary,
   localBridgePendingActionStateLine,
@@ -10,6 +11,7 @@ import {
   localBridgeRuntimeStatusLine,
   localBridgeScopeLabel
 } from "../localBridgeState";
+import type { LocalBridgePendingActionDto, LocalBridgePendingActionResultDto } from "../types";
 
 const RECEIVE_POLICY_OPTIONS = [
   { value: "always_ask", label: "需要每次询问" },
@@ -46,11 +48,39 @@ export function SettingsManager() {
     removeLocalBridgePendingAction,
     revokeLocalBridgeAuthorization,
     pruneLocalBridgeAuthorizations,
+    runNextLocalBridgeAction,
+    retryLocalBridgeImportResult,
+    rollbackLocalBridgeImportResult,
     busy,
     appearance,
     setAppearance
   } = useAppContext();
+  const [expandedActionIds, setExpandedActionIds] = useState<Set<string>>(() => new Set());
+  const [expandedResultIds, setExpandedResultIds] = useState<Set<string>>(() => new Set());
   const localBridgeRuntimeLine = localBridgeRuntimeStatusLine(localBridgeStatus);
+  const localBridgeImportSummary = localBridgeAdapterImportSummary(localBridgeActionResults);
+  const toggleActionDetail = (requestId: string) => {
+    setExpandedActionIds((current) => {
+      const next = new Set(current);
+      if (next.has(requestId)) next.delete(requestId);
+      else next.add(requestId);
+      return next;
+    });
+  };
+  const toggleResultDetail = (key: string) => {
+    setExpandedResultIds((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  };
+  const canRetryResult = (result: LocalBridgePendingActionResultDto) =>
+    result.action_kind === "bundle.import" &&
+    Boolean(result.bundle_id) &&
+    ["failed", "conflict"].includes(result.lifecycle_status ?? result.status);
+  const retryStrategyForResult = (result: LocalBridgePendingActionResultDto) =>
+    (result.lifecycle_status ?? result.status) === "conflict" ? "rename" : result.conflict_strategy ?? "reject";
 
   return (
     <div className="manager-pane settings-manager">
@@ -215,6 +245,11 @@ export function SettingsManager() {
                 <span className="metric-label">未决确认请求</span>
                 <strong className="metric-val">{localBridgeStatus?.pending_action_count || 0} 个</strong>
               </div>
+              <div className="status-metric">
+                <span className="metric-label">Adapter 导入</span>
+                <strong className="metric-val">{localBridgeActionResults.filter((result) => result.action_kind === "bundle.import").length} 条</strong>
+                <small className="metric-subline" title={localBridgeImportSummary}>{localBridgeImportSummary}</small>
+              </div>
             </div>
 
             {/* 本地桥自测与手动授权 */}
@@ -260,25 +295,49 @@ export function SettingsManager() {
             {/* 待执行动作与最近结果 / Pending actions and recent action results */}
             <div className="local-bridge-work-queue">
               <div className="queue-column">
-                <h4>待执行</h4>
+                <div className="queue-title-row">
+                  <h4>待执行</h4>
+                  <button
+                    className="btn-text-muted"
+                    disabled={Boolean(busy) || localBridgePendingActions.length === 0}
+                    onClick={runNextLocalBridgeAction}
+                    type="button"
+                  >
+                    确认下一项
+                  </button>
+                </div>
                 {localBridgePendingActions.length > 0 ? (
                   <div className="local-bridge-list">
                     {localBridgePendingActions.map((action) => (
-                      <div className="console-row" key={action.request_id}>
-                        <div className="console-copy">
-                          <span title={localBridgePendingActionTitle(action)}>
-                            {action.client_display_name} · {localBridgePendingActionSummary(action)}
-                          </span>
-                          <small>{localBridgePendingActionStateLine(action)}</small>
+                      <div className="console-row is-stack" key={action.request_id}>
+                        <div className="console-row-main">
+                          <div className="console-copy">
+                            <span title={localBridgePendingActionTitle(action)}>
+                              {action.client_display_name} · {localBridgePendingActionSummary(action)}
+                            </span>
+                            <small>{localBridgePendingActionStateLine(action)}</small>
+                          </div>
+                          <div className="console-actions">
+                            <button
+                              className="btn-text-muted"
+                              onClick={() => toggleActionDetail(action.request_id)}
+                              type="button"
+                            >
+                              查看详情
+                            </button>
+                            <button
+                              className="btn-text-muted"
+                              disabled={busy === "open"}
+                              onClick={() => removeLocalBridgePendingAction(action)}
+                              type="button"
+                            >
+                              拒绝
+                            </button>
+                          </div>
                         </div>
-                        <button
-                          className="btn-text-muted"
-                          disabled={busy === "open"}
-                          onClick={() => removeLocalBridgePendingAction(action)}
-                          type="button"
-                        >
-                          移除
-                        </button>
+                        {expandedActionIds.has(action.request_id) ? (
+                          <LocalBridgeActionDetail action={action} />
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -293,17 +352,53 @@ export function SettingsManager() {
                   <div className="local-bridge-list">
                     {localBridgeActionResults.slice(0, 5).map((result) => {
                       const lifecycle = localBridgeActionResultLifecycleView(result);
+                      const resultKey = `${result.request_id}-${result.claimed_at_ms}`;
+                      const canRetry = canRetryResult(result);
                       return (
-                        <div className="console-row" key={`${result.request_id}-${result.claimed_at_ms}`}>
-                          <div className="console-copy">
-                            <span title={result.message}>
-                              {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                        <div className="console-row is-stack" key={resultKey}>
+                          <div className="console-row-main">
+                            <div className="console-copy">
+                              <span title={result.message}>
+                                {result.client_display_name} · {localBridgeActionResultSummary(result)}
+                              </span>
+                              <small>{lifecycle.detail}</small>
+                            </div>
+                            <span className={`local-bridge-result-status is-${lifecycle.tone}`}>
+                              {lifecycle.label}
                             </span>
-                            <small>{lifecycle.detail}</small>
                           </div>
-                          <span className={`local-bridge-result-status is-${lifecycle.tone}`}>
-                            {lifecycle.label}
-                          </span>
+                          <div className="console-actions">
+                            <button
+                              className="btn-text-muted"
+                              onClick={() => toggleResultDetail(resultKey)}
+                              type="button"
+                            >
+                              查看详情
+                            </button>
+                            {canRetry ? (
+                              <button
+                                className="btn-text-muted"
+                                disabled={Boolean(busy)}
+                                onClick={() => retryLocalBridgeImportResult(result, retryStrategyForResult(result))}
+                                type="button"
+                              >
+                                重试
+                              </button>
+                            ) : null}
+                            {result.can_request_rollback ? (
+                              <button
+                                className="btn-text-muted"
+                                disabled={Boolean(busy)}
+                                onClick={() => rollbackLocalBridgeImportResult(result)}
+                                type="button"
+                              >
+                                回滚
+                              </button>
+                            ) : null}
+                          </div>
+                          {expandedResultIds.has(resultKey) ? (
+                            <LocalBridgeResultDetail result={result} />
+                          ) : null}
                         </div>
                       );
                     })}
@@ -362,6 +457,46 @@ export function SettingsManager() {
           </div>
         </div>
       </div>
+    </div>
+  );
+}
+
+function LocalBridgeActionDetail({ action }: { action: LocalBridgePendingActionDto }) {
+  return (
+    <div className="console-detail-grid">
+      <span>请求 ID</span>
+      <strong>{action.request_id}</strong>
+      <span>客户端</span>
+      <strong>{action.client_id}</strong>
+      <span>动作</span>
+      <strong>{action.action_kind}</strong>
+      <span>资料包</span>
+      <strong>{action.staged_bundle_id ?? action.bundle_type ?? "未公开"}</strong>
+      <span>冲突策略</span>
+      <strong>{action.conflict_strategy ?? "不需要"}</strong>
+    </div>
+  );
+}
+
+function LocalBridgeResultDetail({ result }: { result: LocalBridgePendingActionResultDto }) {
+  return (
+    <div className="console-detail-grid">
+      <span>请求 ID</span>
+      <strong>{result.request_id}</strong>
+      <span>客户端</span>
+      <strong>{result.client_id}</strong>
+      <span>动作</span>
+      <strong>{result.action_kind}</strong>
+      <span>状态</span>
+      <strong>{result.lifecycle_status ?? result.status}</strong>
+      <span>资料包</span>
+      <strong>{result.bundle_id ?? result.bundle_type ?? "未公开"}</strong>
+      <span>原因</span>
+      <strong>{result.reason ?? "无"}</strong>
+      <span>Receipt</span>
+      <strong>{result.has_import_receipt ? "已记录" : "无"}</strong>
+      <span>可回滚文件</span>
+      <strong>{result.rollback_file_count}</strong>
     </div>
   );
 }

@@ -18,6 +18,10 @@ pub(super) struct LocalBridgeEventPage {
     pub(super) visible_first_event_id: Option<String>,
     pub(super) visible_last_event_id: Option<String>,
     pub(super) visible_event_count: usize,
+    pub(super) recovery_action: Option<String>,
+    pub(super) result_followup_required: bool,
+    pub(super) result_followup_action: Option<String>,
+    pub(super) terminal_action_request_ids: Vec<String>,
 }
 
 pub(super) fn local_bridge_read_only_response(
@@ -58,6 +62,10 @@ pub(super) fn local_bridge_read_only_response(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 
@@ -113,6 +121,10 @@ pub(super) fn local_bridge_read_only_unsupported_response(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 
@@ -147,6 +159,10 @@ pub(super) fn local_bridge_pending_confirmation_response(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 
@@ -182,6 +198,10 @@ pub(super) fn local_bridge_authorized_runtime_pending_response(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 
@@ -217,6 +237,10 @@ pub(super) fn local_bridge_events_response(
         events_visible_first_id: page.visible_first_event_id,
         events_visible_last_id: page.visible_last_event_id,
         events_visible_count: page.visible_event_count,
+        events_recovery_action: page.recovery_action,
+        events_result_followup_required: page.result_followup_required,
+        events_result_followup_action: page.result_followup_action,
+        events_terminal_action_request_ids: page.terminal_action_request_ids,
     }
 }
 
@@ -252,6 +276,10 @@ pub(super) fn local_bridge_action_results_response(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 
@@ -296,6 +324,10 @@ pub(super) fn local_bridge_pending_authorization_response_from_pending(
         events_visible_first_id: None,
         events_visible_last_id: None,
         events_visible_count: 0,
+        events_recovery_action: None,
+        events_result_followup_required: false,
+        events_result_followup_action: None,
+        events_terminal_action_request_ids: Vec::new(),
     }
 }
 

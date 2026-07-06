@@ -2,6 +2,7 @@ import { bundleImportStrategyLabel, bundleRollbackBlockingLabel, bundleTypeLabel
 import type {
   LocalBridgePendingActionDto,
   LocalBridgePendingActionResultDto,
+  LocalBridgeResponseDto,
   LocalBridgePermissionScope,
   LocalBridgeRuntimeStatusDto
 } from "./types";
@@ -165,4 +166,29 @@ export function localBridgeActionResultReasonLabel(reason: string) {
   if (reason === "bundle_rollback_failed") return "撤回失败";
   if (reason === "sensitive_bundle_requires_trusted_device") return "敏感资料需要可信设备";
   return reason;
+}
+
+export function localBridgeEventBoundaryLine(response: LocalBridgeResponseDto) {
+  if (response.events_cursor_state === "missing") {
+    return "事件游标已失效 · 需要清空 cursor 后重拉快照";
+  }
+  if (response.events_result_followup_required) {
+    const count = response.events_terminal_action_request_ids.length;
+    return `动作已到终态 · 需要用 actions.results 补查 ${count} 个结果`;
+  }
+  if (response.events_has_more) {
+    return "事件还有下一页 · 使用 events_next_after_id 继续拉取";
+  }
+  if (response.events_cursor_state === "empty") return "事件流为空";
+  return "事件流正常";
+}
+
+export function localBridgeAdapterImportSummary(results: LocalBridgePendingActionResultDto[]) {
+  const imports = results.filter((result) => result.action_kind === "bundle.import");
+  const succeeded = imports.filter((result) => (result.lifecycle_status ?? result.status) === "succeeded").length;
+  const rollbackReady = imports.filter((result) => result.can_request_rollback).length;
+  const conflicts = imports.filter((result) => (result.lifecycle_status ?? result.status) === "conflict").length;
+  const failed = imports.filter((result) => (result.lifecycle_status ?? result.status) === "failed").length;
+  if (imports.length === 0) return "暂无 adapter 导入结果";
+  return `导入 ${succeeded} 成功 · ${rollbackReady} 可回滚 · ${conflicts} 冲突 · ${failed} 失败`;
 }

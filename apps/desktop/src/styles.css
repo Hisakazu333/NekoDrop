@@ -2286,7 +2286,7 @@ html[data-theme="dark"] .identity-section-card {
 }
 .local-bridge-status-row {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 12px;
 }
 .status-metric {
@@ -2355,6 +2355,12 @@ html[data-theme="dark"] .identity-section-card {
   flex-direction: column;
   gap: 10px;
 }
+.queue-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
 .queue-column h4 {
   color: var(--text-secondary);
   font-size: 13px;
@@ -2374,6 +2380,16 @@ html[data-theme="dark"] .identity-section-card {
   background-color: var(--bg-sunken);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-md);
+}
+.console-row.is-stack {
+  align-items: stretch;
+  flex-direction: column;
+}
+.console-row-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
 }
 .console-copy {
   min-width: 0;
@@ -2395,6 +2411,32 @@ html[data-theme="dark"] .identity-section-card {
 .console-copy small {
   color: var(--text-muted);
   font-size: 11px;
+}
+.console-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.console-detail-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+}
+.console-detail-grid span {
+  color: var(--text-muted);
+}
+.console-detail-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-weight: 700;
 }
 .local-bridge-result-status {
   flex: none;
@@ -2441,6 +2483,10 @@ html[data-theme="dark"] .identity-section-card {
   color: var(--text-muted);
   font-size: 12px;
   font-weight: 600;
+}
+.btn-text-muted:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 .btn-text-muted:hover { color: var(--text-main); }
 
@@ -2628,11 +2674,32 @@ html[data-theme="dark"] .identity-section-card {
   color: var(--text-secondary);
   line-height: 1.5;
 }
+.bundle-detail-grid {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 6px 10px;
+  padding: 10px;
+  background-color: var(--bg-sunken);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  font-size: 11px;
+}
+.bundle-detail-grid span {
+  color: var(--text-muted);
+}
+.bundle-detail-grid strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+}
 .card-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
   margin-top: 4px;
+  flex-wrap: wrap;
 }
 .btn-pill {
   padding: 6px 16px;

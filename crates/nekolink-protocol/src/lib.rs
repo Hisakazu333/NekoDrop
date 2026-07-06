@@ -34,6 +34,10 @@ pub const DEVICE_IDENTITY_PUBLIC_KEY_LEN: usize = 32;
 pub const DEVICE_IDENTITY_SIGNATURE_LEN: usize = 64;
 pub const BUNDLE_SCHEMA_V1: &str = "nekolink.bundle.v1";
 pub const BUNDLE_CHECKSUM_SHA256: &str = "sha256";
+pub const LOCAL_BRIDGE_EVENT_CURSOR_STATES: &[&str] = &["ok", "missing", "empty"];
+pub const LOCAL_BRIDGE_CURSOR_MISSING_RECOVERY_ACTION: &str = "reset_cursor_and_poll_snapshot";
+pub const LOCAL_BRIDGE_CURSOR_HAS_MORE_RECOVERY_ACTION: &str = "poll_with_events_next_after_id";
+pub const LOCAL_BRIDGE_ACTION_RESULT_FOLLOWUP_ACTION: &str = "actions.results";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Envelope<T = Value> {
@@ -2126,6 +2130,13 @@ impl LocalBridgeActionLifecycleStatus {
             Self::Cancelled => "cancelled",
         }
     }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Succeeded | Self::Failed | Self::Conflict | Self::Cancelled
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -2605,27 +2616,13 @@ fn validate_bundle_path(path: &str) -> Result<(), ProtocolError> {
 
 fn validate_bridge_bundle_root(path: &str) -> Result<(), ProtocolError> {
     validate_non_empty("bundle_root", path)?;
-    if path.starts_with('/')
-        || path.starts_with('\\')
-        || path.contains('\\')
-        || path.contains("..")
-        || path.contains(':')
-        || path.contains('\0')
-    {
+    if path != path.trim() || path.contains('\0') {
         return Err(ProtocolError::new(
             ErrorCode::InvalidPayload,
-            "bundle_root must be a safe relative bundle path",
+            "bundle_root must be a non-empty local filesystem path without leading/trailing whitespace or NUL bytes",
         ));
     }
-    validate_transfer_manifest_path(path).map_err(|error| {
-        ProtocolError::new(
-            error.code,
-            format!(
-                "bundle_root must be a safe relative bundle path: {}",
-                error.message
-            ),
-        )
-    })
+    Ok(())
 }
 
 fn validate_optional_bridge_client(
@@ -4938,7 +4935,7 @@ mod tests {
             request_id: "bridge-request-1".to_string(),
             client: None,
             target_device_id: Some("device-b".to_string()),
-            bundle_root: "bundle".to_string(),
+            bundle_root: "/tmp/nekodrop/exported/bundle".to_string(),
             bundle_type: BundleType::Skill,
             require_trusted_device: true,
         });
@@ -4949,7 +4946,10 @@ mod tests {
         assert_eq!(json["kind"], "bundle.send");
         assert_eq!(json["payload"]["request_id"], "bridge-request-1");
         assert_eq!(json["payload"]["target_device_id"], "device-b");
-        assert_eq!(json["payload"]["bundle_root"], "bundle");
+        assert_eq!(
+            json["payload"]["bundle_root"],
+            "/tmp/nekodrop/exported/bundle"
+        );
         assert_eq!(json["payload"]["bundle_type"], "skill");
         assert_eq!(json["payload"]["require_trusted_device"], true);
         assert_eq!(
@@ -5175,12 +5175,34 @@ mod tests {
     }
 
     #[test]
-    fn local_bridge_rejects_unsafe_bundle_roots() {
+    fn local_bridge_event_contract_exposes_cursor_and_terminal_result_rules() {
+        assert_eq!(
+            LOCAL_BRIDGE_EVENT_CURSOR_STATES,
+            &["ok", "missing", "empty"]
+        );
+        assert_eq!(
+            LOCAL_BRIDGE_CURSOR_MISSING_RECOVERY_ACTION,
+            "reset_cursor_and_poll_snapshot"
+        );
+        assert_eq!(
+            LOCAL_BRIDGE_ACTION_RESULT_FOLLOWUP_ACTION,
+            "actions.results"
+        );
+        assert!(!LocalBridgeActionLifecycleStatus::Queued.is_terminal());
+        assert!(!LocalBridgeActionLifecycleStatus::Running.is_terminal());
+        assert!(LocalBridgeActionLifecycleStatus::Succeeded.is_terminal());
+        assert!(LocalBridgeActionLifecycleStatus::Failed.is_terminal());
+        assert!(LocalBridgeActionLifecycleStatus::Conflict.is_terminal());
+        assert!(LocalBridgeActionLifecycleStatus::Cancelled.is_terminal());
+    }
+
+    #[test]
+    fn local_bridge_rejects_malformed_bundle_roots() {
         let request = LocalBridgeRequest::SendBundle(LocalBridgeSendBundleRequest {
             request_id: "bridge-request-1".to_string(),
             client: None,
             target_device_id: None,
-            bundle_root: "../bundle".to_string(),
+            bundle_root: " /tmp/nekodrop/exported/bundle ".to_string(),
             bundle_type: BundleType::Skill,
             require_trusted_device: true,
         });
