@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const appSource = readFileSync(new URL("../src/App.tsx", import.meta.url), "utf8");
+const contextSource = readFileSync(new URL("../src/context/AppContext.tsx", import.meta.url), "utf8");
 const tauriSource = readFileSync(new URL("../src/tauri.ts", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const commandsSource = readFileSync(new URL("../src-tauri/src/commands/mod.rs", import.meta.url), "utf8");
@@ -25,7 +25,7 @@ function functionBody(source, name) {
 }
 
 test("realtime refresh uses one desktop snapshot IPC instead of separate status invokes", () => {
-  const body = functionBody(appSource, "refreshRealtimeState");
+  const body = functionBody(contextSource, "refreshRealtimeState");
 
   assert.match(body, /invokeCommand<DesktopRealtimeSnapshotDto>\("get_desktop_realtime_snapshot"\)/);
   assert.doesNotMatch(body, /"get_receive_status"/);
@@ -45,11 +45,11 @@ test("desktop realtime snapshot command is typed and registered", () => {
 });
 
 test("startup defers slow receive diagnostics and directory refresh work", () => {
-  assert.match(appSource, /STARTUP_SLOW_REFRESH_DELAY_MS/);
-  assert.match(appSource, /window\.setTimeout\(\(\) => \{/);
-  assert.match(appSource, /refreshReceiveState\(\{ includeDiagnostics: true, includeDirectoryState: true \}\)/);
+  assert.match(contextSource, /STARTUP_SLOW_REFRESH_DELAY_MS/);
+  assert.match(contextSource, /window\.setTimeout\(\(\) => \{/);
+  assert.match(contextSource, /refreshReceiveState\(\{ includeDiagnostics: true, includeDirectoryState: true \}\)/);
 
-  const startupBlock = appSource.match(/useEffect\(\(\) => \{[\s\S]+?STARTUP_SLOW_REFRESH_DELAY_MS[\s\S]+?\}, \[\]\);/);
+  const startupBlock = contextSource.match(/useEffect\(\(\) => \{[\s\S]+?STARTUP_SLOW_REFRESH_DELAY_MS[\s\S]+?\}, \[\]\);/);
   assert.ok(startupBlock, "startup effect should defer slow refresh work");
   assert.doesNotMatch(startupBlock[0].split("window.setTimeout")[0], /includeDiagnostics: true/);
   assert.doesNotMatch(startupBlock[0].split("window.setTimeout")[0], /includeDirectoryState: true/);
