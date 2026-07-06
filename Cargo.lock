@@ -2041,6 +2041,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "nekobuddy-workspace-adapter"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "nekodrop-core",
+ "nekolink-protocol",
+ "serde",
+ "serde_json",
+ "sha2",
+ "walkdir",
+]
+
+[[package]]
 name = "nekodrop-core"
 version = "0.1.0"
 
@@ -2089,8 +2102,11 @@ dependencies = [
 name = "nekodrop-sidecar"
 version = "0.1.0"
 dependencies = [
+ "nekobuddy-workspace-adapter",
  "nekodrop-network",
  "nekodrop-service",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

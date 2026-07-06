@@ -212,24 +212,19 @@ app manifest 可以用来生成某个资源的 action plan：导出时先跑 ada
 
 ## 当前真实 adapter：NekoBuddy Workspace
 
-第一条真实上层应用 adapter 放在 [../adapters/nekobuddy-workspace-adapter](../adapters/nekobuddy-workspace-adapter)。它只处理 `workspace`，不处理 `session`、`skill` 或 `agent_profile`。
+第一条真实上层应用 adapter 是 Rust 实现，放在 [../crates/nekobuddy-workspace-adapter](../crates/nekobuddy-workspace-adapter)，并通过 `nekodrop-sidecar workspace-adapter ...` 暴露 CLI。它只处理 `workspace`，不处理 `session`、`skill` 或 `agent_profile`。
 
-它必须提供这些命令：
+它提供这些命令：
 
 - `descriptor`：输出 `nekolink.adapter.v1`
 - `app-manifest`：输出 `nekolink.adapter.app_manifest.v1`
+- `contract`：输出 workspace schema、migration policy、receipt、transaction 和 rollback blocking reason 的固定集合
 - `export`：把 NekoBuddy workspace 导出成 `workspace` bundle
 - `import-dry-run`：只检查目标、校验和冲突，不写入
 - `import-confirm`：在 dry-run 和用户/应用确认后写入 adapter 自己的数据区
 - `rollback`：按 adapter 私有 receipt 保守撤回
 - `recover-import`：按 adapter import transaction journal 清理失败导入留下的临时内容
-- `contract`：输出 workspace schema、migration policy、receipt、transaction 和 rollback blocking reason 的固定集合
-- `discover-bridge`：从显式 URL、端口、runtime status 或 bridge config 找到本机 bridge endpoint
-- `post`：把某一种 request envelope 直接 POST 到 NekoDrop local bridge
-- `send-workspace`：导出 workspace bundle，申请授权，发送 `bundle.send`，再用事件和 `actions.results` 对账
-- `receive-workspace`：读取 `bundle.detail`，先做 adapter dry-run，再请求 `bundle.import`，最后写 adapter 私有 receipt
-- `rollback-workspace`：请求 `bundle.rollback`，再按 adapter 私有 receipt 做应用侧保守撤回
-- `workflow`：输出 `authorization.request -> bundle.send -> events.poll / actions.results -> bundle.detail -> bundle.import -> actions.results -> bundle.rollback` 的请求顺序
+- `request`：生成 `authorization.request`、`bundle.send`、`bundle.detail`、`bundle.import`、`bundle.rollback`、`events.poll`、`actions.results` 的 local bridge request envelope
 
 这个 adapter 的边界：
 
@@ -245,6 +240,7 @@ app manifest 可以用来生成某个资源的 action plan：导出时先跑 ada
 - 每次导入都先写 adapter import transaction journal；失败后用 `recover-import` 清理临时目录或未完成写入
 - 每次成功导入都写 adapter 私有 receipt，receipt 必须记录 `receipt_version`、workspace schema version、migration status 和 transaction id
 - `rollback` 只删除 receipt 记录的本次导入文件；如果文件已被用户或应用改写，必须拒绝撤回，并返回固定 blocking reason
+- Rust adapter 只生成 local bridge request envelope；真正 POST、授权、队列消费、事件和动作结果仍属于 NekoDrop desktop local bridge runtime
 
 NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动作结果。NekoBuddy workspace adapter 自己负责理解 workspace 格式、脱敏、schema/migration 判断、transaction journal、dry-run、adapter-owned import、failure recovery 和 adapter-owned rollback。
 

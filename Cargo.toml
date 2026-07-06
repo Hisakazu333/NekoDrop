@@ -7,6 +7,7 @@ members = [
   "crates/nekodrop-network",
   "crates/nekodrop-service",
   "crates/nekodrop-storage",
+  "crates/nekobuddy-workspace-adapter",
   "crates/nekolink-protocol",
 ]
 

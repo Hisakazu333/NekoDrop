@@ -14,6 +14,6 @@
     "check:rust": "cargo check --workspace",
     "security:audit": "node scripts/audit-supported-platforms.mjs",
     "test:security-audit": "node --test scripts/audit-supported-platforms.test.mjs",
-    "test:adapter": "node --test apps/desktop/test/genericAdapterSample.test.mjs apps/desktop/test/nekobuddyWorkspaceAdapter.test.mjs"
+    "test:adapter": "node --test apps/desktop/test/genericAdapterSample.test.mjs"
   }
 }

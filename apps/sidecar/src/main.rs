@@ -1,7 +1,15 @@
+use std::collections::BTreeMap;
 use std::env;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
+use nekobuddy_workspace_adapter::{
+    build_app_manifest, build_bridge_request, build_descriptor, build_transaction_contract,
+    confirm_workspace_import, dry_run_workspace_import, export_workspace_bundle,
+    recover_workspace_import, rollback_workspace_import, BridgeRequestOptions,
+    ExportWorkspaceBundleRequest, ImportWorkspaceRequest, WorkspaceConflictStrategy,
+    WorkspaceMigrationPolicy,
+};
 use nekodrop_network::Endpoint;
 use nekodrop_service::{
     accept_transfer, connection_code_for_endpoint, create_transfer_plan,
@@ -26,6 +34,7 @@ fn run() -> Result<(), String> {
         "plan" => run_plan(&args[1..]),
         "receive" => run_receive(&args[1..]),
         "send" => run_send(&args[1..]),
+        "workspace-adapter" => run_workspace_adapter(&args[1..]),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -119,6 +128,167 @@ fn run_send(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_workspace_adapter(args: &[String]) -> Result<(), String> {
+    let Some(command) = args.first().map(String::as_str) else {
+        print_usage();
+        return Err("workspace-adapter requires a command".into());
+    };
+    let (positionals, flags) = parse_flags(&args[1..])?;
+    match command {
+        "descriptor" => print_json(&build_descriptor()),
+        "app-manifest" => print_json(&build_app_manifest()),
+        "contract" => print_json(&build_transaction_contract()),
+        "export" => {
+            let migration_policy = flag_optional(&flags, "migration-policy")
+                .map(WorkspaceMigrationPolicy::parse)
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .unwrap_or(WorkspaceMigrationPolicy::ManualOnly);
+            let result = export_workspace_bundle(ExportWorkspaceBundleRequest {
+                source_path: PathBuf::from(flag_required(&flags, "source")?),
+                output_root: PathBuf::from(flag_required(&flags, "output")?),
+                bundle_id: flag_required(&flags, "bundle-id")?.to_string(),
+                display_name: flag_required(&flags, "name")?.to_string(),
+                contains_secrets: flag_bool(&flags, "contains-secrets"),
+                migration_policy,
+            })
+            .map_err(|error| error.to_string())?;
+            print_json(&result)
+        }
+        "import-dry-run" => {
+            let result = dry_run_workspace_import(workspace_import_request(&flags)?)
+                .map_err(|error| error.to_string())?;
+            print_json(&result)
+        }
+        "import-confirm" => {
+            let result = confirm_workspace_import(workspace_import_request(&flags)?)
+                .map_err(|error| error.to_string())?;
+            print_json(&result)
+        }
+        "rollback" => {
+            let result =
+                rollback_workspace_import(&PathBuf::from(flag_required(&flags, "receipt")?))
+                    .map_err(|error| error.to_string())?;
+            print_json(&result)
+        }
+        "recover-import" => {
+            let result =
+                recover_workspace_import(&PathBuf::from(flag_required(&flags, "transaction")?))
+                    .map_err(|error| error.to_string())?;
+            print_json(&result)
+        }
+        "request" => {
+            let Some(kind) = positionals.first() else {
+                return Err("workspace-adapter request requires <auth|send|detail|import|rollback|events|results>".into());
+            };
+            let result = build_bridge_request(kind, bridge_request_options(&flags)?)
+                .map_err(|error| error.to_string())?;
+            print_json(&result)
+        }
+        "help" | "--help" | "-h" => {
+            print_usage();
+            Ok(())
+        }
+        _ => Err(format!("unknown workspace-adapter command: {command}")),
+    }
+}
+
+fn workspace_import_request(
+    flags: &BTreeMap<String, String>,
+) -> Result<ImportWorkspaceRequest, String> {
+    let conflict_strategy = flag_optional(flags, "conflict-strategy")
+        .map(WorkspaceConflictStrategy::parse)
+        .transpose()
+        .map_err(|error| error.to_string())?
+        .unwrap_or(WorkspaceConflictStrategy::Reject);
+    Ok(ImportWorkspaceRequest {
+        bundle_root: PathBuf::from(flag_required(flags, "bundle-root")?),
+        target_root: PathBuf::from(flag_required(flags, "target-root")?),
+        conflict_strategy,
+        simulate_fail_after_copy: flag_bool(flags, "simulate-fail-after-copy"),
+    })
+}
+
+fn bridge_request_options(
+    flags: &BTreeMap<String, String>,
+) -> Result<BridgeRequestOptions, String> {
+    let conflict_strategy = flag_optional(flags, "conflict-strategy")
+        .map(WorkspaceConflictStrategy::parse)
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let ttl_seconds = flag_optional(flags, "ttl-seconds")
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| format!("invalid --ttl-seconds: {error}"))
+        })
+        .transpose()?;
+    Ok(BridgeRequestOptions {
+        request_id: flag_optional(flags, "request-id").map(ToOwned::to_owned),
+        target_device_id: flag_optional(flags, "target-device-id").map(ToOwned::to_owned),
+        bundle_root: flag_optional(flags, "bundle-root").map(PathBuf::from),
+        staged_bundle_id: flag_optional(flags, "staged-bundle-id").map(ToOwned::to_owned),
+        bundle_id: flag_optional(flags, "bundle-id").map(ToOwned::to_owned),
+        action_request_id: flag_optional(flags, "action-request-id").map(ToOwned::to_owned),
+        ttl_seconds: ttl_seconds.or(Some(3600)),
+        conflict_strategy,
+    })
+}
+
+fn parse_flags(args: &[String]) -> Result<(Vec<String>, BTreeMap<String, String>), String> {
+    let mut positionals = Vec::new();
+    let mut flags = BTreeMap::new();
+    let mut index = 0;
+    while index < args.len() {
+        let arg = &args[index];
+        if let Some(name) = arg.strip_prefix("--") {
+            if name.is_empty() {
+                return Err("empty flag name".into());
+            }
+            if index + 1 >= args.len() || args[index + 1].starts_with("--") {
+                flags.insert(name.to_string(), "true".to_string());
+                index += 1;
+            } else {
+                flags.insert(name.to_string(), args[index + 1].clone());
+                index += 2;
+            }
+        } else {
+            positionals.push(arg.clone());
+            index += 1;
+        }
+    }
+    Ok((positionals, flags))
+}
+
+fn flag_required<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Result<&'a str, String> {
+    flags
+        .get(name)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("missing --{name}"))
+}
+
+fn flag_optional<'a>(flags: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    flags
+        .get(name)
+        .map(String::as_str)
+        .filter(|value| !value.trim().is_empty())
+}
+
+fn flag_bool(flags: &BTreeMap<String, String>, name: &str) -> bool {
+    matches!(
+        flag_optional(flags, name),
+        Some("true" | "1" | "yes" | "on")
+    )
+}
+
+fn print_json<T: serde::Serialize>(value: &T) -> Result<(), String> {
+    let json = serde_json::to_string_pretty(value)
+        .map_err(|error| format!("failed to serialize json: {error}"))?;
+    println!("{json}");
+    Ok(())
+}
+
 fn parse_endpoint_or_connection_code(value: &str) -> Result<Endpoint, String> {
     if value.starts_with("nekodrop-v1;") {
         return endpoint_from_connection_code(value).map_err(|error| error.to_string());
@@ -140,6 +310,15 @@ fn print_usage() {
          Commands:\n\
          nekodrop-sidecar plan <path> [path...]\n\
          nekodrop-sidecar receive <bind-host:port> <receive-dir>\n\
-         nekodrop-sidecar send <host:port|connection-code> <path> [path...]"
+         nekodrop-sidecar send <host:port|connection-code> <path> [path...]\n\
+         nekodrop-sidecar workspace-adapter descriptor\n\
+         nekodrop-sidecar workspace-adapter app-manifest\n\
+         nekodrop-sidecar workspace-adapter contract\n\
+         nekodrop-sidecar workspace-adapter export --source <dir> --output <dir> --bundle-id <id> --name <name>\n\
+         nekodrop-sidecar workspace-adapter import-dry-run --bundle-root <dir> --target-root <dir>\n\
+         nekodrop-sidecar workspace-adapter import-confirm --bundle-root <dir> --target-root <dir>\n\
+         nekodrop-sidecar workspace-adapter rollback --receipt <path>\n\
+         nekodrop-sidecar workspace-adapter recover-import --transaction <path>\n\
+         nekodrop-sidecar workspace-adapter request <auth|send|detail|import|rollback|events|results>"
     );
 }
