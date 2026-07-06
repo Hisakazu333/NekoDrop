@@ -222,6 +222,8 @@ app manifest 可以用来生成某个资源的 action plan：导出时先跑 ada
 - `import-dry-run`：只检查目标、校验和冲突，不写入
 - `import-confirm`：在 dry-run 和用户/应用确认后写入 adapter 自己的数据区
 - `rollback`：按 adapter 私有 receipt 保守撤回
+- `recover-import`：按 adapter import transaction journal 清理失败导入留下的临时内容
+- `contract`：输出 workspace schema、migration policy、receipt、transaction 和 rollback blocking reason 的固定集合
 - `discover-bridge`：从显式 URL、端口、runtime status 或 bridge config 找到本机 bridge endpoint
 - `post`：把某一种 request envelope 直接 POST 到 NekoDrop local bridge
 - `send-workspace`：导出 workspace bundle，申请授权，发送 `bundle.send`，再用事件和 `actions.results` 对账
@@ -238,10 +240,13 @@ app manifest 可以用来生成某个资源的 action plan：导出时先跑 ada
 - 无法确认已脱敏时设置 `contains_secrets=true`，这种 bundle 只能保存和预览，adapter import 必须拒绝
 - `import-dry-run` 的稳定状态只允许 `would_import`、`would_conflict`、`would_skip`、`cannot_import`
 - `import-confirm` 只允许 `reject`、`rename`、`skip_conflicts`
-- 每次成功导入都写 adapter 私有 receipt
-- `rollback` 只删除 receipt 记录的本次导入文件；如果文件已被用户或应用改写，必须拒绝撤回
+- workspace schema 固定声明为 `nekobuddy.workspace` v1；不支持的 source / target version 必须进入 `cannot_import`
+- migration policy 只能是 `manual_only` 或 `adapter_managed`；当前没有实现的迁移路线不能假装自动迁移
+- 每次导入都先写 adapter import transaction journal；失败后用 `recover-import` 清理临时目录或未完成写入
+- 每次成功导入都写 adapter 私有 receipt，receipt 必须记录 `receipt_version`、workspace schema version、migration status 和 transaction id
+- `rollback` 只删除 receipt 记录的本次导入文件；如果文件已被用户或应用改写，必须拒绝撤回，并返回固定 blocking reason
 
-NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动作结果。NekoBuddy workspace adapter 自己负责理解 workspace 格式、脱敏、dry-run、adapter-owned import 和 adapter-owned rollback。
+NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动作结果。NekoBuddy workspace adapter 自己负责理解 workspace 格式、脱敏、schema/migration 判断、transaction journal、dry-run、adapter-owned import、failure recovery 和 adapter-owned rollback。
 
 ## Local Bridge 请求
 
