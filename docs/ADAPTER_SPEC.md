@@ -210,6 +210,34 @@ descriptor 描述 adapter 能力。上层应用还应该提供一个 app manifes
 
 app manifest 可以用来生成某个资源的 action plan：导出时先跑 adapter 的 `export_bundle`，再请求 `bundle.send`；导入时先查 `bundle.detail`，再请求 `bundle.import`；撤回时先查 receipt 状态，再请求 `bundle.rollback` 或走 adapter 自己的回滚逻辑。
 
+## 当前真实 adapter：NekoBuddy Workspace
+
+第一条真实上层应用 adapter 放在 [../adapters/nekobuddy-workspace-adapter](../adapters/nekobuddy-workspace-adapter)。它只处理 `workspace`，不处理 `session`、`skill` 或 `agent_profile`。
+
+它必须提供这些命令：
+
+- `descriptor`：输出 `nekolink.adapter.v1`
+- `app-manifest`：输出 `nekolink.adapter.app_manifest.v1`
+- `export`：把 NekoBuddy workspace 导出成 `workspace` bundle
+- `import-dry-run`：只检查目标、校验和冲突，不写入
+- `import-confirm`：在 dry-run 和用户/应用确认后写入 adapter 自己的数据区
+- `rollback`：按 adapter 私有 receipt 保守撤回
+- `workflow`：输出 `authorization.request -> bundle.send -> events.poll / actions.results -> bundle.detail -> bundle.import -> actions.results -> bundle.rollback` 的请求顺序
+
+这个 adapter 的边界：
+
+- `bundle_type` 固定为 `workspace`
+- descriptor 和 app manifest 不能包含本机绝对路径
+- `workspace` 是敏感 bundle，必须 `requires_trusted_device=true`
+- 导出时移除 token、cookie、私钥、密码、凭证和机器本地绝对路径
+- 无法确认已脱敏时设置 `contains_secrets=true`，这种 bundle 只能保存和预览，adapter import 必须拒绝
+- `import-dry-run` 的稳定状态只允许 `would_import`、`would_conflict`、`would_skip`、`cannot_import`
+- `import-confirm` 只允许 `reject`、`rename`、`skip_conflicts`
+- 每次成功导入都写 adapter 私有 receipt
+- `rollback` 只删除 receipt 记录的本次导入文件；如果文件已被用户或应用改写，必须拒绝撤回
+
+NekoDrop 仍然只负责传输、staging、本机导入区和 local bridge 动作结果。NekoBuddy workspace adapter 自己负责理解 workspace 格式、脱敏、dry-run、adapter-owned import 和 adapter-owned rollback。
+
 ## Local Bridge 请求
 
 本机应用通过 local bridge 请求发送 bundle 时，只提交请求：
