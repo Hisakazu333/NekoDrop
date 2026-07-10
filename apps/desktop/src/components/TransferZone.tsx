@@ -1,45 +1,39 @@
 import React, { useState } from "react";
+import { bundleTypeLabel } from "../bundleState";
+import { formatBytes, shouldShowActiveTransferBar } from "../transferProgress";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
-import { formatBytes } from "../transferProgress";
-import { bundleTypeLabel } from "../bundleState";
-import { platformBadge } from "../platformDisplay";
-import type { IconName } from "./Icon";
 
-type TabType = "transfer" | "agent" | "vlan" | "state";
 type SendMode = "file" | "bundle";
 
-interface ComingSoonCopy {
-  mascot: string;
-  title: string;
-  desc: string;
+interface TransferZoneProps {
+  inboxOpen?: boolean;
+  inspectorOpen?: boolean;
+  onToggleInbox?: () => void;
+  onToggleInspector?: () => void;
 }
 
-// 未实现能力：诚实标注为“即将推出”，不展示任何假数据或假控件
-// Unimplemented capabilities: honestly marked "coming soon", never fake data.
-const COMING_SOON: Record<Exclude<TabType, "transfer">, ComingSoonCopy> = {
-  agent: {
-    mascot: "🤖",
-    title: "Agent 协作",
-    desc: "跨设备 Agent 指令通道会作为 NekoLink 的上层能力接入，走统一的加密 session 与 local bridge，而不是写死到桌面端。当前版本尚未开放。"
-  },
-  vlan: {
-    mascot: "🎮",
-    title: "游戏联机 / 组网",
-    desc: "基于 iroh / relay 的 P2P 虚拟局域网会在 NekoLink transport 就绪后接入。当前主线仍是同局域网 TCP 传输，跨公网组网尚未开放。"
-  },
-  state: {
-    mascot: "🔄",
-    title: "状态同步 NekoState",
-    desc: "session、workspace、skill、agent profile 的跨设备迁移会通过可校验的 bundle 和 Rust adapter 进行。自动同步入口尚未开放。"
-  }
-};
+function fileName(path: string): string {
+  return path.replace(/\\/g, "/").split("/").filter(Boolean).pop() ?? path;
+}
 
-/**
- * 中间核心工作台：文件投放区与设备能力多页签控制面板
- * Central Workbench: File Transfer Zone and Device Capability Tabs
- */
-export function TransferZone() {
+function formatSpeed(bytesPerSecond: number | null): string {
+  if (!bytesPerSecond) return "-- KB/s";
+  return `${formatBytes(bytesPerSecond)}/s`;
+}
+
+function formatEta(seconds: number | null): string {
+  if (seconds === null) return "--";
+  if (seconds < 60) return `${seconds} 秒`;
+  return `${Math.floor(seconds / 60)} 分 ${seconds % 60} 秒`;
+}
+
+export function TransferZone({
+  inboxOpen = false,
+  inspectorOpen = false,
+  onToggleInbox,
+  onToggleInspector
+}: TransferZoneProps) {
   const {
     selectedPaths,
     plan,
@@ -60,6 +54,7 @@ export function TransferZone() {
     pickFolders,
     selectedDeviceId,
     selectedDeviceSnapshot,
+    setSelectedDeviceId,
     nearbyDevices,
     sendCurrentTransfer,
     busy,
@@ -68,284 +63,286 @@ export function TransferZone() {
     setConnectionCode,
     connectionCodeOpen,
     setConnectionCodeOpen,
-    transferStatus
+    transferStatus,
+    transferMetrics,
+    receiveSession,
+    startReceive,
+    stopReceive,
+    localBridgePendingActions,
+    stagedBundles,
+    setMode
   } = useAppContext();
 
-  const [activeTab, setActiveTab] = useState<TabType>("transfer");
   const [sendMode, setSendMode] = useState<SendMode>("file");
-
-  const trustedNearbyDevices = nearbyDevices.filter((d) => d.trust_state === "Trusted");
+  const trustedNearbyDevices = nearbyDevices.filter((device) => device.trust_state === "Trusted");
   const selectedDevice =
-    trustedNearbyDevices.find((d) => d.id === selectedDeviceId) ??
+    trustedNearbyDevices.find((device) => device.id === selectedDeviceId) ??
     (selectedDeviceSnapshot?.id === selectedDeviceId ? selectedDeviceSnapshot : null) ??
     null;
 
   const totalPaths = selectedPaths.length;
   const canSend = totalPaths > 0 && !busy && (Boolean(selectedDevice) || connectionCode.trim().length > 0);
-  const sendButtonLabel =
-    busy === "send"
-      ? transferStatus?.phase === "awaiting_approval"
-        ? "等待对方确认..."
-        : transferStatus?.phase === "connecting"
-        ? "正在连接..."
-        : transferStatus?.phase === "transferring"
-        ? "正在发送..."
-        : "正在发送..."
-      : selectedDevice
-      ? `发送至 ${selectedDevice.name}`
-      : connectionCode.trim()
-      ? "通过连接码发送"
-      : "请选择接收目标";
+  const isActive = Boolean(transferStatus && shouldShowActiveTransferBar(transferStatus));
+  const progressPercent =
+    transferStatus && transferStatus.total_bytes > 0
+      ? Math.min(100, Math.round((transferStatus.bytes_transferred / transferStatus.total_bytes) * 100))
+      : 0;
+  const pendingNotificationCount =
+    localBridgePendingActions.length + stagedBundles.filter((bundle) => bundle.staging_status === "saved").length;
 
-  const tabs: { id: TabType; icon: IconName; label: string; soon: boolean }[] = [
-    { id: "transfer", icon: "upload", label: "文件传输", soon: false },
-    { id: "agent", icon: "plug", label: "Agent 协作", soon: true },
-    { id: "vlan", icon: "link", label: "游戏联机 / 组网", soon: true },
-    { id: "state", icon: "package", label: "状态同步", soon: true }
-  ];
+  const openConnectionCode = () => {
+    setSelectedDeviceId(null);
+    setConnectionCodeOpen(true);
+  };
+
+  const toggleReceiving = () => {
+    if (receiveSession) {
+      stopReceive();
+    } else {
+      startReceive();
+    }
+  };
 
   return (
     <section className="transfer-zone">
-      {/* 顶部工作区标题 / Workspace Header */}
-      <div className="zone-header">
-        <div className="zone-title-group">
-          <strong>
-            {selectedDevice
-              ? `发送到 ${selectedDevice.name}`
-              : connectionCodeOpen
-              ? "通过连接码发送"
-              : "主工作台"}
-          </strong>
-          <span className="zone-subtitle">
-            {selectedDevice
-              ? `${platformBadge(selectedDevice.platform).label} · 可信设备加密通道`
-              : "把文件或文件夹丢到下面，选好设备就能发"}
-          </span>
+      <div className="zone-header" data-tauri-drag-region>
+        <div className="zone-header-drag-space" data-tauri-drag-region />
+        <div className="zone-toolbar">
+          <label className="receiving-toggle-group" title={receiveSession ? "停止接收" : "开始接收"}>
+            <span>接收</span>
+            <span className="toggle-switch">
+              <input
+                checked={Boolean(receiveSession)}
+                disabled={busy === "receive" || busy === "stop-receive"}
+                onChange={toggleReceiving}
+                type="checkbox"
+              />
+              <span className="toggle-slider" />
+            </span>
+          </label>
+          <button
+            className={`workspace-tool-btn ${inboxOpen ? "is-active" : ""}`}
+            onClick={onToggleInbox}
+            title="收件箱"
+            type="button"
+          >
+            <Icon name="inbox" />
+            {pendingNotificationCount > 0 && <span className="workspace-tool-badge" />}
+          </button>
+          <button
+            className={`workspace-tool-btn ${inspectorOpen ? "is-active" : ""}`}
+            onClick={onToggleInspector}
+            title="连接详情"
+            type="button"
+          >
+            <Icon name="panel-right" />
+          </button>
         </div>
       </div>
 
-      {/* 设备功能页签切换 / Capability Tabs */}
-      <div className="capability-tabs">
-        {tabs.map((tab) => (
-          <button
-            key={tab.id}
-            className={`tab-btn ${activeTab === tab.id ? "is-active" : ""}`}
-            onClick={() => setActiveTab(tab.id)}
-            type="button"
-          >
-            <Icon name={tab.icon} />
-            <span>{tab.label}</span>
-            {tab.soon && <span className="tab-soon-dot" title="即将推出" />}
-          </button>
-        ))}
-      </div>
-
-      {/* 页签内容区 / Tab Contents */}
       <div className="zone-body">
-        {/* 1. 文件传输页签 / File Transfer Tab */}
-        {activeTab === "transfer" && (
-          <div className="tab-pane-content transfer-pane">
-            <div className="send-mode-switch" role="tablist" aria-label="发送类型">
-              <button
-                className={sendMode === "file" ? "send-mode-btn is-active" : "send-mode-btn"}
-                onClick={() => setSendMode("file")}
-                role="tab"
-                type="button"
-              >
-                <Icon name="file" />
-                <span>文件 / 文件夹</span>
-              </button>
-              <button
-                className={sendMode === "bundle" ? "send-mode-btn is-active" : "send-mode-btn"}
-                onClick={() => setSendMode("bundle")}
-                role="tab"
-                type="button"
-              >
-                <Icon name="package" />
-                <span>资料包</span>
-              </button>
-            </div>
-
-            {sendMode === "file" ? (
-              <>
-            {/* 连接码输入区（仅在备用码模式下显示） / Connection Code Input */}
-            {connectionCodeOpen && !selectedDevice && (
-              <div className="connection-code-input-box">
-                <label htmlFor="code-input">输入接收端连接码</label>
-                <div className="input-group">
-                  <input
-                    id="code-input"
-                    type="text"
-                    placeholder="粘贴对方客户端显示的连接码..."
-                    value={connectionCode}
-                    onChange={(e) => setConnectionCode(e.target.value)}
-                  />
-                  <button
-                    className="btn-close-code"
-                    onClick={() => setConnectionCodeOpen(false)}
-                    type="button"
-                  >
-                    返回设备列表
-                  </button>
-                </div>
-              </div>
-            )}
-
-            {/* 大面积虚线拖拽区域 / Drag & Drop Zone */}
+        {sendMode === "file" ? (
+          <div className={`tab-pane-content transfer-pane codex-workspace ${dragActive ? "is-dragging" : ""}`}>
             <div className={`drag-drop-area ${dragActive ? "is-active" : ""}`}>
-              <div className="drag-drop-inner">
-                <div className="drag-drop-mascot">
-                  <Icon name="paw" />
+              <div className="workspace-intro">
+                <div className="workspace-mark" aria-hidden="true">
+                  <Icon name="devices" />
                 </div>
-                <h3>把文件或文件夹丢到这里</h3>
-                <p className="drag-drop-tip">支持直接拖放任意文件与大容量目录</p>
+                <h1>
+                  {selectedDevice ? (
+                    <>
+                      发送到{" "}
+                      <button className="workspace-target-link" onClick={() => setMode("devices")} type="button">
+                        {selectedDevice.name}
+                      </button>{" "}
+                      什么？
+                    </>
+                  ) : connectionCodeOpen ? (
+                    "通过连接码发送什么？"
+                  ) : (
+                    "想把什么发送到其他设备？"
+                  )}
+                </h1>
 
-                <div className="drag-drop-actions">
-                  <button className="btn-secondary" onClick={pickFiles} type="button" disabled={Boolean(busy)}>
+                <div className="quick-action-grid">
+                  <button className="quick-action-card tone-blue" disabled={Boolean(busy)} onClick={pickFiles} type="button">
                     <Icon name="file" />
-                    选择文件
+                    <span>发送文件</span>
                   </button>
-                  <button className="btn-secondary" onClick={pickFolders} type="button" disabled={Boolean(busy)}>
+                  <button className="quick-action-card tone-violet" disabled={Boolean(busy)} onClick={pickFolders} type="button">
                     <Icon name="folder" />
-                    选择文件夹
+                    <span>发送文件夹</span>
+                  </button>
+                  <button className="quick-action-card tone-green" onClick={() => setSendMode("bundle")} type="button">
+                    <Icon name="package" />
+                    <span>创建资料包</span>
+                  </button>
+                  <button className="quick-action-card tone-orange" onClick={openConnectionCode} type="button">
+                    <Icon name="key" />
+                    <span>使用连接码</span>
                   </button>
                 </div>
               </div>
             </div>
 
-            {/* 已选文件路径队列列表 / Selected Paths List */}
-            {totalPaths > 0 && (
-              <div className="selected-queue-box">
-                <div className="queue-header">
-                  <strong>发送队列 · {totalPaths} 个路径</strong>
-                  <button className="btn-text-danger" onClick={clearQueue} type="button">
-                    清空
-                  </button>
-                </div>
-                <div className="queue-list">
-                  {selectedPaths.map((path) => (
-                    <div className="queue-item" key={path}>
-                      <Icon name="file" className="queue-item-icon" />
-                      <span className="queue-item-path">{path}</span>
-                      <button className="queue-item-remove" onClick={() => removePath(path)} type="button" title="移除">
-                        <Icon name="x" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                {/* 扫描与计划摘要 / Scan & Plan Summary */}
-                {scanStatus && (
-                  <div className="queue-status-hint">
-                    正在扫描目录：已发现 {scanStatus.files_found} 个文件...
+            {isActive && transferStatus && (
+              <div className="transfer-live-strip">
+                <div className="transfer-live-heading">
+                  <span className="transfer-live-icon"><Icon name="file" /></span>
+                  <div>
+                    <strong>{transferStatus.root_name}</strong>
+                    <span>{progressPercent}% · {formatSpeed(transferMetrics.speedBytesPerSecond)} · 剩余 {formatEta(transferMetrics.etaSeconds)}</span>
                   </div>
-                )}
-                {plan && !scanStatus && (
-                  <div className="queue-plan-summary">
-                    <Icon name="check" />
-                    <span>
-                      传输计划已生成：<strong>{plan.file_count}</strong> 个文件 ·{" "}
-                      <strong>{formatBytes(plan.total_bytes)}</strong>
-                    </span>
-                  </div>
-                )}
+                  <Icon className="verified-shield-icon" name="shield" />
+                </div>
+                <div className="progress-bar-container">
+                  <div className="progress-bar-fill" style={{ width: `${progressPercent}%` }} />
+                </div>
               </div>
             )}
-              </>
-            ) : (
-              <section className="manual-bundle-composer">
-                <div className="bundle-composer-header">
-                  <strong>资料包目录</strong>
-                  <span>{manualBundleSourcePath ? manualBundleSourcePath : "把一个目录打包后发送"}</span>
-                </div>
 
-                <div className="bundle-composer-grid">
-                  <label>
-                    <span>类型</span>
-                    <select value={manualBundleType} onChange={(event) => setManualBundleType(event.target.value)}>
-                      <option value="workspace">Workspace</option>
-                      <option value="session">Session</option>
-                      <option value="skill">Skill</option>
-                      <option value="agent_profile">Agent profile</option>
-                      <option value="config_snapshot">Config</option>
-                    </select>
-                  </label>
-                  <label>
-                    <span>名称</span>
-                    <input
-                      value={manualBundleDisplayName}
-                      onChange={(event) => setManualBundleDisplayName(event.target.value)}
-                      placeholder="资料包名称"
-                    />
-                  </label>
-                  <label>
-                    <span>来源</span>
-                    <input
-                      value={manualBundleSourceApp}
-                      onChange={(event) => setManualBundleSourceApp(event.target.value)}
-                      placeholder="NekoDrop"
-                    />
-                  </label>
-                </div>
+            <div className="bottom-action-bar">
+              <div className="composer-context-row">
+                <button onClick={() => setMode("devices")} title="选择目标设备" type="button">
+                  <Icon name="monitor" />
+                  <span>{selectedDevice?.name ?? (connectionCodeOpen ? "连接码模式" : "选择设备")}</span>
+                </button>
+                <span><Icon name="link" />本地网络</span>
+                <span><Icon name="shield" />加密会话</span>
+              </div>
 
-                <div className="bundle-composer-actions">
-                  <button
-                    className="btn-secondary"
-                    disabled={busy === "pick-folders"}
-                    onClick={chooseManualBundleSourceDir}
-                    type="button"
-                  >
-                    <Icon name="folder" />
-                    选目录
-                  </button>
-                  <button
-                    className="btn-primary"
-                    disabled={!manualBundleSourcePath || busy === "scan"}
-                    onClick={createManualBundleForSend}
-                    type="button"
-                  >
-                    <Icon name="package" />
-                    加入发送
-                  </button>
-                </div>
-
-                {createdManualBundle ? (
-                  <div className="bundle-created-summary">
-                    {createdManualBundle.display_name} · {bundleTypeLabel(createdManualBundle.bundle_type)} ·{" "}
-                    {createdManualBundle.file_count} 个文件 · {formatBytes(createdManualBundle.total_bytes)}
+              <div className="action-bar-inner">
+                {totalPaths > 0 && (
+                  <div className="composer-files">
+                    {selectedPaths.slice(0, 4).map((path) => (
+                      <span className="composer-file-chip" key={path} title={path}>
+                        <Icon name="file" />
+                        <span>{fileName(path)}</span>
+                        <button onClick={() => removePath(path)} title="移除" type="button">
+                          <Icon name="x" />
+                        </button>
+                      </span>
+                    ))}
+                    {totalPaths > 4 && <span className="composer-more-count">+{totalPaths - 4}</span>}
+                    <button className="composer-clear-button" onClick={clearQueue} type="button">清空</button>
                   </div>
-                ) : null}
-              </section>
-            )}
+                )}
 
-            {/* 底部发送控制栏 / Send Controls */}
-            <div className="send-action-bar">
-              <button
-                className="btn-primary btn-large"
-                disabled={!canSend}
-                onClick={sendCurrentTransfer}
-                type="button"
-              >
-                <Icon name="send" />
-                <span>{sendButtonLabel}</span>
-              </button>
+                <input
+                  aria-label="连接码"
+                  onChange={(event) => setConnectionCode(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && canSend) sendCurrentTransfer();
+                  }}
+                  placeholder={connectionCodeOpen ? "粘贴接收端连接码" : "粘贴连接码或选择要发送的内容"}
+                  type="text"
+                  value={connectionCode}
+                />
+
+                {(scanStatus || plan) && (
+                  <div className="composer-plan-line">
+                    {scanStatus ? (
+                      <span>正在扫描 · {scanStatus.files_found} 个文件</span>
+                    ) : plan ? (
+                      <span>{plan.file_count} 个文件 · {formatBytes(plan.total_bytes)}</span>
+                    ) : null}
+                  </div>
+                )}
+
+                <div className="composer-footer">
+                  <div className="composer-footer-actions">
+                    <button className="composer-icon-button" disabled={Boolean(busy)} onClick={pickFiles} title="添加文件" type="button">
+                      <Icon name="plus" />
+                    </button>
+                    <button className="composer-text-button" disabled={Boolean(busy)} onClick={pickFolders} type="button">
+                      <Icon name="folder" />
+                      <span>文件夹</span>
+                    </button>
+                  </div>
+                  <button
+                    className={`btn-action-send ${canSend ? "can-submit" : ""}`}
+                    disabled={!canSend}
+                    onClick={sendCurrentTransfer}
+                    title={selectedDevice ? `发送到 ${selectedDevice.name}` : "发送"}
+                    type="button"
+                  >
+                    <Icon name="arrow-up" />
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        )}
+        ) : (
+          <div className="tab-pane-content bundle-pane codex-workspace">
+            <section className="manual-bundle-composer">
+              <button className="bundle-back-button" onClick={() => setSendMode("file")} type="button">
+                <Icon name="arrow-left" />
+                <span>返回</span>
+              </button>
+              <div className="bundle-composer-header">
+                <span className="bundle-heading-icon"><Icon name="package" /></span>
+                <div>
+                  <h1>创建资料包</h1>
+                  <strong>资料包目录</strong>
+                  <span>{manualBundleSourcePath || "尚未选择目录"}</span>
+                </div>
+              </div>
 
-        {/* 2-4. 未实现能力：诚实占位 / Unimplemented: honest placeholder */}
-        {activeTab !== "transfer" && (
-          <div className="tab-pane-content">
-            <div className="coming-soon">
-              <span className="coming-soon-badge">
-                <Icon name="sparkle" />
-                即将推出
-              </span>
-              <div className="coming-soon-mascot">{COMING_SOON[activeTab].mascot}</div>
-              <h3>{COMING_SOON[activeTab].title}</h3>
-              <p>{COMING_SOON[activeTab].desc}</p>
-              <div className="coming-soon-note">属于 NekoLink 后续版本 · 当前不影响文件传输</div>
-            </div>
+              <div className="bundle-composer-grid">
+                <label>
+                  <span>类型</span>
+                  <select value={manualBundleType} onChange={(event) => setManualBundleType(event.target.value)}>
+                    <option value="workspace">Workspace</option>
+                    <option value="session">Session</option>
+                    <option value="skill">Skill</option>
+                    <option value="agent_profile">Agent profile</option>
+                    <option value="config_snapshot">Config</option>
+                  </select>
+                </label>
+                <label>
+                  <span>名称</span>
+                  <input
+                    onChange={(event) => setManualBundleDisplayName(event.target.value)}
+                    placeholder="资料包名称"
+                    value={manualBundleDisplayName}
+                  />
+                </label>
+                <label>
+                  <span>来源</span>
+                  <input
+                    onChange={(event) => setManualBundleSourceApp(event.target.value)}
+                    placeholder="NekoDrop"
+                    value={manualBundleSourceApp}
+                  />
+                </label>
+              </div>
+
+              <div className="bundle-composer-actions">
+                <button className="btn-secondary" disabled={busy === "pick-folders"} onClick={chooseManualBundleSourceDir} type="button">
+                  <Icon name="folder" />
+                  <span>选择目录</span>
+                </button>
+                <button
+                  className="btn-primary"
+                  disabled={!manualBundleSourcePath || busy === "scan"}
+                  onClick={createManualBundleForSend}
+                  type="button"
+                >
+                  <Icon name="package" />
+                  <span>加入发送</span>
+                </button>
+              </div>
+
+              {createdManualBundle && (
+                <div className="bundle-created-summary">
+                  <Icon name="check" />
+                  <span>
+                    {createdManualBundle.display_name} · {bundleTypeLabel(createdManualBundle.bundle_type)} ·{" "}
+                    {createdManualBundle.file_count} 个文件 · {formatBytes(createdManualBundle.total_bytes)}
+                  </span>
+                </div>
+              )}
+            </section>
           </div>
         )}
       </div>

@@ -1,6 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { AppProvider, useAppContext } from "./context/AppContext";
-import { TitleBar } from "./components/TitleBar";
 import { LeftSidebar } from "./components/LeftSidebar";
 import { TransferZone } from "./components/TransferZone";
 import { DevicesManager } from "./components/DevicesManager";
@@ -16,12 +15,31 @@ import { InboxDrawer } from "./components/InboxDrawer";
 function AppContent() {
   const { error, toast, mode } = useAppContext();
   const [inboxOpen, setInboxOpen] = useState(false);
+  const [inspectorOpen, setInspectorOpen] = useState(false);
+
+  useEffect(() => {
+    if (!inspectorOpen) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setInspectorOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [inspectorOpen]);
 
   // 根据当前 mode 动态决定中栏渲染的组件 / Dynamically render the middle pane based on mode
   const renderMiddlePane = () => {
     switch (mode) {
       case "send":
-        return <TransferZone />;
+        return (
+          <TransferZone
+            inboxOpen={inboxOpen}
+            inspectorOpen={inspectorOpen}
+            onToggleInbox={() => setInboxOpen((current) => !current)}
+            onToggleInspector={() => setInspectorOpen((current) => !current)}
+          />
+        );
       case "devices":
         return <DevicesManager />;
       case "transfers":
@@ -33,11 +51,9 @@ function AppContent() {
     }
   };
 
+  // 返回三栏一体化主布局 / Return the three-column integrated layout
   return (
     <div className="app-container">
-      {/* 自定义标题栏（适配 Mac 交通灯） / Custom Titlebar */}
-      <TitleBar onToggleInbox={() => setInboxOpen(!inboxOpen)} inboxOpen={inboxOpen} />
-
       {/* 全局通知提示堆叠区 / Global Alert Notification Overlay */}
       {(error || toast) && (
         <div className="global-notification-overlay">
@@ -56,17 +72,27 @@ function AppContent() {
         </div>
       )}
 
-      {/* 三栏式工具工作台核心布局 / Three-Column Workbench Layout */}
+      {/* Codex-style two-pane workbench / Codex 风格双栏工作台 */}
       <div className="main-layout">
-        {/* 1. 左栏：导航与设备树列表 */}
-        <LeftSidebar />
+        <LeftSidebar onToggleInbox={() => setInboxOpen((current) => !current)} />
 
-        {/* 2. 中栏：工作台与能力页签（动态路由渲染） */}
         {renderMiddlePane()}
-
-        {/* 3. 右栏：活跃传输与历史面板 */}
-        <ActivityInspector />
       </div>
+
+      {inspectorOpen && (
+        <div className="activity-inspector-layer">
+          <button
+            aria-label="关闭连接详情"
+            className="activity-inspector-scrim"
+            onClick={() => setInspectorOpen(false)}
+            type="button"
+          />
+          <ActivityInspector
+            onClose={() => setInspectorOpen(false)}
+            onToggleInbox={() => setInboxOpen((current) => !current)}
+          />
+        </div>
+      )}
 
       {/* 侧滑通知收件箱抽屉 / Slide-out Inbox Drawer */}
       <InboxDrawer isOpen={inboxOpen} onClose={() => setInboxOpen(false)} />

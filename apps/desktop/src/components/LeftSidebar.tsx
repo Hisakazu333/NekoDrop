@@ -1,15 +1,15 @@
 import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
-import { Icon } from "./Icon";
 import { buildDiscoveryCopy } from "../networkPermissionHints";
 import { platformBadge } from "../platformDisplay";
 import type { DeviceDto, TrustedDeviceDto } from "../types";
+import { Icon } from "./Icon";
 
-/**
- * 左侧导航与设备树组件
- * Left Sidebar with Activity Bar and Device Tree
- */
-export function LeftSidebar() {
+interface LeftSidebarProps {
+  onToggleInbox?: () => void;
+}
+
+export function LeftSidebar({ onToggleInbox }: LeftSidebarProps) {
   const {
     snapshot,
     nearbyDevices,
@@ -24,20 +24,18 @@ export function LeftSidebar() {
     discoveryStatus
   } = useAppContext();
 
-  // 控制折叠面板的展开/收起 / Collapsible panels state
-  const [nearbyExpanded, setNearbyExpanded] = useState(true);
-  const [trustedExpanded, setTrustedExpanded] = useState(true);
+  const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-
+  const isMac = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac");
   const localPlatform = snapshot?.device_identity.platform ?? null;
   const discoveryCopy = buildDiscoveryCopy(discoveryStatus, nearbyDevices.length, localPlatform);
 
-  // 过滤设备列表 / Filter devices based on search query
-  const filteredNearby = nearbyDevices.filter((d) =>
-    d.name.toLowerCase().includes(searchQuery.toLowerCase())
+  const normalizedQuery = searchQuery.trim().toLowerCase();
+  const filteredNearby = nearbyDevices.filter((device) =>
+    device.name.toLowerCase().includes(normalizedQuery)
   );
-  const filteredTrusted = trustedDevices.filter((d) =>
-    d.device_name.toLowerCase().includes(searchQuery.toLowerCase())
+  const filteredTrusted = trustedDevices.filter((device) =>
+    device.device_name.toLowerCase().includes(normalizedQuery)
   );
 
   const handleSelectTrusted = (device: TrustedDeviceDto) => {
@@ -49,178 +47,177 @@ export function LeftSidebar() {
 
   const handleSelectNearby = (device: DeviceDto) => {
     if (device.trust_state !== "Trusted") {
-      // 未配对设备触发配对请求 / Trigger pairing request for untrusted devices
       requestPairing(device);
-    } else {
-      setSelectedDeviceId(device.id);
-      setConnectionCodeOpen(false);
-      setConnectionCode("");
-      setMode("send");
+      return;
     }
-  };
 
-  const navItems = [
-    { id: "send" as const, icon: "send" as const, label: "发送" },
-    { id: "devices" as const, icon: "devices" as const, label: "设备" },
-    { id: "transfers" as const, icon: "clock" as const, label: "历史" }
-  ];
+    setSelectedDeviceId(device.id);
+    setConnectionCodeOpen(false);
+    setConnectionCode("");
+    setMode("send");
+  };
 
   return (
     <aside className="left-sidebar">
-      {/* 极窄活动导航栏 / Vertical Activity Bar */}
-      <div className="activity-bar">
-        <div className="activity-bar-top">
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              className={`activity-btn ${mode === item.id ? "is-active" : ""}`}
-              onClick={() => setMode(item.id)}
-              title={item.label}
-              type="button"
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
-        <div className="activity-bar-bottom">
-          <button
-            className={`activity-btn ${mode === "settings" ? "is-active" : ""}`}
-            onClick={() => setMode("settings")}
-            title="系统设置"
-            type="button"
-          >
-            <Icon name="settings" />
-            <span>设置</span>
+      <div className="sidebar-header" data-tauri-drag-region>
+        {isMac && <div className="sidebar-mac-spacer" data-tauri-drag-region />}
+        <div className="sidebar-controls">
+          <button className="sidebar-icon-btn" title="收起侧边栏" type="button">
+            <Icon name="panel-left" />
+          </button>
+          <button className="sidebar-icon-btn" disabled title="后退" type="button">
+            <Icon name="arrow-left" />
+          </button>
+          <button className="sidebar-icon-btn" disabled title="前进" type="button">
+            <Icon name="arrow-right" />
           </button>
         </div>
       </div>
 
-      {/* 设备管理与发现列表树 / Device Tree Pane */}
-      <div className="device-tree-pane">
-        {/* 顶部搜索框 / Search Input */}
-        <div className="sidebar-search">
-          <div className="search-input-wrapper">
-            <Icon name="search" className="search-icon" />
-            <input
-              type="text"
-              placeholder="搜索设备..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-            />
-          </div>
-        </div>
+      <div className="sidebar-brand-row">
+        <button className="sidebar-brand" onClick={() => setMode("send")} type="button">
+          <span>Neko</span>
+          <span className="sidebar-brand-accent">Drop</span>
+        </button>
+        <button
+          aria-expanded={searchOpen}
+          className={searchOpen ? "sidebar-search-toggle is-active" : "sidebar-search-toggle"}
+          onClick={() => setSearchOpen((current) => !current)}
+          title="搜索设备"
+          type="button"
+        >
+          <Icon name="search" />
+        </button>
+      </div>
 
-        {/* 设备列表滚动区 / Scrollable List Area */}
-        <div className="device-tree-scroll">
-          {/* 1. 附近在线发现设备 / Nearby Devices */}
-          <div className="tree-section">
-            <button
-              className="tree-section-header"
-              onClick={() => setNearbyExpanded(!nearbyExpanded)}
-              type="button"
-            >
-              <span className={`chevron ${nearbyExpanded ? "is-expanded" : ""}`}>▸</span>
-              <strong>附近设备</strong>
-              <span className="tree-badge">{filteredNearby.length}</span>
+      {searchOpen && (
+        <div className="sidebar-search-panel">
+          <Icon className="search-icon" name="search" />
+          <input
+            autoFocus
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="搜索设备"
+            type="search"
+            value={searchQuery}
+          />
+          {searchQuery && (
+            <button onClick={() => setSearchQuery("")} title="清除搜索" type="button">
+              <Icon name="x" />
             </button>
+          )}
+        </div>
+      )}
 
-            {nearbyExpanded && (
-              <div className="tree-section-content">
-                {filteredNearby.length > 0 ? (
-                  filteredNearby.map((device) => {
-                    const isTrusted = device.trust_state === "Trusted";
-                    const isSelected = selectedDeviceId === device.id;
-                    const badge = platformBadge(device.platform);
-                    return (
-                      <div
-                        key={device.id}
-                        className={`tree-node ${isSelected ? "is-selected" : ""}`}
-                        onClick={() => handleSelectNearby(device)}
-                      >
-                        <span className="node-avatar">
-                          {badge.emoji}
-                          <span className="node-status-dot is-online" />
-                        </span>
-                        <div className="node-info">
-                          <span className="node-name">{device.name}</span>
-                          <span className="node-meta">
-                            {badge.label} · {isTrusted ? "已信任" : "待配对"}
-                          </span>
-                        </div>
-                        {!isTrusted && (
-                          <button
-                            className="node-action-btn"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              requestPairing(device);
-                            }}
-                            type="button"
-                          >
-                            配对
-                          </button>
-                        )}
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="tree-node-empty">{discoveryCopy.label}</div>
-                )}
-              </div>
+      <nav className="sidebar-menu" aria-label="主导航">
+        <button
+          className={mode === "send" ? "sidebar-menu-btn is-active" : "sidebar-menu-btn"}
+          onClick={() => setMode("send")}
+          type="button"
+        >
+          <Icon name="compose" />
+          <span>新建传输</span>
+        </button>
+        <button
+          className={mode === "devices" ? "sidebar-menu-btn is-active" : "sidebar-menu-btn"}
+          onClick={() => setMode("devices")}
+          type="button"
+        >
+          <Icon name="devices" />
+          <span>设备</span>
+        </button>
+        <button
+          className={mode === "transfers" ? "sidebar-menu-btn is-active" : "sidebar-menu-btn"}
+          onClick={() => setMode("transfers")}
+          type="button"
+        >
+          <Icon name="clock" />
+          <span>传输记录</span>
+        </button>
+        <button className="sidebar-menu-btn" onClick={onToggleInbox} type="button">
+          <Icon name="inbox" />
+          <span>收件箱</span>
+        </button>
+      </nav>
+
+      <div className="sidebar-scroll">
+        <section className="sidebar-section">
+          <div className="sidebar-section-title">
+            <span>附近设备</span>
+            {filteredNearby.length > 0 && <span>{filteredNearby.length}</span>}
+          </div>
+          <div className="sidebar-section-content">
+            {filteredNearby.length > 0 ? (
+              filteredNearby.map((device) => {
+                const badge = platformBadge(device.platform);
+                const isSelected = selectedDeviceId === device.id;
+                const isTrusted = device.trust_state === "Trusted";
+
+                return (
+                  <button
+                    className={isSelected ? "sidebar-device-item is-selected" : "sidebar-device-item"}
+                    key={device.id}
+                    onClick={() => handleSelectNearby(device)}
+                    title={`${badge.label} · ${isTrusted ? "已信任" : "点击配对"}`}
+                    type="button"
+                  >
+                    <span className="device-name-group">
+                      <Icon name="monitor" />
+                      <span>{device.name}</span>
+                    </span>
+                    <span className={isTrusted ? "status-dot is-trusted" : "status-dot is-online"} />
+                  </button>
+                );
+              })
+            ) : (
+              <div className="tree-node-empty">{discoveryCopy.label}</div>
             )}
           </div>
+        </section>
 
-          {/* 2. 已配对可信设备列表 / Trusted Devices */}
-          <div className="tree-section">
-            <button
-              className="tree-section-header"
-              onClick={() => setTrustedExpanded(!trustedExpanded)}
-              type="button"
-            >
-              <span className={`chevron ${trustedExpanded ? "is-expanded" : ""}`}>▸</span>
-              <strong>可信设备</strong>
-              <span className="tree-badge">{filteredTrusted.length}</span>
-            </button>
+        <section className="sidebar-section">
+          <div className="sidebar-section-title">
+            <span>可信设备</span>
+            {filteredTrusted.length > 0 && <span>{filteredTrusted.length}</span>}
+          </div>
+          <div className="sidebar-section-content">
+            {filteredTrusted.length > 0 ? (
+              filteredTrusted.map((device) => {
+                const badge = platformBadge(device.platform);
+                const isOnline = nearbyDevices.some((nearby) => nearby.id === device.device_id);
+                const isSelected = selectedDeviceId === device.device_id;
 
-            {trustedExpanded && (
-              <div className="tree-section-content">
-                {filteredTrusted.length > 0 ? (
-                  filteredTrusted.map((device) => {
-                    const isOnline = nearbyDevices.some((n) => n.id === device.device_id);
-                    const isSelected = selectedDeviceId === device.device_id;
-                    const badge = platformBadge(device.platform);
-                    return (
-                      <div
-                        key={device.device_id}
-                        className={`tree-node ${isSelected ? "is-selected" : ""} ${!isOnline ? "is-offline" : ""}`}
-                        onClick={() => handleSelectTrusted(device)}
-                      >
-                        <span className="node-avatar">
-                          {badge.emoji}
-                          <span className={`node-status-dot ${isOnline ? "is-online" : "is-offline"}`} />
-                        </span>
-                        <div className="node-info">
-                          <span className="node-name">{device.device_name}</span>
-                          <span className="node-meta">
-                            {badge.label} · {isOnline ? "在线" : "离线"}
-                          </span>
-                        </div>
-                        <Icon name="shield" className="node-trust-icon" />
-                      </div>
-                    );
-                  })
-                ) : (
-                  <div className="tree-node-empty">暂无可信设备</div>
-                )}
-              </div>
+                return (
+                  <button
+                    className={`sidebar-device-item ${isSelected ? "is-selected" : ""} ${!isOnline ? "is-offline" : ""}`}
+                    key={device.device_id}
+                    onClick={() => handleSelectTrusted(device)}
+                    title={`${badge.label} · ${isOnline ? "在线" : "离线"}`}
+                    type="button"
+                  >
+                    <span className="device-name-group">
+                      <Icon name="monitor" />
+                      <span>{device.device_name}</span>
+                    </span>
+                    <span className={`status-dot ${isOnline ? "is-online" : "is-offline"}`} />
+                  </button>
+                );
+              })
+            ) : (
+              <div className="tree-node-empty">暂无可信设备</div>
             )}
           </div>
-        </div>
+        </section>
 
-        {/* 底部连接码兜底入口 / Bottom Fallback Connection */}
-        <div className="sidebar-footer">
+        <section className="sidebar-section sidebar-tool-section">
+          <div className="sidebar-section-title">工具</div>
+          <button className="sidebar-device-item" onClick={() => setMode("settings")} type="button">
+            <span className="device-name-group">
+              <Icon name="link" />
+              <span>本地网桥</span>
+            </span>
+          </button>
           <button
-            className="btn-link-code"
+            className="sidebar-device-item"
             onClick={() => {
               setConnectionCodeOpen(true);
               setSelectedDeviceId(null);
@@ -228,10 +225,23 @@ export function LeftSidebar() {
             }}
             type="button"
           >
-            <Icon name="link" />
-            <span>用连接码连接</span>
+            <span className="device-name-group">
+              <Icon name="key" />
+              <span>使用连接码</span>
+            </span>
           </button>
-        </div>
+        </section>
+      </div>
+
+      <div className="sidebar-footer-actions">
+        <button
+          className={mode === "settings" ? "sidebar-footer-button is-active" : "sidebar-footer-button"}
+          onClick={() => setMode("settings")}
+          type="button"
+        >
+          <Icon name="settings" />
+          <span>设置</span>
+        </button>
       </div>
     </aside>
   );

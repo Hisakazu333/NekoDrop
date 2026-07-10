@@ -1,233 +1,118 @@
 import React from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
-import { formatBytes, shouldShowActiveTransferBar } from "../transferProgress";
 
-/**
- * 格式化传输速率 / Format transfer speed
- */
-function formatSpeed(bytesPerSecond: number | null): string {
-  if (bytesPerSecond === null || bytesPerSecond === 0) return "-- KB/s";
-  return `${formatBytes(bytesPerSecond)}/s`;
+interface ActivityInspectorProps {
+  onClose: () => void;
+  onToggleInbox?: () => void;
 }
 
-/**
- * 格式化剩余时间 / Format remaining ETA
- */
-function formatEta(seconds: number | null): string {
-  if (seconds === null) return "--";
-  if (seconds < 60) return `${seconds} 秒`;
-  const mins = Math.floor(seconds / 60);
-  const secs = seconds % 60;
-  return `${mins} 分 ${secs} 秒`;
-}
-
-/**
- * 右侧活动检查器：实时传输进度与历史记录
- * Right Activity Inspector: Real-time Transfers and History
- */
-export function ActivityInspector() {
+export function ActivityInspector({ onClose, onToggleInbox }: ActivityInspectorProps) {
   const {
-    transferStatus,
-    transferMetrics,
-    transfers,
+    snapshot,
+    receiveSession,
+    selectedDeviceId,
+    selectedDeviceSnapshot,
+    nearbyDevices,
+    localBridgeAuthorizations,
+    localBridgePendingActions,
     pendingReceiveOffer,
-    respondReceiveOffer,
-    cancelCurrentTransfer,
-    resendTransfer,
-    openTransferLocation,
-    deleteTransfer,
-    clearTransferHistory,
-    busy
+    stagedBundles,
+    setMode
   } = useAppContext();
 
-  // 判断是否处于活跃传输状态 / Check if there is an active transfer
-  const isActive = Boolean(transferStatus && shouldShowActiveTransferBar(transferStatus));
-
-  const progressPercent = transferStatus
-    ? Math.round((transferStatus.bytes_transferred / transferStatus.total_bytes) * 100) || 0
-    : 0;
-
-  const isReceiving = transferStatus?.direction === "receive";
-  const showReceiveDecision =
-    Boolean(pendingReceiveOffer) && isReceiving && transferStatus?.phase === "awaiting_approval";
-  const canCancelActiveTransfer =
-    transferStatus && !["completed", "failed", "cancelled", "closed", "declined", "expired"].includes(transferStatus.phase);
+  const localDeviceName = snapshot?.device_name ?? "本机";
+  const localPort = snapshot?.receive_port ?? 48231;
+  const trustedNearbyDevices = nearbyDevices.filter((device) => device.trust_state === "Trusted");
+  const selectedDevice =
+    trustedNearbyDevices.find((device) => device.id === selectedDeviceId) ??
+    (selectedDeviceSnapshot?.id === selectedDeviceId ? selectedDeviceSnapshot : null) ??
+    null;
+  const pendingRequestsCount = localBridgePendingActions.length + (pendingReceiveOffer ? 1 : 0);
+  const stagedBundleCount = stagedBundles.filter((bundle) => bundle.staging_status === "saved").length;
 
   return (
-    <section className="activity-inspector">
-      {/* 1. 正在进行的活跃传输 / Active Transfers */}
-      <div className="inspector-section">
-        <div className="section-title-group">
-          <strong>实时传输</strong>
-          <span className={`section-badge ${isActive ? "is-live" : ""}`}>{isActive ? "1" : "0"}</span>
-        </div>
-
-        {isActive && transferStatus ? (
-          <div className="active-transfer-card">
-            <div className="active-meta">
-              <span className={`active-direction-tag ${isReceiving ? "is-receive" : ""}`}>
-                <Icon name={isReceiving ? "arrow-up" : "send"} style={isReceiving ? { transform: "rotate(180deg)" } : undefined} />
-                {isReceiving ? "接收中" : "发送中"}
-              </span>
-              <span className="active-speed">{formatSpeed(transferMetrics.speedBytesPerSecond)}</span>
-            </div>
-
-            <div className="active-filename" title={transferStatus.root_name ?? undefined}>
-              {transferStatus.root_name}
-            </div>
-            <div className="active-message">{transferStatus.message}</div>
-
-            {showReceiveDecision && pendingReceiveOffer && (
-              <div className="active-receive-offer">
-                <div className="active-offer-meta">
-                  <span>{pendingReceiveOffer.file_count} 个文件</span>
-                  <span>{formatBytes(pendingReceiveOffer.total_bytes)}</span>
-                  {pendingReceiveOffer.sender_device_name && <span>来自 {pendingReceiveOffer.sender_device_name}</span>}
-                </div>
-                <div className="active-decision-actions">
-                  <button
-                    className="btn-pill btn-reject"
-                    onClick={() => respondReceiveOffer(false)}
-                    disabled={busy === "receive"}
-                    type="button"
-                  >
-                    拒绝
-                  </button>
-                  <button
-                    className="btn-pill btn-accept"
-                    onClick={() => respondReceiveOffer(true)}
-                    disabled={busy === "receive"}
-                    type="button"
-                  >
-                    接受
-                  </button>
-                </div>
-              </div>
-            )}
-
-            <div className="active-progress-stats">
-              <span>
-                <strong>{formatBytes(transferStatus.bytes_transferred)}</strong> /{" "}
-                {formatBytes(transferStatus.total_bytes)}
-              </span>
-              <strong>{progressPercent}%</strong>
-            </div>
-
-            <div className="active-progress-bar-wrapper">
-              <div className="active-progress-bar" style={{ width: `${progressPercent}%` }} />
-            </div>
-
-            <div className="active-eta-cancel">
-              <span className="active-eta">剩余 {formatEta(transferMetrics.etaSeconds)}</span>
-              {canCancelActiveTransfer && (
-                <button
-                  className="btn-cancel-transfer"
-                  onClick={cancelCurrentTransfer}
-                  disabled={busy === "cancel-transfer"}
-                  type="button"
-                >
-                  取消
-                </button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="active-empty-state">
-            <Icon name="paw" className="empty-icon" />
-            <p>暂时没有传输任务</p>
-          </div>
-        )}
+    <aside aria-label="连接详情" className="activity-inspector" role="dialog">
+      <div className="inspector-header" data-tauri-drag-region>
+        <strong>连接详情</strong>
+        <button className="inspector-close-button" onClick={onClose} title="关闭" type="button">
+          <Icon name="x" />
+        </button>
       </div>
 
-      {/* 分割线 / Border Divider */}
-      <div className="inspector-divider" />
-
-      {/* 2. 传输历史记录 / Transfer History */}
-      <div className="inspector-section is-flexible">
-        <div className="section-title-group" style={{ padding: "18px 0 12px" }}>
-          <strong>传输历史</strong>
-          {transfers.length > 0 && (
-            <button className="btn-text-action" onClick={clearTransferHistory} type="button">
-              清空
+      <div className="inspector-body">
+        <div className="connection-info-card">
+          <div className="inspector-section-header">
+            <strong>当前连接</strong>
+            <button className="btn-add-connection" onClick={() => setMode("settings")} title="连接设置" type="button">
+              <Icon name="plus" />
             </button>
-          )}
-        </div>
+          </div>
 
-        <div className="history-list">
-          {transfers.length > 0 ? (
-            transfers.map((transfer) => {
-              const isSuccess = transfer.status === "completed";
-              const isSend = transfer.direction === "send";
-              const timeStr = new Date(transfer.created_at_ms).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit"
-              });
-
-              return (
-                <div className="history-card" key={transfer.id}>
-                  <div className="history-card-header">
-                    <div className="history-direction-info">
-                      <span className={`history-icon-badge ${isSend ? "is-send" : "is-receive"}`}>
-                        <Icon
-                          name={isSend ? "send" : "arrow-up"}
-                          style={isSend ? undefined : { transform: "rotate(180deg)" }}
-                        />
-                      </span>
-                      <span className="history-filename" title={transfer.root_name ?? undefined}>
-                        {transfer.root_name}
-                      </span>
-                    </div>
-                    <span className="history-time">{timeStr}</span>
-                  </div>
-
-                  <div className="history-card-meta">
-                    <span>{formatBytes(transfer.total_bytes)}</span>
-                    <span className={`history-status-tag ${isSuccess ? "is-success" : "is-failed"}`}>
-                      {isSuccess ? "成功" : "失败"}
-                    </span>
-                  </div>
-
-                  {/* 历史卡片的动作操作栏 / History card actions */}
-                  <div className="history-card-actions">
-                    <button
-                      className="btn-history-op"
-                      onClick={() => openTransferLocation(transfer)}
-                      title="打开所在文件夹"
-                      type="button"
-                    >
-                      <Icon name="folder" />
-                    </button>
-                    {!isSuccess && isSend && (
-                      <button
-                        className="btn-history-op"
-                        onClick={() => resendTransfer(transfer)}
-                        title="重新发送"
-                        type="button"
-                      >
-                        <Icon name="refresh" />
-                      </button>
-                    )}
-                    <button
-                      className="btn-history-op btn-delete-history"
-                      onClick={() => deleteTransfer(transfer)}
-                      title="删除记录"
-                      type="button"
-                    >
-                      <Icon name="trash" />
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className="history-empty-state">
-              <Icon name="clock" className="empty-icon" />
-              <p>还没有传输记录</p>
+          <div className="info-group-box">
+            <div className="info-group-title">本机</div>
+            <div className="info-list">
+              <div className="info-item-bold">{localDeviceName}</div>
+              <div className="info-item">
+                <span>接收</span>
+                <span className={receiveSession ? "text-success" : "text-muted"}>{receiveSession ? "已开启" : "已关闭"}</span>
+              </div>
+              <div className="info-item"><span>端口</span><span>{localPort}</span></div>
             </div>
-          )}
+          </div>
+
+          <div className="info-group-box">
+            <div className="info-group-title">目标设备</div>
+            {selectedDevice ? (
+              <div className="info-list">
+                <div className="info-item-device">
+                  <Icon name="monitor" />
+                  <span>{selectedDevice.name}</span>
+                </div>
+                <div className="info-item"><span>信任状态</span><span className="text-success">已信任</span></div>
+                <div className="info-item"><span>会话</span><span className="text-success">加密就绪</span></div>
+              </div>
+            ) : (
+              <div className="empty-placeholder-text">尚未选择目标设备</div>
+            )}
+          </div>
+
+          <div className="info-group-box">
+            <div className="info-group-title">待处理</div>
+            <div className="info-list">
+              <div className="info-item"><span>请求</span><span>{pendingRequestsCount}</span></div>
+              <div className="info-item"><span>已授权应用</span><span>{localBridgeAuthorizations.length}</span></div>
+              <div className="info-item"><span>暂存资料包</span><span>{stagedBundleCount}</span></div>
+            </div>
+          </div>
+
+          <div className="info-group-box">
+            <div className="info-group-title">数据来源</div>
+            <div className="info-list">
+              <div className="info-item"><span>本地网桥</span><span className="text-success">可用</span></div>
+              <div className="info-item"><span>Workspace Bundle</span><span className="cap-badge is-planned">计划中</span></div>
+              <div className="info-item"><span>Session Bundle</span><span className="cap-badge is-planned">计划中</span></div>
+            </div>
+          </div>
         </div>
       </div>
-    </section>
+
+      <div className="inspector-footer">
+        <button
+          onClick={() => {
+            setMode("transfers");
+            onClose();
+          }}
+          type="button"
+        >
+          <Icon name="clock" />
+          <span>传输记录</span>
+        </button>
+        <button onClick={onToggleInbox} type="button">
+          <Icon name="inbox" />
+          <span>收件箱</span>
+        </button>
+      </div>
+    </aside>
   );
 }
