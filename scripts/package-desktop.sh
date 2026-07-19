@@ -65,6 +65,23 @@ require_command cargo
 cd "$ROOT_DIR"
 
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT_DIR/target/package-desktop/$STAMP}"
+OUTPUT_DIR=""
+
+cleanup_app_bundles() {
+  if [[ "$BUNDLES" != *dmg* ]]; then
+    return
+  fi
+
+  # A failed DMG build can still leave the intermediate app bundle behind.
+  # Launch Services indexes those build products as duplicate applications.
+  find "$CARGO_TARGET_DIR/release/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+  if [[ -n "$OUTPUT_DIR" ]]; then
+    find "$OUTPUT_DIR/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+  fi
+}
+
+trap cleanup_app_bundles EXIT
 
 if [[ -z "${RUSTC:-}" ]]; then
   RUSTC_PATH="$(command -v rustc || true)"
@@ -111,14 +128,4 @@ if [[ "$COPY_BUNDLES" -eq 1 ]]; then
 else
   echo "==> Bundle output"
   echo "$CARGO_TARGET_DIR/release/bundle"
-fi
-
-if [[ "$BUNDLES" == *dmg* ]]; then
-  # Keep the installer DMG as the install artifact. Leaving generated .app
-  # bundles in project folders makes Launchpad show duplicate apps.
-  find "$CARGO_TARGET_DIR/release/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
-
-  if [[ "$COPY_BUNDLES" -eq 1 ]]; then
-    find "$ROOT_DIR/release/desktop/$STAMP/bundle/macos" -maxdepth 1 -name "*.app" -type d -prune -exec rm -rf {} + 2>/dev/null || true
-  fi
 fi
