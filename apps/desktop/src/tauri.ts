@@ -50,6 +50,7 @@ type CommandName =
   | "revoke_local_bridge_authorization"
   | "list_local_bridge_pending_actions"
   | "remove_local_bridge_pending_action"
+  | "respond_local_bridge_pending_action"
   | "list_local_bridge_pending_action_results"
   | "take_next_local_bridge_pending_action"
   | "preflight_next_local_bridge_bundle_send"

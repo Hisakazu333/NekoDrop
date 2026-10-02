@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { isTauriRuntime } from "../tauri";
+import { isPendingInboxBundle } from "../bundleState";
 
 interface TitleBarProps {
   onToggleInbox: () => void;
@@ -22,49 +23,63 @@ export function TitleBar({ onToggleInbox, inboxOpen }: TitleBarProps) {
   } = useAppContext();
 
   const [isMaximized, setIsMaximized] = useState(false);
-  const appWindow = isTauriRuntime() ? getCurrentWindow() : null;
+  // getCurrentWindow() returns a new instance per call; memoize so the resize
+  // listener effect below is not torn down and re-registered on every render.
+  const appWindow = useMemo(() => (isTauriRuntime() ? getCurrentWindow() : null), []);
   const isMac = typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac");
 
   // 待处理动作与资料包总数 / Total count of pending actions and unimported bundles
   const pendingCount =
     localBridgePendingActions.length +
-    stagedBundles.filter((b) => b.staging_status === "saved").length;
+    stagedBundles.filter(isPendingInboxBundle).length;
 
   // 监听窗口最大化状态以更新图标 / Monitor window maximization state to update the icon
   useEffect(() => {
     if (!appWindow) return;
 
     const checkMaximized = async () => {
-      const maximized = await appWindow.isMaximized();
-      setIsMaximized(maximized);
+      try {
+        const maximized = await appWindow.isMaximized();
+        setIsMaximized(maximized);
+      } catch {
+        // The window can already be destroyed during shutdown.
+      }
     };
 
-    checkMaximized();
+    void checkMaximized();
 
     // 监听窗口缩放事件以实时更新 / Listen to window resize to update in real-time
-    const unlisten = appWindow.onResized(() => {
-      checkMaximized();
-    });
+    const unlisten = appWindow
+      .onResized(() => {
+        void checkMaximized();
+      })
+      .catch(() => undefined);
 
     return () => {
-      unlisten.then((fn) => fn());
+      unlisten.then((fn) => {
+        fn?.();
+      });
     };
   }, [appWindow]);
 
   const handleMinimize = async () => {
-    if (appWindow) await appWindow.minimize();
+    if (appWindow) await appWindow.minimize().catch(() => undefined);
   };
 
   const handleMaximize = async () => {
     if (appWindow) {
-      await appWindow.toggleMaximize();
-      const maximized = await appWindow.isMaximized();
-      setIsMaximized(maximized);
+      try {
+        await appWindow.toggleMaximize();
+        const maximized = await appWindow.isMaximized();
+        setIsMaximized(maximized);
+      } catch {
+        // Ignore window-control failures (e.g. window already destroyed).
+      }
     }
   };
 
   const handleClose = async () => {
-    if (appWindow) await appWindow.close();
+    if (appWindow) await appWindow.close().catch(() => undefined);
   };
 
   const toggleTheme = () => {

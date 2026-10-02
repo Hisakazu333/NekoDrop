@@ -5,7 +5,8 @@ import {
   bundleCanUseImportStrategy,
   bundleImportPlanLine,
   bundleImportStatusView,
-  bundleTypeLabel
+  bundleTypeLabel,
+  isPendingInboxBundle
 } from "../bundleState";
 import { formatBytes } from "../transferProgress";
 import type { LocalBridgePendingActionDto, ReceivedBundleDto } from "../types";
@@ -23,7 +24,7 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
   const {
     localBridgePendingActions,
     stagedBundles,
-    removeLocalBridgePendingAction,
+    respondLocalBridgePendingAction,
     importCurrentStagedBundle,
     rollbackCurrentBundle,
     deleteCurrentStagedBundle,
@@ -33,12 +34,12 @@ export function InboxDrawer({ isOpen, onClose }: InboxDrawerProps) {
   if (!isOpen) return null;
 
   // 待处理任务总数 / Total pending notifications count
-  const pendingBundles = stagedBundles.filter((b) => b.staging_status !== "deleted" && b.staging_status !== "expired");
+  const pendingBundles = stagedBundles.filter(isPendingInboxBundle);
   const totalCount = localBridgePendingActions.length + pendingBundles.length;
 
   const handleAction = async (action: LocalBridgePendingActionDto, accept: boolean) => {
     try {
-      await removeLocalBridgePendingAction(action);
+      await respondLocalBridgePendingAction(action, accept);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }

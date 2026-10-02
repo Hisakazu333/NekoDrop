@@ -59,8 +59,7 @@ export function TransferZone() {
     pickFiles,
     pickFolders,
     selectedDeviceId,
-    selectedDeviceSnapshot,
-    nearbyDevices,
+    selectedDevice,
     sendCurrentTransfer,
     busy,
     dragActive,
@@ -73,12 +72,6 @@ export function TransferZone() {
 
   const [activeTab, setActiveTab] = useState<TabType>("transfer");
   const [sendMode, setSendMode] = useState<SendMode>("file");
-
-  const trustedNearbyDevices = nearbyDevices.filter((d) => d.trust_state === "Trusted");
-  const selectedDevice =
-    trustedNearbyDevices.find((d) => d.id === selectedDeviceId) ??
-    (selectedDeviceSnapshot?.id === selectedDeviceId ? selectedDeviceSnapshot : null) ??
-    null;
 
   const totalPaths = selectedPaths.length;
   const canSend = totalPaths > 0 && !busy && (Boolean(selectedDevice) || connectionCode.trim().length > 0);

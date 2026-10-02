@@ -6,6 +6,14 @@ use nekodrop_core::{NekoDropError, NekoDropResult};
 
 const TCP_CONNECT_TIMEOUT: Duration = Duration::from_secs(4);
 
+/// Per-read/write deadline during bulk transfer: a peer that stalls a single
+/// IO call this long is treated as dead instead of hanging the caller forever.
+pub const TCP_IO_STALL_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Relaxed deadline for reads that legitimately wait on the peer's human
+/// (offer/pairing decisions are capped at 300s upstream).
+pub const TCP_IO_DECISION_TIMEOUT: Duration = Duration::from_secs(330);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TransportKind {
     Tcp,
@@ -52,9 +60,27 @@ impl Endpoint {
     }
 }
 
-pub trait TransportStream: Read + Write + Send {}
+pub trait TransportStream: Read + Write + Send {
+    /// Per-read/write deadline for this stream. Transports without
+    /// socket-level timeout support return an error instead.
+    fn set_io_timeout(&mut self, timeout: Duration) -> NekoDropResult<()>;
+}
 
-impl<T> TransportStream for T where T: Read + Write + Send {}
+impl TransportStream for TcpStream {
+    fn set_io_timeout(&mut self, timeout: Duration) -> NekoDropResult<()> {
+        self.set_read_timeout(Some(timeout))
+            .and_then(|()| self.set_write_timeout(Some(timeout)))
+            .map_err(|error| {
+                NekoDropError::Network(format!("failed to apply socket timeout: {error}"))
+            })
+    }
+}
+
+impl TransportStream for Box<dyn TransportStream> {
+    fn set_io_timeout(&mut self, timeout: Duration) -> NekoDropResult<()> {
+        (**self).set_io_timeout(timeout)
+    }
+}
 
 pub trait NekoLinkTransport {
     type Stream: TransportStream;
@@ -96,7 +122,10 @@ impl NekoLinkTransport for TcpTransport {
 
         for addr in addrs {
             match TcpStream::connect_timeout(&addr, TCP_CONNECT_TIMEOUT) {
-                Ok(stream) => return Ok(stream),
+                Ok(mut stream) => {
+                    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
+                    return Ok(stream);
+                }
                 Err(error) => last_error = Some(error),
             }
         }

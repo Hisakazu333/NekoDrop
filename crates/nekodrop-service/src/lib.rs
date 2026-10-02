@@ -17,6 +17,7 @@ use nekodrop_network::{
     ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame, PairingDecisionPayload,
     PairingRequestPayload, SentFileFrame, SignedSessionIdentityBinding, TransferDecision,
     TransferOffer, TransferOfferFile, TransferProgress, TransferResumeFile,
+    TCP_IO_DECISION_TIMEOUT, TCP_IO_STALL_TIMEOUT, TransportStream,
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, check_receive_space, create_source_plan_from_paths,
@@ -201,7 +202,9 @@ where
         file_count: plan.file_count(),
         total_bytes: plan.total_bytes(),
     });
+    stream.set_io_timeout(TCP_IO_DECISION_TIMEOUT)?;
     let decision = read_transfer_decision(&mut stream)?;
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     if should_cancel() {
         return Err(NekoDropError::Network("transfer cancelled".into()));
     }
@@ -257,7 +260,9 @@ where
         file_count: plan.file_count(),
         total_bytes: plan.total_bytes(),
     });
+    stream.set_io_timeout(TCP_IO_DECISION_TIMEOUT)?;
     let decision = session.read_transfer_decision(&mut stream)?;
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     if should_cancel() {
         return Err(NekoDropError::Network("transfer cancelled".into()));
     }
@@ -351,7 +356,9 @@ where
         file_count: plan.file_count(),
         total_bytes: plan.total_bytes(),
     });
+    stream.set_io_timeout(TCP_IO_DECISION_TIMEOUT)?;
     let decision = session.read_transfer_decision(&mut stream)?;
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     if should_cancel() {
         return Err(NekoDropError::Network("transfer cancelled".into()));
     }
@@ -386,6 +393,7 @@ pub fn send_pairing_request(
 ) -> NekoDropResult<PairingDecisionPayload> {
     let mut stream = connect_endpoint(endpoint)?;
     write_pairing_request(&mut stream, &request)?;
+    stream.set_io_timeout(TCP_IO_DECISION_TIMEOUT)?;
     read_pairing_decision(&mut stream)
 }
 
@@ -423,6 +431,7 @@ where
     let (mut stream, _) = listener.accept().map_err(|error| {
         NekoDropError::Network(format!("failed to accept TCP connection: {error}"))
     })?;
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     accept_transfer_stream_with_decision(&mut stream, receive_dir, decide, on_progress)
 }
 
@@ -440,6 +449,7 @@ where
     let (mut stream, _) = listener.accept().map_err(|error| {
         NekoDropError::Network(format!("failed to accept TCP connection: {error}"))
     })?;
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     accept_transfer_stream_with_decision_and_bundle_staging(
         &mut stream,
         receive_dir,
@@ -459,6 +469,7 @@ where
     D: FnOnce(&TransferOffer) -> bool,
     P: FnMut(TransferProgressEvent),
 {
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
             stream,
@@ -490,6 +501,7 @@ where
     D: FnOnce(&TransferOffer) -> bool,
     P: FnMut(TransferProgressEvent),
 {
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::FileOffer(offer) => accept_transfer_offer_stream_with_decision(
             stream,
@@ -546,6 +558,7 @@ where
     P: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     let frame = read_incoming_control_frame(stream)?;
     accept_plain_incoming_frame_with_cancel(
         stream,
@@ -574,6 +587,7 @@ where
     P: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::SessionHello(hello) => {
             let mut session = accept_responder_session(stream, receiver_identity, hello)?;
@@ -620,6 +634,7 @@ where
     P: FnMut(TransferProgressEvent),
     C: FnMut() -> bool,
 {
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::SessionHello(hello) => {
             let mut session = accept_responder_session(stream, receiver_identity, hello)?;
@@ -709,6 +724,7 @@ where
     V: FnMut(&DeviceIdentity, &SignedSessionIdentityBinding) -> NekoDropResult<()>,
     C: FnMut() -> bool,
 {
+    stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     match read_incoming_control_frame(stream)? {
         IncomingControlFrame::SessionHello(hello) => {
             let mut session = accept_authenticated_responder_session_with_peer_verifier(

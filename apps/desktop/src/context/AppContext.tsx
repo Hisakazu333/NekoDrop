@@ -206,6 +206,7 @@ interface AppContextType {
   selectedTransferId: string | null;
   selectedDeviceId: string | null;
   selectedDeviceSnapshot: DeviceDto | null;
+  selectedDevice: DeviceDto | null;
   connectionCodeOpen: boolean;
   localBridgeStatus: LocalBridgeRuntimeStatusDto | null;
   localBridgeAuthorizations: LocalBridgeAuthorizationDto[];
@@ -272,6 +273,7 @@ interface AppContextType {
   runLocalBridgeSelfCheck: () => Promise<void>;
   confirmLocalBridgeAuthorization: () => Promise<void>;
   removeLocalBridgePendingAction: (action: LocalBridgePendingActionDto) => Promise<void>;
+  respondLocalBridgePendingAction: (action: LocalBridgePendingActionDto, accept: boolean) => Promise<void>;
   revokeLocalBridgeAuthorization: (auth: LocalBridgeAuthorizationDto, scope: string) => Promise<void>;
   pruneLocalBridgeAuthorizations: () => Promise<void>;
   importCurrentStagedBundle: (bundle: ReceivedBundleDto, conflictStrategy?: string) => Promise<void>;
@@ -327,14 +329,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [mode, setMode] = useState<ComposerMode>("send");
   const [appearance, setAppearance] = useState<AppearanceMode>(() => readInitialAppearance());
 
-  // 监听 appearance 状态并同步到 DOM 和 LocalStorage
-  // Sync appearance state to DOM and LocalStorage
-  useEffect(() => {
-    if (typeof document !== "undefined") {
-      document.documentElement.setAttribute("data-theme", appearance);
-      window.localStorage.setItem(APPEARANCE_STORAGE_KEY, appearance);
-    }
-  }, [appearance]);
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
   const [busy, setBusy] = useState<BusyMode | null>(null);
@@ -347,6 +341,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const autoReceiveStarted = useRef(false);
   const realtimeRefreshInFlight = useRef(false);
   const directoryRefreshInFlight = useRef(false);
+  const transfersRefreshSeq = useRef(0);
+  const scanSeq = useRef(0);
   const diagnosticsRefreshInFlight = useRef(false);
   const lastDirectoryRefreshAt = useRef(0);
   const lastDiagnosticsRefreshAt = useRef(0);
@@ -452,7 +448,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!selectedDeviceId) return;
     const latestDevice = nearbyDevices.find((device) => device.id === selectedDeviceId);
-    if (!latestDevice || latestDevice.trust_state !== "Trusted") return;
+    if (!latestDevice || latestDevice.trust_state !== "Trusted") {
+      // The device went offline or lost trust: drop the stale snapshot so the
+      // composer stops offering it as a valid send target.
+      setSelectedDeviceSnapshot(null);
+      return;
+    }
     setSelectedDeviceSnapshot(latestDevice);
   }, [nearbyDevices, selectedDeviceId]);
 
@@ -563,7 +564,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setPendingPairingRequest((current) => keepIfEqual(current, nextSnapshot.pending_pairing_request));
       setTransferStatus((current) => keepIfEqual(current, nextSnapshot.transfer_status));
       setDiscoveryStatus((current) => keepIfEqual(current, nextSnapshot.discovery_status));
-      if (nextSnapshot.pending_receive_offer || nextSnapshot.pending_pairing_request) setMode("receive");
     } finally {
       realtimeRefreshInFlight.current = false;
     }
@@ -584,6 +584,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   async function refreshDirectoryState() {
     if (directoryRefreshInFlight.current) return;
     directoryRefreshInFlight.current = true;
+    const requestId = ++transfersRefreshSeq.current;
     try {
       await invokeCommand<string[]>("prune_staged_bundles");
       const [devices, trusted, nextTransfers, nextStagedBundles] = await Promise.all([
@@ -594,7 +595,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       ]);
       setNearbyDevices((current) => keepIfEqual(current, devices));
       setTrustedDevices((current) => keepIfEqual(current, trusted));
-      setTransfers((current) => keepIfEqual(current, nextTransfers));
+      if (requestId === transfersRefreshSeq.current) {
+        setTransfers((current) => keepIfEqual(current, nextTransfers));
+      }
       setStagedBundles((current) => keepIfEqual(current, nextStagedBundles));
       lastDirectoryRefreshAt.current = Date.now();
     } finally {
@@ -603,7 +606,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }
 
   async function refreshTransfers() {
+    // Monotonic id: a slow stale response (e.g. a poll racing a delete) must
+    // never overwrite the result of a newer request.
+    const requestId = ++transfersRefreshSeq.current;
     const nextTransfers = await invokeCommand<TransferDto[]>("list_transfers");
+    if (requestId !== transfersRefreshSeq.current) return;
     setTransfers((current) => keepIfEqual(current, nextTransfers));
   }
 
@@ -824,18 +831,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const payload = buildPathPayload(paths, manual);
     if (payload.length === 0) return;
 
+    // Only the most recent scan may commit its plan or clear busy/scanStatus:
+    // a slow earlier scan must not overwrite a newer result or un-busy the
+    // UI while the newer scan is still running.
+    const requestId = ++scanSeq.current;
     setBusy("scan");
     setError(null);
     setScanStatus(null);
     setSendReport(null);
     try {
       const nextPlan = await invokeCommand<TransferPlanDto>("create_transfer_plan", { paths: payload });
+      if (requestId !== scanSeq.current) return;
       setPlan(nextPlan);
     } catch (nextError) {
-      setError(errorMessage(nextError));
+      if (requestId === scanSeq.current) setError(errorMessage(nextError));
     } finally {
-      setScanStatus(null);
-      setBusy(null);
+      if (requestId === scanSeq.current) {
+        setScanStatus(null);
+        setBusy(null);
+      }
     }
   }
 
@@ -850,7 +864,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     if (!silent) setBusy("receive");
     setError(null);
     setReceiveReport(null);
-    if (!silent) setMode("receive");
     try {
       const session = await invokeCommand<ReceiveSessionDto>("start_receive_once", {
         bindHost: "0.0.0.0",
@@ -899,7 +912,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setSendReport(null);
     try {
       const report = await invokeCommand<SendReportDto>("send_paths_to_code", {
-        connectionCode,
+        connectionCode: trimmedConnectionCode,
         pathsText: payload.join("\n")
       });
       setSendReport(report);
@@ -1234,6 +1247,30 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }
 
+  async function respondLocalBridgePendingAction(action: LocalBridgePendingActionDto, accept: boolean) {
+    setBusy("open");
+    setError(null);
+    try {
+      const response = await invokeCommand<{
+        handled: boolean;
+        accepted: boolean;
+        actions: LocalBridgePendingActionDto[];
+      }>("respond_local_bridge_pending_action", {
+        requestId: action.request_id,
+        accept
+      });
+      setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
+      setToast(accept ? "已允许并执行该请求" : "已拒绝该请求");
+      await refreshLocalBridgeStatus();
+      await refreshLocalBridgeActionResults();
+      await refreshDirectoryState();
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function revokeLocalBridgeAuthorization(authorization: LocalBridgeAuthorizationDto, scope: string) {
     setBusy("open");
     setError(null);
@@ -1381,6 +1418,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     selectedTransferId,
     selectedDeviceId,
     selectedDeviceSnapshot,
+    selectedDevice,
     connectionCodeOpen,
     localBridgeStatus,
     localBridgeAuthorizations,
@@ -1446,6 +1484,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     runLocalBridgeSelfCheck,
     confirmLocalBridgeAuthorization,
     removeLocalBridgePendingAction,
+    respondLocalBridgePendingAction,
     revokeLocalBridgeAuthorization,
     pruneLocalBridgeAuthorizations,
     importCurrentStagedBundle,

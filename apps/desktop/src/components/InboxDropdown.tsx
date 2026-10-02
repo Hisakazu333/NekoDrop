@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { formatBytes } from "../transferProgress";
+import { isPendingInboxBundle } from "../bundleState";
 import type { LocalBridgePendingActionDto, ReceivedBundleDto } from "../types";
 
 /**
@@ -12,7 +13,7 @@ export function InboxDropdown() {
   const {
     localBridgePendingActions,
     stagedBundles,
-    removeLocalBridgePendingAction,
+    respondLocalBridgePendingAction,
     importCurrentStagedBundle,
     deleteCurrentStagedBundle,
     error,
@@ -23,7 +24,7 @@ export function InboxDropdown() {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // 待处理动作和未导入资料包的数量总和 / Total count of pending actions and unimported bundles
-  const totalCount = localBridgePendingActions.length + stagedBundles.filter(b => b.staging_status === "saved").length;
+  const totalCount = localBridgePendingActions.length + stagedBundles.filter(isPendingInboxBundle).length;
 
   // 点击外部关闭下拉菜单 / Click outside to close the dropdown
   useEffect(() => {
@@ -39,7 +40,7 @@ export function InboxDropdown() {
   const handleAction = async (action: LocalBridgePendingActionDto, accept: boolean) => {
     try {
       // 确认或拒绝本地桥动作 / Approve or deny the local bridge action
-      await removeLocalBridgePendingAction(action);
+      await respondLocalBridgePendingAction(action, accept);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
