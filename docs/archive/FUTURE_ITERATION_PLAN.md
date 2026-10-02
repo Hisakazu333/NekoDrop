@@ -17,7 +17,7 @@ OpenNeko  = 上层 AI 桌面伴侣 / Agent 运行时
 
 短期目标是把 Mac / Windows 文件互传做成真实可用的桌面软件。中期目标是把配对、加密、传输、状态事件抽象成稳定协议。长期目标是让 Mac、Windows、手机、平板、NAS、小主机和 OpenNeko Agent 都能进入同一个可信设备网络。
 
-当前更细的执行顺序看 [ROADMAP.md](ROADMAP.md) 和 [NEXT_PHASE_ANALYSIS.md](NEXT_PHASE_ANALYSIS.md)。这份文档保留长期方向，不作为当前分支的唯一排期。
+当前更细的执行顺序看 [ROADMAP.md](../product/ROADMAP.md) 和 [NEXT_PHASE_ANALYSIS.md](NEXT_PHASE_ANALYSIS.md)。这份文档保留长期方向，不作为当前分支的唯一排期。
 
 ## 2. 当前基线
 

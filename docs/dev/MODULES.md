@@ -123,7 +123,7 @@ Experimental or planned:
 - long-lived local bridge event stream
 - third-party adapter real import/export execution
 
-See [Current Status](STATUS.md) for the authoritative feature list.
+See [Current Status](../product/STATUS.md) for the authoritative feature list.
 
 ## Open Source Boundary
 

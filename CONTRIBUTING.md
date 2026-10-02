@@ -1,291 +1,166 @@
-# 贡献代码
+# 贡献指南
 
-NekoDrop 还在 beta 收口。先别从大功能下手。
+感谢你关注 NekoDrop！本文档说明如何参与开发：环境搭建、分支模型、提交规范和 PR 流程。
 
-最适合的 PR 是小的：文档、测试、错误提示、打包脚本、边界清楚的 protocol / storage 改动。
+- 想报告问题或提功能建议：先开 [issue](https://github.com/Hisakazu333/NekoDrop/issues) 讨论。
+- 想报告安全漏洞：看[安全策略](docs/dev/SECURITY.md)，不要在公开 issue 里写漏洞细节。
+- 参与讨论请遵守[行为准则](CODE_OF_CONDUCT.md)。
 
-这个仓库不是云盘，也不是远程控制工具。NekoDrop 是 NekoLink 的第一个桌面落地项目；当前 beta 可用主线是 macOS / Windows 桌面传输。NekoLink 后续承接 bundle、local bridge、transport 和跨设备 Agent 协作，但协议不能写死到某一个第三方应用里。
+## 项目现状
 
-## 先看这几个文件
+NekoDrop 处于 beta 收口阶段，当前主线是 macOS / Windows 局域网传输。这个仓库不是云盘，也不是远程控制工具；NekoLink 后续承接 bundle、local bridge、transport 和跨设备 Agent 协作，但协议不能写死到某一个第三方应用里。
 
-第一次进仓库，按这个顺序看：
+最适合的 PR 是小的、边界清楚的：
 
-1. [README.md](README.md)
-2. [docs/STATUS.md](docs/STATUS.md)
-3. [docs/MODULES.md](docs/MODULES.md)
-4. [docs/BUNDLE_SPEC.md](docs/BUNDLE_SPEC.md)
-5. [docs/NEXT_PHASE_ANALYSIS.md](docs/NEXT_PHASE_ANALYSIS.md)
+**欢迎**：文档修正、补测试、错误提示改进、打包脚本小修、边界清晰的 protocol / storage 改动、给已有 bug 写复现测试。
 
-`STATUS.md` 说真实完成了什么。README 不能写超过 `STATUS.md` 的能力。
+**先开 issue 讨论**：bundle 导入冲突策略、adapter 样例与真实导入导出、local bridge 事件流、key rotation、iroh / relay / P2P、手机端互通。
 
-## 适合先做的事
+**不要直接提 PR**：大 UI 重写、绕过 NekoLink 协议自加传输方式、自动导入 session / skill / workspace、默认同步密钥或隐私目录、把未完成能力写成已完成（[STATUS.md](docs/product/STATUS.md) 是状态的唯一事实来源，README 不得超出它）。
 
-这些任务适合新贡献者：
+## 开发环境
 
-- 修文档里的错字、过期状态、命令错误
-- 补测试，尤其是 `nekolink-protocol` 和 `nekodrop-storage`
-- 改小的 UI 文案，不改整体布局
-- 补 Windows / macOS 错误提示
-- 补打包脚本的小问题
-- 给已有 bug 写复现测试
+| 依赖 | 版本 |
+| --- | --- |
+| Rust | 最新 stable（`rustup update`） |
+| Node.js | ≥ 22 |
+| npm | ≥ 10 |
+| 平台 | macOS 13+ 或 Windows 10+（Linux 仅供 CI 构建验证） |
 
-这些任务先开 issue 讨论：
+```bash
+# 1. 克隆并安装依赖（仓库根目录是 npm workspace）
+git clone git@github.com:Hisakazu333/NekoDrop.git
+cd NekoDrop
+npm install
 
-- bundle 导入计划和冲突策略
-- 上层 adapter 样例和真实导入 / 导出
-- local bridge 长连接事件流
-- key rotation 和 OS keychain / credential-manager 存储
-- iroh / relay / P2P
-- 手机端互通
-- Agent 远程调用
+# 2. 桌面端开发模式（Tauri dev 窗口 + 热更新）
+npm run tauri:dev          # 或 npm run dev 仅启动前端
 
-这些事情不要直接提 PR：
+# 3. 发布构建
+npm run build              # tsc + vite build
+npm run tauri:build        # 桌面安装包
+```
 
-- 大 UI 重写
-- 自己加一个新的传输协议并绕过 NekoLink
-- 自动导入 session / skill / workspace
-- 默认同步 token、密钥、隐私目录
-- 把当前未完成能力写成已完成
-
-## 模块边界
-
-按边界改代码。不要为了方便跨层调用。
+## 代码结构
 
 ```text
-crates/nekolink-protocol
-  协议类型、消息、能力、bundle manifest、session 控制模型。
-  不依赖 Tauri、React、桌面 UI。
-
-crates/nekodrop-storage
-  路径安全、checksum、partial 文件、resume、bundle staging。
-  不做网络连接，不做 UI 状态。
-
-crates/nekodrop-network
-  mDNS、连接码、TCP transport、网络帧。
-  不写入最终文件。
-
-crates/nekodrop-service
-  发送和接收流程，把 protocol / storage / network 串起来。
-
-apps/desktop
-  Tauri 命令、桌面窗口、React UI、系统集成。
+apps/
+  desktop/        Tauri 2 桌面应用（React 19 + TypeScript + Vite）
+    src/          前端：组件、状态、类型
+    src-tauri/    Rust 命令层、应用状态、系统集成
+  sidecar/        无 UI 的 CLI 接收端（兼容明文模式）
+crates/
+  nekolink-protocol   协议库：信封、加密会话、bundle、local bridge 模型
+  nekodrop-core       领域类型：设备、清单、传输任务、配对
+  nekodrop-network    连接码、TCP transport、网络帧
+  nekodrop-storage    路径安全、checksum、partial/resume、bundle 暂存
+  nekodrop-service    收发编排：把 protocol / storage / network 串起来
+docs/              按读者分组：product/ dev/ testing/ examples/ archive/
+scripts/           打包与审计脚本
 ```
 
-UI 只展示状态和发命令。文件扫描、hash、接收落盘、信任策略都不应该写在前端。
+**模块边界**（改代码时不要跨层调用）：
 
-## 分支和 PR
+- `nekolink-protocol` 不依赖 Tauri、React、桌面 UI。
+- `nekodrop-storage` 不做网络连接，不做 UI 状态。
+- `nekodrop-network` 不写入最终文件。
+- 桌面前端只展示状态和发命令；文件扫描、hash、落盘、信任策略不写在前端。
+- UI 改动与协议 / Rust 改动分 PR 提交。
 
-本仓库使用 `main / develop / desktop-develop / docs-develop / personal dev branch / topic branch` 流程。
+## 分支模型
+
+自 2026-10 起使用简化的三段式模型，替代旧的 `main / develop / desktop-develop / docs-develop / 个人长期分支` 多分支模型：
 
 ```text
-main
-  发布主线。只接收 release / rollup PR。
-
-develop
-  核心功能集成分支。主要承接 Rust workspace、协议、存储、网络、服务、安全、bundle、bridge 等底层功能。
-
-desktop-develop
-  桌面端集成分支。主要承接 Tauri、React UI、桌面 IPC、设置页、安装包脚本和 macOS / Windows 体验。
-
-docs-develop
-  文档集成分支。主要承接 README、docs、路线图、贡献规范和发布记录。
-
-personal dev branch
-  每个人自己的长期开发分支，例如 dev/hisakazu。日常提交先落到这里，再通过 PR 合到 develop、desktop-develop 或 docs-develop。
-
-topic branch
-  一次性短分支。适合风险较高、需要隔离评审或多人协作的单项改动。
+main      发布主线（受保护：只接受 PR、squash merge、必须过 CI）
+develop   集成分支，所有日常 PR 的目标
+feat|fix|docs|chore/<topic>   从 develop 切出的短生命周期分支
 ```
 
-`develop`、`desktop-develop` 和 `docs-develop` 都不是个人开发分支。不要把没完成的内容直接推到这些集成分支。当前维护者日常开发默认使用 `dev/hisakazu`，后续新成员使用 `dev/<name>`。
+日常流程：
 
-常规路径：
+```bash
+# 从 develop 开出主题分支
+git checkout develop && git pull --ff-only
+git checkout -b fix/transfer-timeout
+
+# 开发、提交、推送
+git push -u origin fix/transfer-timeout
+
+# 开 PR 到 develop；CI 通过后 squash merge 并删除远端分支
+```
+
+发布流程：定期从 `develop` 向 `main` 发 release PR（squash merge），从 `main` 打 tag、出安装包。
+
+规则：
+
+- 一个 PR 只做一件事；不要混合文档、UI、协议、安全、打包。
+- 分支名用 `feat/<topic>`、`fix/<topic>`、`docs/<topic>`、`chore/<topic>`，不使用个人长期分支。
+- 主题分支生命周期尽量短（理想 < 1 周），长期不合并的分支会被清理（重要 WIP 会先打 `archive/<name>` 标签保留）。
+
+## 提交规范
+
+使用 [Conventional Commits](https://www.conventionalcommits.org/zh-hans/)，格式 `type(scope): subject`：
 
 ```text
-Rust / 协议 / 存储 / 网络 / 服务 / 安全 / bundle / bridge
-  -> 从 develop 更新个人开发分支 dev/<name>
-  -> 在 dev/<name> 或从 develop 开出的短分支提交代码
-  -> PR 到 develop
-
-桌面端 UI / Tauri / IPC / 设置页 / 安装包 / 平台体验
-  -> 从 desktop-develop 更新个人开发分支或短分支
-  -> 在个人分支或短分支提交代码
-  -> PR 到 desktop-develop
-
-README / docs / 路线图 / 贡献规范 / 发布记录
-  -> 从 docs-develop 更新个人开发分支或短分支
-  -> 在个人分支或短分支提交文档
-  -> PR 到 docs-develop
-
-发版收口
-  -> docs-develop 按需要同步到 develop
-  -> desktop-develop 先同步到 develop
-  -> develop 再通过 release / rollup PR 合到 main
-  -> 从 main 打 tag 和安装包
+feat(desktop): 添加传输邀请接受界面
+fix(network): 修复接收线程缺少读超时导致的挂死
+docs: 重写贡献指南
+refactor(storage): 统一 partial 文件生命周期
+test(protocol): 补齐回放窗口边界用例
+chore(deps): 升级 postcss
 ```
 
-跨层改动要拆开。比如协议字段和桌面 UI 都要改时，先把协议 / Rust 能力合到 `develop`，再把桌面消费逻辑合到 `desktop-develop`。不要把协议、安全、UI 和打包塞进一个 PR。
+常用 type：`feat` `fix` `docs` `test` `refactor` `perf` `chore`。scope 可选（crate 名或模块名）。subject 用一句话说清改动，中文或英文均可但不要混排。
 
-`main` 是发布主线，只接收从 `develop` 发起的 release / rollup PR。不要把日常功能 PR 直接合进 `main`。每周至少做一次 `develop -> main` 收口；如果这一周没有可发布改动，可以跳过并在项目记录里写清楚。
+## 测试与质量门
 
-个人开发分支第一次创建：
+提 PR 前在本地跑完并全绿（CI 会重跑同样的检查）：
 
 ```bash
-git checkout develop
-git pull --ff-only
-git checkout -b dev/hisakazu
-git push -u origin dev/hisakazu
+cargo fmt --all                                    # 格式化
+cargo clippy --workspace --all-targets             # 静态检查
+cargo test --workspace                             # Rust 全部测试
+node --test apps/desktop/test/*.test.*             # 前端测试
+npm run build                                      # tsc 类型检查 + vite 构建
 ```
 
-日常继续开发：
+测试要求：
 
-```bash
-git checkout dev/hisakazu
-git pull --ff-only
-git merge --ff-only origin/develop
-```
+- 新逻辑配测试；修 bug 先写复现测试再修。
+- `nekolink-protocol` 和 `nekodrop-storage` 是测试重点区。
+- 前端测试请写行为断言，避免只对源码做正则匹配的"文本断言"。
 
-需要额外隔离时，再从个人分支开短分支：
+## PR 检查清单
 
-```bash
-git checkout dev/hisakazu
-git checkout -b security/hisakazu/session-policy
-```
+提 PR 前自查：
 
-桌面端功能也可以直接从 `desktop-develop` 开短分支：
+- [ ] PR 只做一件事，标题符合 Conventional Commits
+- [ ] 本地 `cargo test` / `node --test` / `npm run build` 全部通过
+- [ ] 新增能力同步更新了 [STATUS.md](docs/product/STATUS.md)（不夸大）
+- [ ] 涉及协议 / 安全模型的改动附测试证据
+- [ ] 没有引入未讨论过的新依赖
+- [ ] UI 改动附截图；跨平台行为说明清楚
 
-```bash
-git checkout desktop-develop
-git pull --ff-only
-git checkout -b ui/hisakazu/receive-flow-polish
-```
+## 文档
 
-文档可以直接从 `docs-develop` 开短分支：
+文档在 [docs/](docs/README.md) 按读者分组：`product/`（产品、状态、路线图）、`dev/`（开发、架构、协议、规范）、`testing/`、`examples/`、`archive/`（历史归档，不代表当前方向）。改动文档时保持索引（docs/README.md）与正文一致：
 
-```bash
-git checkout docs-develop
-git pull --ff-only
-git checkout -b docs/hisakazu/status-roadmap-refresh
-```
-
-短分支名前缀建议：
-
-```text
-docs/<name>/<topic>
-fix/<name>/<topic>
-feat/<name>/<topic>
-ui/<name>/<topic>
-bridge/<name>/<topic>
-bundle/<name>/<topic>
-security/<name>/<topic>
-hardening/<name>/<topic>
-test/<name>/<topic>
-```
-
-示例：
-
-```text
-security/hisakazu/legacy-plain-policy
-bridge/hisakazu/localhost-runtime
-bundle/hisakazu/import-rollback
-ui/hisakazu/transfer-progress
-```
-
-一个 PR 只做一件事。不要把文档、UI、协议、安全、打包混在一起。
-
-PR 目标分支：
-
-- Rust / 协议 / 存储 / 网络 / 服务 / 安全 / bundle / bridge：合到 `develop`
-- 桌面 UI / Tauri / IPC / 设置页 / 安装包 / 平台体验：合到 `desktop-develop`
-- README / docs / 路线图 / 贡献规范 / 发布记录：合到 `docs-develop`
-- 个人开发分支 `dev/<name>`：只作为个人提交入口，不直接发版
-- 发布收口、版本 tag 前的最终汇总：从 `develop` 合到 `main`
-- 紧急 hotfix：可以从 `main` 开，但合并后必须回灌到 `develop`
-
-合并规则：
-
-- PR 合并前必须通过 CI
-- 默认 squash merge 到 `develop`
-- `develop -> main` 用仓库允许的方式合并；如果 GitHub 只能 rebase，就在合并后把 `develop` 同步到 `main` 的发布点
-- 合并后的 topic branch 要删除
-- 个人长期分支和集成分支不能顺手删除：`dev/<name>`、`develop`、`desktop-develop`、`docs-develop`、`main` 都要保留
-- 不允许 force push 到 `main` 或 `develop`
-
-PR 描述写清楚：
-
-- 改了什么
-- 为什么改
-- 没做什么
-- 怎么验证
-- 是否需要重新打安装包
-
-## 提交信息
-
-用 Conventional Commits：
-
-```text
-docs: clarify bundle staging status
-fix: reject unsafe staged bundle ids
-feat: add staged bundle cleanup
-ui: show receive port warning
-security: bind session control identity
-test: cover windows path fragments
-```
-
-## 本地验证
-
-小改动跑对应测试。合并前至少跑：
-
-```bash
-cargo fmt --all -- --check
-cargo test --workspace
-npm run build
-npm audit --omit=dev
-git diff --check
-```
-
-如果本机 `cargo` 走到旧 Rust，使用 stable toolchain：
-
-```bash
-rustup run stable env \
-  RUSTC=/Users/hisakazu/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustc \
-  RUSTDOC=/Users/hisakazu/.rustup/toolchains/stable-aarch64-apple-darwin/bin/rustdoc \
-  cargo test --workspace
-```
-
-桌面功能不要只测 Vite 页面。涉及文件选择、接收服务、托盘、系统权限、安装包的改动，要跑 Tauri 桌面端。
-
-```bash
-npm --workspace apps/desktop run tauri:dev
-```
-
-## 发布相关
-
-不要从临时工作区随手打正式包。发布包必须来自 tag。
-
-预览版 tag：
-
-```text
-v0.1.0-preview.1
-v0.1.0-preview.2
-```
-
-发布时至少记录：
-
-- macOS DMG
-- Windows NSIS / MSI
-- SHA256
-- commit
-- 已验证的系统版本
-- 已知限制
-
-当前还不能叫 stable。文件 payload 加密、replay protection、长期设备身份密钥、跨网络 transport 都还没完成。
-
-## 文档规则
-
-- 新功能合并后先更新 [docs/STATUS.md](docs/STATUS.md)。
+- 新功能合并后先更新 [STATUS.md](docs/product/STATUS.md)。
 - README 只写用户现在能理解和能验证的能力。
-- 协议细节写 [docs/PROTOCOL.md](docs/PROTOCOL.md)。
-- 安全边界写 [docs/SECURITY.md](docs/SECURITY.md)。
-- bundle 规则写 [docs/BUNDLE_SPEC.md](docs/BUNDLE_SPEC.md)。
+- 协议细节写[协议文档](docs/dev/PROTOCOL.md)，安全边界写[安全模型](docs/dev/SECURITY.md)，bundle 规则写 [Bundle 规范](docs/dev/BUNDLE_SPEC.md)。
 - 不要把 roadmap 里的东西写成已经完成。
+
+## 发布
+
+维护者从 `develop` 向 `main` 发 release PR；合并后：
+
+```bash
+git tag -a v0.x.0 -m "release: v0.x.0"
+git push origin v0.x.0
+bash scripts/package-desktop.sh        # macOS DMG
+```
+
+发布时至少记录：安装包与 SHA256、对应 commit、已验证的系统版本、已知限制。当前还不能叫 stable；文件 payload 加密、replay protection、长期设备身份密钥、跨网络 transport 都还没完成。
+
+变更记录写入 [CHANGELOG.md](CHANGELOG.md)。

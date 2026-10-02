@@ -40,7 +40,7 @@ NekoDrop 当前先把桌面端可确认、可校验、可恢复的传输做好�
 - 手动资料包创建、发送和收到后暂存查看
 - macOS DMG、Windows NSIS / MSI 打包脚本
 
-完整状态看 [docs/STATUS.md](docs/STATUS.md)。README 只写能从当前代码和文档里验证的能力。
+完整状态看 [docs/STATUS.md](docs/product/STATUS.md)。README 只写能从当前代码和文档里验证的能力。
 
 ## NekoLink 走到哪一步
 
@@ -204,7 +204,7 @@ release/desktop/<timestamp>/
 ```text
 apps/
   desktop/              Tauri 桌面端和 React UI
-  sidecar/              后台进程实验入口
+  sidecar/              无 UI 的 CLI 接收端
 
 crates/
   nekolink-protocol/    NekoLink 协议类型、session、bundle、local bridge 模型
@@ -213,11 +213,20 @@ crates/
   nekodrop-service/     发送和接收流程
   nekodrop-storage/     文件写入、checksum、partial/resume、bundle staging
 
-docs/                   状态、协议、安全、路线图和测试记录
+docs/
+  product/              产品定义、当前状态、路线图
+  dev/                  开发指南、架构、协议、安全、规范
+  testing/              发布前手工测试矩阵与记录模板
+  examples/             local bridge 通用样例
+  bundle-samples/       session / skill / workspace 样例数据
+  archive/              历史规划与设计稿
+
 scripts/                打包和审计脚本
 ```
 
-Adapter 边界写在 [docs/ADAPTER_SPEC.md](docs/ADAPTER_SPEC.md)。bundle 样例在 [docs/bundle-samples](docs/bundle-samples/)。
+仓库根目录遵循常见开源布局：[README](README.md)、[CHANGELOG](CHANGELOG.md)、[CONTRIBUTING](CONTRIBUTING.md)、[CODE_OF_CONDUCT](CODE_OF_CONDUCT.md)、[LICENSE](LICENSE)、[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。
+
+Adapter 边界写在 [adapter 规范](docs/dev/ADAPTER_SPEC.md)。
 
 ## 后续路线
 
@@ -264,16 +273,13 @@ git diff --check
 
 ## 文档
 
-- [当前状态](docs/STATUS.md)
-- [开发说明](docs/DEVELOPMENT.md)
-- [安全模型](docs/SECURITY.md)
-- [架构](docs/ARCHITECTURE.md)
-- [协议](docs/PROTOCOL.md)
-- [Bundle 规格](docs/BUNDLE_SPEC.md)
-- [Roadmap](docs/ROADMAP.md)
-- [下一阶段分析](docs/NEXT_PHASE_ANALYSIS.md)
-- [模块边界](docs/MODULES.md)
+文档索引见 [docs/README.md](docs/README.md)。常用入口：
+
+- [当前状态](docs/product/STATUS.md) · [路线图](docs/product/ROADMAP.md)
+- [开发指南](docs/dev/DEVELOPMENT.md) · [架构](docs/dev/ARCHITECTURE.md) · [模块边界](docs/dev/MODULES.md)
+- [协议](docs/dev/PROTOCOL.md) · [安全模型](docs/dev/SECURITY.md) · [Bundle 规格](docs/dev/BUNDLE_SPEC.md)
 - [测试矩阵](docs/testing/LARGE_FILE_TRANSFER_MATRIX.md)
+- 历史规划与设计稿在 [docs/archive/](docs/archive/)，仅作参考。
 
 ## 许可
 

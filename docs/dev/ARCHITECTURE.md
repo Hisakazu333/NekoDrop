@@ -1,7 +1,7 @@
 # NekoDrop Architecture
 
 This document is the map for the current repository. For feature status, use
-[STATUS.md](STATUS.md). For contribution boundaries, use [MODULES.md](MODULES.md).
+[STATUS.md](../product/STATUS.md). For contribution boundaries, use [MODULES.md](MODULES.md).
 
 NekoDrop is the desktop product. NekoLink is the protocol layer being grown
 inside this repository until it has more than one stable integration target.

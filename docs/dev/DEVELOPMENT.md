@@ -59,90 +59,36 @@ PATH="/opt/homebrew/opt/rustup/bin:$PATH" npm --workspace apps/desktop run tauri
 
 ## GitHub 开发流程
 
-本项目使用 `main / develop / desktop-develop / docs-develop / personal dev branch / topic branch` 的开发流程。
+自 2026-10 起使用简化的三段式分支模型，替代旧的 `main / develop / desktop-develop / docs-develop / 个人长期分支` 多分支模型：
 
 ```text
-Rust / 核心能力 -> dev/<name> 或 topic branch -> develop
-桌面端能力 -> dev/<name> 或短分支 -> desktop-develop
-文档 -> dev/<name> 或短分支 -> docs-develop
-docs-develop -> develop
-desktop-develop -> develop -> main -> tag / release
+main                          发布主线（受保护：只接受 PR、squash merge、必须过 CI）
+develop                       集成分支，所有日常 PR 的目标
+feat|fix|docs|chore/<topic>   从 develop 切出的短生命周期分支
 ```
-
-`main` 是发布主线，必须始终保持可构建、可测试、可打包。它只接收从 `develop` 发起的 release / rollup PR。
-
-`develop` 是核心功能集成分支，主要放 Rust workspace、协议、存储、网络、服务、安全、bundle 和 bridge 这些底层功能。它不是个人开发分支，不接收没完成的半成品。
-
-`desktop-develop` 是桌面端集成分支，主要放 Tauri、React UI、桌面 IPC、设置页、安装包脚本和 macOS / Windows 体验。桌面端后续开发都从这个分支开短分支，做完后 PR 回 `desktop-develop`。
-
-`docs-develop` 是文档集成分支，主要放 README、docs、路线图、贡献规范和发布记录。文档改动先合到这里，再按需要同步进 `develop`。
-
-`dev/<name>` 是个人长期开发分支。当前维护者使用 `dev/hisakazu`。日常代码先在个人分支提交，再通过 PR 合进 `develop`、`desktop-develop` 或 `docs-develop`。个人分支可以长期保留，不能在 PR 合并时删除。
-
-当前实际维护节奏：
 
 ```text
-dev/hisakazu -> develop
-docs-develop -> develop
-desktop-develop -> develop
-develop -> main
+topic branch -> develop -> main -> tag / release
 ```
 
-日常功能可以先堆在 `dev/hisakazu`，阶段完成后用 rollup PR 合进 `develop`。文档更新前先把 `docs-develop` 同步到最新 `develop`，避免文档继续写旧状态。桌面端大改仍然进 `desktop-develop`，不要把草稿设计文件和 mock 页面提交进主线。
+`main` 是发布主线，必须始终保持可构建、可测试、可打包。它只接收从 `develop` 发起的 release PR（squash merge）。
 
-不要把普通功能分支直接合到 `main`。紧急 hotfix 如果必须从 `main` 开，合并后要同步回 `develop`，涉及桌面端的还要同步回 `desktop-develop`，涉及文档的同步回 `docs-develop`。
+`develop` 是集成分支，承接所有日常改动：Rust workspace、协议、存储、网络、服务、安全、bundle、bridge、桌面 UI 和文档。它不是草稿区，不接收没完成的半成品。
 
-每周至少检查一次 `develop -> main`。有可发布改动就开 release / rollup PR；没有可发布改动就跳过，并在项目记录里写清楚。桌面端要发版时，先把 `desktop-develop` 同步进 `develop`；文档要随版本发布时，先把 `docs-develop` 同步进 `develop`，再走 `develop -> main`。
+主题分支从 `develop` 切出，做完 PR 回 `develop`，合并后删除。不再使用个人长期分支；长期不合并的分支会被清理，重要 WIP 先打 `archive/<name>` 标签保留。
 
-分支命名示例：
-
-```text
-dev/hisakazu
-dev/<name>
-fix/hisakazu/windows-path-encoding
-hardening/hisakazu/security-reliability
-feat/hisakazu/large-file-scan-status
-ui/hisakazu/desktop-style-refresh
-bridge/hisakazu/localhost-runtime
-bundle/hisakazu/import-rollback
-docs/hisakazu/release-checklist
-docs/hisakazu/status-roadmap-refresh
-```
-
-第一次创建个人开发分支：
+日常流程：
 
 ```bash
 git checkout develop
 git pull --ff-only
-git checkout -b dev/hisakazu
-git push -u origin dev/hisakazu
+git checkout -b fix/transfer-timeout
+# ... 开发、提交 ...
+git push -u origin fix/transfer-timeout
+# 开 PR 到 develop，CI 通过后 squash merge 并删除远端分支
 ```
 
-日常继续写 Rust / 核心功能：
-
-```bash
-git checkout dev/hisakazu
-git pull --ff-only
-git merge --ff-only origin/develop
-```
-
-桌面端功能可以从 `desktop-develop` 开短分支，也可以在个人分支里做完后拆 PR。跨层改动要拆成两段：Rust / 协议先进 `develop`，桌面 UI 再进 `desktop-develop`。
-
-从 `desktop-develop` 开桌面端分支：
-
-```bash
-git checkout desktop-develop
-git pull --ff-only
-git checkout -b ui/hisakazu/transfer-progress-polish
-```
-
-从 `docs-develop` 开文档分支：
-
-```bash
-git checkout docs-develop
-git pull --ff-only
-git checkout -b docs/hisakazu/status-roadmap-refresh
-```
+紧急 hotfix 可以从 `main` 开分支，PR 回 `main`，合并后立刻把 `main` 同步回 `develop`。
 
 每个 PR 只做一类改动。不要把 UI 大改、安全修复、大文件传输和打包发布混在一个 PR 里。提交信息使用 Conventional Commits，例如：
 
@@ -155,22 +101,18 @@ docs: add release checklist
 
 合并规则：
 
-- 日常 PR 合到 `develop`
-- 文档 PR 合到 `docs-develop`
-- 桌面端 PR 合到 `desktop-develop`
-- 发布 PR 从 `develop` 合到 `main`
-- 合并前必须通过 CI
-- 日常 PR 默认 squash merge
+- 日常 PR 合到 `develop`；发布 PR 从 `develop` 合到 `main`
+- 合并前必须通过 CI；默认 squash merge
 - 合并后的 topic branch 要删除
-- 个人长期分支和集成分支不能删除，尤其是 `dev/<name>`、`develop`、`desktop-develop` 和 `docs-develop`
-- 不允许 force push 到 `main` 或 `develop`
-- 如果 `develop -> main` 使用 rebase 合并，合并后把 `develop` 同步到 `main` 的发布点
+- `main` 和 `develop` 不允许 force push
+- 每周至少检查一次 `develop -> main`，有可发布改动就开 release PR
 
 合并前至少跑：
 
 ```bash
 cargo fmt --all -- --check
 cargo test --workspace
+node --test apps/desktop/test/*.test.*
 npm run build
 npm audit --omit=dev
 npm run security:audit
