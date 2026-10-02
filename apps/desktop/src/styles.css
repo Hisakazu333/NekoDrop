@@ -177,8 +177,13 @@ textarea {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding-left: 14px; /* 给交通灯留位 / traffic lights live here */
+  padding-left: 14px;
   flex-shrink: 0;
+}
+
+/* macOS：交通灯与品牌行内联同一行（灯区约 x 18..76） */
+.sidebar-top.has-traffic {
+  padding-left: 96px;
 }
 
 .sidebar-title {
