@@ -1,6 +1,6 @@
 # 下一阶段为什么这样排
 
-这份文档解释 NekoDrop / NekoLink 接下来为什么先收口加密文件流，再做 bundle 闭环和本机 local bridge，最后才做 iroh / relay / P2P。真实完成状态以 [STATUS.md](STATUS.md) 为准，阶段列表以 [ROADMAP.md](ROADMAP.md) 为准。
+这份文档解释 NekoDrop / NekoLink 接下来为什么先收口加密文件流，再做 bundle 闭环和本机 local bridge，最后才做 iroh / relay / P2P。真实完成状态以 [STATUS.md](../product/STATUS.md) 为准，阶段列表以 [ROADMAP.md](../product/ROADMAP.md) 为准。
 
 ## 当前基线
 
@@ -173,4 +173,4 @@ NekoDrop / OpenNeko / other app
 3. `adapter/transaction-migration-contract`
 4. `transport/iroh-spike`
 
-已经完成的安全、bundle staging/import、local bridge runtime、bundle send/import/rollback 和 generic adapter 样例不要重复开新主线。每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](STATUS.md)、[ROADMAP.md](ROADMAP.md) 和相关协议文档。
+已经完成的安全、bundle staging/import、local bridge runtime、bundle send/import/rollback 和 generic adapter 样例不要重复开新主线。每个分支只做一件事。每个 PR 合并前更新 [STATUS.md](../product/STATUS.md)、[ROADMAP.md](../product/ROADMAP.md) 和相关协议文档。

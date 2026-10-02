@@ -274,7 +274,7 @@ Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plai
 
 ## 样例
 
-可校验样例放在 [bundle-samples](bundle-samples/)：
+可校验样例放在 [bundle-samples](../bundle-samples)：
 
 - `skill-basic`
 - `session-summary`
@@ -284,7 +284,7 @@ Bundle 传输必须走 authenticated encrypted session 路径。旧 `legacy_plai
 
 这些样例使用通用应用名，不绑定任何第三方项目。测试会校验样例的 manifest、checksum、权限和 payload 文件。
 
-本机应用接入 local bridge 的最小请求流程见 [generic-adapter](examples/generic-adapter/)。示例脚本可以生成 `authorize -> send -> observe -> inspect -> import -> results` 的通用请求顺序。
+本机应用接入 local bridge 的最小请求流程见 [generic-adapter](../examples/generic-adapter)。示例脚本可以生成 `authorize -> send -> observe -> inspect -> import -> results` 的通用请求顺序。
 
 ## 仍未实现
 
