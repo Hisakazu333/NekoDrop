@@ -2,7 +2,6 @@ import React, { createContext, useContext, useEffect, useMemo, useRef, useState,
 import { listen } from "@tauri-apps/api/event";
 import { bindWindowDragDrop } from "../dragDrop";
 import { invokeCommand, isTauriRuntime } from "../tauri";
-import { findCurrentRecoverableTransfer } from "../currentTransferRecovery";
 import {
   bundleImportStrategyLabel,
   markBundleDeleted,
