@@ -984,22 +984,13 @@ fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> NekoDropResul
 
     let result = (|| {
         let mut file = fs::File::create(&temp_path).map_err(|error| {
-            NekoDropError::Storage(format!(
-                "failed to create {}: {error}",
-                temp_path.display()
-            ))
+            NekoDropError::Storage(format!("failed to create {}: {error}", temp_path.display()))
         })?;
         file.write_all(&json).map_err(|error| {
-            NekoDropError::Storage(format!(
-                "failed to write {}: {error}",
-                temp_path.display()
-            ))
+            NekoDropError::Storage(format!("failed to write {}: {error}", temp_path.display()))
         })?;
         file.sync_all().map_err(|error| {
-            NekoDropError::Storage(format!(
-                "failed to sync {}: {error}",
-                temp_path.display()
-            ))
+            NekoDropError::Storage(format!("failed to sync {}: {error}", temp_path.display()))
         })
     })();
     if let Err(error) = result {

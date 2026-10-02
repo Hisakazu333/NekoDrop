@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nekodrop_core::{Device, DeviceTrustState, NekoDropError, ReceivePolicy};
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
-    TransferProgress, TCP_IO_STALL_TIMEOUT, TransportStream,
+    TransferProgress, TransportStream, TCP_IO_STALL_TIMEOUT,
 };
 use nekodrop_service::{
     accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel,
@@ -634,7 +634,9 @@ pub fn respond_local_bridge_pending_action(
             match result {
                 Ok(result) => {
                     push_local_bridge_pending_action_result_record(runtime, result.clone())?;
-                    Ok(Some(local_bridge_pending_action_result_to_dto(&result, false)))
+                    Ok(Some(local_bridge_pending_action_result_to_dto(
+                        &result, false,
+                    )))
                 }
                 Err(error) => {
                     push_failed_local_bridge_action_result(runtime, &pending_action, &error)?;
@@ -649,7 +651,9 @@ pub fn respond_local_bridge_pending_action(
             match result {
                 Ok(result) => {
                     push_local_bridge_action_lifecycle_result(runtime, result.clone())?;
-                    Ok(Some(local_bridge_pending_action_result_to_dto(&result, false)))
+                    Ok(Some(local_bridge_pending_action_result_to_dto(
+                        &result, false,
+                    )))
                 }
                 Err(error) => {
                     push_failed_local_bridge_action_result(runtime, &pending_action, &error)?;
@@ -1697,7 +1701,9 @@ pub fn start_receive_once(
                                 &trusted_devices,
                                 &report,
                             );
-                            if let Err(error) = push_transfer_history_record(&transfer_history, record) {
+                            if let Err(error) =
+                                push_transfer_history_record(&transfer_history, record)
+                            {
                                 eprintln!("nekodrop: failed to persist transfer history: {error}");
                             }
                             if let Some(bundle) = report.bundle.as_ref() {
@@ -4744,7 +4750,10 @@ fn local_bridge_authorization_code(
     // practically-unreachable case of the system RNG failing.
     let mut bytes = [0_u8; 3];
     if getrandom::fill(&mut bytes).is_ok() {
-        let hex = bytes.iter().map(|byte| format!("{byte:02X}")).collect::<String>();
+        let hex = bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>();
         return format!("{}-{}", &hex[..3], &hex[3..6]);
     }
 

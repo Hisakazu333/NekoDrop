@@ -16,8 +16,8 @@ use nekodrop_network::{
     write_session_transfer_offer, write_transfer_decision_for_transfer, write_transfer_offer,
     ConnectionTicket, Endpoint, IncomingControlFrame, OutgoingFileFrame, PairingDecisionPayload,
     PairingRequestPayload, SentFileFrame, SignedSessionIdentityBinding, TransferDecision,
-    TransferOffer, TransferOfferFile, TransferProgress, TransferResumeFile,
-    TCP_IO_DECISION_TIMEOUT, TCP_IO_STALL_TIMEOUT, TransportStream,
+    TransferOffer, TransferOfferFile, TransferProgress, TransferResumeFile, TransportStream,
+    TCP_IO_DECISION_TIMEOUT, TCP_IO_STALL_TIMEOUT,
 };
 use nekodrop_storage::{
     build_resume_plan_for_files, check_receive_space, create_source_plan_from_paths,
