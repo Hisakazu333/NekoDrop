@@ -1,82 +1,64 @@
 import React, { useState } from "react";
 import { AppProvider, useAppContext } from "./context/AppContext";
-import { TitleBar } from "./components/TitleBar";
-import { LeftSidebar } from "./components/LeftSidebar";
-import { TransferZone } from "./components/TransferZone";
-import { DevicesManager } from "./components/DevicesManager";
-import { TransfersManager } from "./components/TransfersManager";
-import { SettingsManager } from "./components/SettingsManager";
-import { ActivityInspector } from "./components/ActivityInspector";
+import { Sidebar } from "./components/Sidebar";
+import { SendView } from "./components/SendView";
+import { DevicesView } from "./components/DevicesView";
+import { HistoryView } from "./components/HistoryView";
+import { SettingsView } from "./components/SettingsView";
+import { TransferBanner } from "./components/TransferBanner";
 import { InboxDrawer } from "./components/InboxDrawer";
+import { isPendingInboxBundle } from "./bundleState";
 
 /**
- * 应用内部布局渲染组件（支持全视图路由）
- * Application Inner Content and Layout Component with view routing
+ * 应用骨架：两栏（文字导航 + 主区），全局传输横幅与收件箱抽屉
+ * App shell: two panes with a global transfer banner and inbox drawer.
  */
 function AppContent() {
-  const { error, toast, mode } = useAppContext();
+  const { error, toast, mode, localBridgePendingActions, stagedBundles } = useAppContext();
   const [inboxOpen, setInboxOpen] = useState(false);
 
-  // 根据当前 mode 动态决定中栏渲染的组件 / Dynamically render the middle pane based on mode
-  const renderMiddlePane = () => {
+  const inboxCount =
+    localBridgePendingActions.length + stagedBundles.filter(isPendingInboxBundle).length;
+
+  const renderMain = () => {
     switch (mode) {
-      case "send":
-        return <TransferZone />;
       case "devices":
-        return <DevicesManager />;
+        return <DevicesView />;
       case "transfers":
-        return <TransfersManager />;
+        return <HistoryView />;
       case "settings":
-        return <SettingsManager />;
+        return <SettingsView />;
       default:
-        return <TransferZone />;
+        return <SendView />;
     }
   };
 
   return (
-    <div className="app-container">
-      {/* 自定义标题栏（适配 Mac 交通灯） / Custom Titlebar */}
-      <TitleBar onToggleInbox={() => setInboxOpen(!inboxOpen)} inboxOpen={inboxOpen} />
+    <div className="app-shell">
+      <Sidebar inboxCount={inboxCount} onToggleInbox={() => setInboxOpen(!inboxOpen)} />
+      <main className="main-pane">
+        <TransferBanner />
+        {renderMain()}
+      </main>
 
-      {/* 全局通知提示堆叠区 / Global Alert Notification Overlay */}
+      <InboxDrawer isOpen={inboxOpen} onClose={() => setInboxOpen(false)} />
+
       {(error || toast) && (
-        <div className="global-notification-overlay">
+        <div className="toast-overlay">
           {error && (
-            <div className="global-alert-card is-error">
-              <span className="alert-badge">失败</span>
-              <span className="alert-message">{error}</span>
+            <div className="toast-pill is-error" role="alert">
+              {error}
             </div>
           )}
-          {toast && (
-            <div className="global-alert-card is-toast">
-              <span className="alert-badge">喵</span>
-              <span className="alert-message">{toast}</span>
-            </div>
-          )}
+          {toast && <div className="toast-pill">{toast}</div>}
         </div>
       )}
-
-      {/* 三栏式工具工作台核心布局 / Three-Column Workbench Layout */}
-      <div className="main-layout">
-        {/* 1. 左栏：导航与设备树列表 */}
-        <LeftSidebar />
-
-        {/* 2. 中栏：工作台与能力页签（动态路由渲染） */}
-        {renderMiddlePane()}
-
-        {/* 3. 右栏：活跃传输与历史面板 */}
-        <ActivityInspector />
-      </div>
-
-      {/* 侧滑通知收件箱抽屉 / Slide-out Inbox Drawer */}
-      <InboxDrawer isOpen={inboxOpen} onClose={() => setInboxOpen(false)} />
     </div>
   );
 }
 
 /**
- * 客户端主入口组件
- * Main Desktop Client Entry Component
+ * 客户端主入口组件 / Main desktop client entry component
  */
 export function App() {
   return (
