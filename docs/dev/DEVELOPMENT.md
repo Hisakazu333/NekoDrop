@@ -104,8 +104,9 @@ docs: add release checklist
 - 日常 PR 合到 `develop`；发布 PR 从 `develop` 合到 `main`
 - 合并前必须通过 CI；默认 squash merge
 - 合并后的 topic branch 要删除
-- `main` 和 `develop` 不允许 force push
+- `main` 不允许 force push；`develop` 仅允许在 release squash 合并后做同步重置
 - 每周至少检查一次 `develop -> main`，有可发布改动就开 release PR
+- release PR squash 合并后立即把 `develop` 重置到 `main`，避免平行历史导致下一个 release PR 冲突
 
 合并前至少跑：
 

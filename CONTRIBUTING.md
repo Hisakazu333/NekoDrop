@@ -92,6 +92,8 @@ git push -u origin fix/transfer-timeout
 
 发布流程：定期从 `develop` 向 `main` 发 release PR（squash merge），从 `main` 打 tag、出安装包。
 
+> 注意：release PR squash 合并后，`develop` 必须立刻重置到 `main`（`git checkout develop && git reset --hard origin/main && git push --force-with-lease origin develop`），否则 squash 产生的平行历史会让下一个 release PR 显示冲突。
+
 规则：
 
 - 一个 PR 只做一件事；不要混合文档、UI、协议、安全、打包。
