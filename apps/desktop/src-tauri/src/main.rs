@@ -79,6 +79,7 @@ pub fn run() {
             commands::confirm_local_bridge_authorization
         ])
         .setup(|app| {
+            apply_window_glass(app);
             tray::setup_tray(app)?;
             let state = app.state::<AppState>();
             discovery::start_discovery(&state);
@@ -88,6 +89,38 @@ pub fn run() {
         })
         .run(tauri::generate_context!())
         .expect("error while running NekoDrop desktop app");
+}
+
+/// 让窗口本身成为磨砂玻璃（macOS NSVisualEffectView / Windows Mica）。
+/// 失败时通知前端回退到实色底，避免透明窗口露出异常底色。
+fn apply_window_glass(app: &tauri::App) {
+    let window = match app.get_webview_window("main") {
+        Some(window) => window,
+        None => return,
+    };
+    let applied = {
+        #[cfg(target_os = "macos")]
+        {
+            window_vibrancy::apply_vibrancy(
+                &window,
+                window_vibrancy::NSVisualEffectMaterial::UnderWindowBackground,
+                None,
+                None,
+            )
+            .is_ok()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            window_vibrancy::apply_mica(&window, None).is_ok()
+        }
+        #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+        {
+            false
+        }
+    };
+    if !applied {
+        let _ = window.eval("document.documentElement.dataset.vibrancy = 'off'");
+    }
 }
 
 fn main() {

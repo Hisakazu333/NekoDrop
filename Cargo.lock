@@ -2062,6 +2062,7 @@ dependencies = [
  "tauri",
  "tauri-build",
  "time",
+ "window-vibrancy",
 ]
 
 [[package]]
