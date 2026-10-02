@@ -7,7 +7,10 @@ const inboxSource = readFileSync(new URL("../src/components/InboxDrawer.tsx", im
 const sidebarSource = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
 const settingsSource = readFileSync(new URL("../src/components/SettingsView.tsx", import.meta.url), "utf8");
 const sendSource = readFileSync(new URL("../src/components/SendView.tsx", import.meta.url), "utf8");
+const composerSource = readFileSync(new URL("../src/context/composer.ts", import.meta.url), "utf8");
+const bridgeSource = readFileSync(new URL("../src/context/bridge.ts", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");
+const helpersSource = readFileSync(new URL("../src/context/helpers.ts", import.meta.url), "utf8");
 
 test("receive policy segment columns match the visible policy options", () => {
   const optionsBlock = settingsSource.match(/const RECEIVE_POLICY_OPTIONS[\s\S]+?\]\s*(?:as const)?;/);
@@ -31,14 +34,14 @@ test("inbox allow/deny actions carry distinct semantics", () => {
 });
 
 test("send flow owns manual bundle creation instead of a separate bundle page", () => {
-  assert.match(contextSource, /async function createManualBundleForSend\(\)/);
+  assert.match(composerSource, /async function createManualBundleForSend\(\)/);
   assert.match(sendSource, /createManualBundleForSend/);
   assert.match(sendSource, /资料包/);
   assert.match(sendSource, /connectionCode/);
 });
 
 test("bundle and integration are not top-level navigation destinations", () => {
-  const modeBlock = contextSource.match(/type ComposerMode =[\s\S]+?;/);
+  const modeBlock = helpersSource.match(/type ComposerMode =[\s\S]+?;/);
   assert.ok(modeBlock, "ComposerMode should exist");
   assert.doesNotMatch(modeBlock[0], /"bundles"/);
   assert.doesNotMatch(modeBlock[0], /"integrations"/);
@@ -47,13 +50,14 @@ test("bundle and integration are not top-level navigation destinations", () => {
 });
 
 test("local bridge surface stays wired through the context", () => {
-  assert.match(contextSource, /const \[localBridgeStatus, setLocalBridgeStatus\]/);
-  assert.match(contextSource, /invokeCommand<LocalBridgeRuntimeStatusDto>\("get_local_bridge_runtime_status"/);
-  assert.match(contextSource, /invokeCommand<LocalBridgeAuthorizationListDto>\("list_local_bridge_authorizations"/);
-  assert.match(contextSource, /"revoke_local_bridge_authorization"/);
-  assert.match(contextSource, /invokeCommand<LocalBridgeAuthorizationListDto>\("prune_local_bridge_authorizations"/);
-  assert.match(contextSource, /const \[localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode\]/);
-  assert.match(contextSource, /invokeCommand<LocalBridgeAuthorizationDto>\("confirm_local_bridge_authorization"/);
+  const bridgeAssertions = bridgeSource;
+  assert.match(bridgeSource, /const \[localBridgeStatus, setLocalBridgeStatus\]/);
+  assert.match(bridgeAssertions, /invokeCommand<LocalBridgeRuntimeStatusDto>\("get_local_bridge_runtime_status"/);
+  assert.match(bridgeAssertions, /invokeCommand<LocalBridgeAuthorizationListDto>\("list_local_bridge_authorizations"/);
+  assert.match(bridgeAssertions, /"revoke_local_bridge_authorization"/);
+  assert.match(bridgeAssertions, /invokeCommand<LocalBridgeAuthorizationListDto>\("prune_local_bridge_authorizations"/);
+  assert.match(bridgeAssertions, /const \[localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode\]/);
+  assert.match(bridgeAssertions, /invokeCommand<LocalBridgeAuthorizationDto>\("confirm_local_bridge_authorization"/);
   assert.match(settingsSource, /runLocalBridgeSelfCheck/);
   assert.match(settingsSource, /revokeLocalBridgeAuthorization/);
   assert.match(settingsSource, /pruneLocalBridgeAuthorizations/);

@@ -5,7 +5,7 @@ import { test } from "node:test";
 const contextSource = readFileSync(new URL("../src/context/AppContext.tsx", import.meta.url), "utf8");
 const tauriSource = readFileSync(new URL("../src/tauri.ts", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
-const commandsSource = readFileSync(new URL("../src-tauri/src/commands/mod.rs", import.meta.url), "utf8");
+const commandsSource = readFileSync(new URL("../src-tauri/src/commands/devices.rs", import.meta.url), "utf8");
 const commandDtoSource = readFileSync(new URL("../src-tauri/src/commands/dto.rs", import.meta.url), "utf8");
 
 function functionBody(source, name) {
