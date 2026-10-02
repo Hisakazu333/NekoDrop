@@ -2,7 +2,7 @@
 
 本方案抛弃了花哨、拟物和游戏化的交互设计，采用类似 **Obsidian / VS Code / GitHub Desktop** 的**“三栏式工具工作台 (Three-Column Workbench)”**布局。该设计结构规整、模块化强，且在 React + Tauri 中**开发成本极低**，非常适合高效率的生产力工具定位。
 
-![NekoDrop 全新工具化 UI 设计概念图](../file:/Users/hisakazu/.gemini/antigravity/brain/34ac6590-7d87-4c76-963c-0eb002bc1c02/nekodrop_workbench_ui_mockup_1782580263412.jpg)
+NekoDrop 全新工具化 UI 设计概念图（本地草稿图，已移除）
 
 ---
 
