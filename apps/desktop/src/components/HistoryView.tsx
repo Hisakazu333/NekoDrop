@@ -1,0 +1,145 @@
+import React, { useState } from "react";
+import { useAppContext } from "../context/AppContext";
+import { Icon } from "./Icon";
+import { formatBytes } from "../transferProgress";
+import type { TransferDto } from "../types";
+
+function statusLabel(transfer: TransferDto) {
+  const status = transfer.status;
+  if (status === "succeeded" || status === "done") return { text: "成功", cls: "is-ok" };
+  if (status === "failed") return { text: "失败", cls: "is-failed" };
+  if (status === "cancelled") return { text: "已取消", cls: "is-muted" };
+  if (status === "transferring" || status === "awaiting_approval") return { text: "进行中", cls: "is-live" };
+  return { text: status, cls: "is-muted" };
+}
+
+function formatTime(ms: number | null | undefined) {
+  if (!ms) return "";
+  const date = new Date(Number(ms));
+  return `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/**
+ * 历史页：行内统计 + 纯列表
+ * History page: inline stats + plain rows.
+ */
+export function HistoryView() {
+  const { transfers, resendTransfer, openTransferLocation, deleteTransfer, clearTransferHistory } =
+    useAppContext();
+  const [filter, setFilter] = useState<"all" | "send" | "receive">("all");
+
+  const succeeded = transfers.filter((transfer) => transfer.status === "succeeded" || transfer.status === "done");
+  const failed = transfers.filter((transfer) => transfer.status === "failed");
+  const totalBytes = succeeded.reduce((sum, transfer) => sum + transfer.total_bytes, 0);
+  const visible = transfers.filter((transfer) =>
+    filter === "all" ? true : transfer.direction === filter
+  );
+
+  return (
+    <div className="page">
+      <div className="page-header">
+        <h2>历史</h2>
+        <p>最近的发送与接收记录</p>
+      </div>
+
+      <div className="page-section">
+        <div className="stat-line">
+          <div className="stat">
+            <b>{transfers.length}</b>
+            <span>总记录</span>
+          </div>
+          <div className="stat">
+            <b>{succeeded.length}</b>
+            <span>成功</span>
+          </div>
+          <div className="stat">
+            <b style={{ color: failed.length ? "var(--danger)" : undefined }}>{failed.length}</b>
+            <span>失败</span>
+          </div>
+          <div className="stat">
+            <b>{formatBytes(totalBytes)}</b>
+            <span>累计传输</span>
+          </div>
+        </div>
+      </div>
+
+      <div className="page-section">
+        <div className="filter-line">
+          {(["all", "send", "receive"] as const).map((type) => (
+            <button
+              className={filter === type ? "is-active" : ""}
+              key={type}
+              onClick={() => setFilter(type)}
+              type="button"
+            >
+              {type === "all" ? "全部" : type === "send" ? "发送" : "接收"}
+            </button>
+          ))}
+          {transfers.length > 0 && (
+            <button
+              className="text-btn is-danger"
+              onClick={clearTransferHistory}
+              style={{ marginLeft: "auto" }}
+              type="button"
+            >
+              清空历史
+            </button>
+          )}
+        </div>
+        <div className="list">
+          {visible.length === 0 ? (
+            <div className="inline-note">还没有传输记录。</div>
+          ) : (
+            visible.map((transfer) => {
+              const label = statusLabel(transfer);
+              return (
+                <div className="list-row" key={transfer.id}>
+                  <span className="row-icon">
+                    <Icon name={transfer.direction === "send" ? "arrow-up" : "upload"} />
+                  </span>
+                  <div className="row-main">
+                    <div className="row-title">{transfer.root_name || "未命名传输"}</div>
+                    <div className="row-sub">
+                      {transfer.direction === "send" ? "发送" : "接收"}
+                      {transfer.peer_name ? ` · ${transfer.peer_name}` : ""} ·{" "}
+                      {transfer.file_count} 个文件 · {formatBytes(transfer.total_bytes)} ·{" "}
+                      {formatTime(transfer.updated_at_ms ?? null)}
+                      {transfer.error_message ? ` · ${transfer.error_message}` : ""}
+                    </div>
+                  </div>
+                  <span className={`state-tag ${label.cls}`}>{label.text}</span>
+                  <div className="row-ops">
+                    <button
+                      className="icon-btn"
+                      onClick={() => openTransferLocation(transfer)}
+                      title="打开位置"
+                      type="button"
+                    >
+                      <Icon name="folder" />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      onClick={() => resendTransfer(transfer)}
+                      title="重新发送"
+                      type="button"
+                    >
+                      <Icon name="refresh" />
+                    </button>
+                    <button
+                      className="icon-btn"
+                      onClick={() => deleteTransfer(transfer)}
+                      title="删除记录"
+                      type="button"
+                    >
+                      <Icon name="trash" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
