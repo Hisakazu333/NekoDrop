@@ -12,7 +12,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nekodrop_core::{Device, DeviceTrustState, NekoDropError, ReceivePolicy};
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
-    TransferProgress,
+    TransferProgress, TransportStream, TCP_IO_STALL_TIMEOUT,
 };
 use nekodrop_service::{
     accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel,
@@ -139,7 +139,7 @@ enum ReceiveTrustContext {
     AuthenticatedTrusted,
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, String> {
     let config = state.config.lock().map_err(|error| error.to_string())?;
     let identity = state.device_identity.public_identity();
@@ -154,7 +154,7 @@ pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, Strin
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_nearby_devices(state: State<'_, AppState>) -> Result<Vec<DeviceDto>, String> {
     let devices = state
         .nearby_devices
@@ -171,7 +171,7 @@ pub fn list_nearby_devices(state: State<'_, AppState>) -> Result<Vec<DeviceDto>,
         .collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_discovery_status(state: State<'_, AppState>) -> Result<DiscoveryStatusDto, String> {
     let device_count = state
         .nearby_devices
@@ -182,7 +182,7 @@ pub fn get_discovery_status(state: State<'_, AppState>) -> Result<DiscoveryStatu
     discovery_status_snapshot(&state, device_count)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_trusted_devices(state: State<'_, AppState>) -> Result<Vec<TrustedDeviceDto>, String> {
     let trusted_devices = state
         .trusted_devices
@@ -191,7 +191,7 @@ pub fn list_trusted_devices(state: State<'_, AppState>) -> Result<Vec<TrustedDev
     Ok(trusted_devices.iter().map(trusted_device_to_dto).collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn trust_nearby_device(
     state: State<'_, AppState>,
     device_id: String,
@@ -232,7 +232,7 @@ pub fn trust_nearby_device(
     Ok(trusted_device_to_dto(&record))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn request_device_pairing(
     state: State<'_, AppState>,
     device_id: String,
@@ -288,7 +288,7 @@ pub fn request_device_pairing(
     Ok(trusted_device_to_dto(&record))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> Result<(), String> {
     {
         let mut trusted_devices = state
@@ -311,7 +311,7 @@ pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> R
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_pending_pairing_request(
     state: State<'_, AppState>,
 ) -> Result<Option<PendingPairingRequestDto>, String> {
@@ -322,14 +322,14 @@ pub fn get_pending_pairing_request(
     Ok(request.as_ref().map(pending_pairing_request_to_dto))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_desktop_realtime_snapshot(
     state: State<'_, AppState>,
 ) -> Result<DesktopRealtimeSnapshotDto, String> {
     desktop_realtime_snapshot(&state)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn respond_pairing_request(state: State<'_, AppState>, accept: bool) -> Result<(), String> {
     let request = state
         .pending_pairing_request
@@ -351,7 +351,7 @@ pub fn respond_pairing_request(state: State<'_, AppState>, accept: bool) -> Resu
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_transfers(state: State<'_, AppState>) -> Result<Vec<TransferDto>, String> {
     let transfers = state
         .transfer_history
@@ -360,24 +360,24 @@ pub fn list_transfers(state: State<'_, AppState>) -> Result<Vec<TransferDto>, St
     Ok(transfers.iter().map(transfer_to_dto).collect())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_transfer(state: State<'_, AppState>, transfer_id: String) -> Result<(), String> {
     delete_transfer_history_record(&state.transfer_history, &transfer_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn clear_transfer_history(state: State<'_, AppState>) -> Result<(), String> {
     clear_transfer_history_records(&state.transfer_history)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_staged_bundles() -> Result<Vec<ReceivedBundleDto>, String> {
     let staging_root = bundle_staging_root()?;
     let import_root = bundle_import_root()?;
     list_staged_bundle_dtos_at(&staging_root, &import_root)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn prune_staged_bundles() -> Result<Vec<String>, String> {
     let staging_root = bundle_staging_root()?;
     let cutoff = SystemTime::now()
@@ -386,13 +386,13 @@ pub fn prune_staged_bundles() -> Result<Vec<String>, String> {
     prune_staged_bundle_dtos_at(&staging_root, cutoff)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn delete_staged_bundle(bundle_id: String) -> Result<bool, String> {
     let staging_root = bundle_staging_root()?;
     delete_staged_bundle_at(&staging_root, &bundle_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn import_staged_bundle(
     request: ImportStagedBundleRequestDto,
 ) -> Result<ReceivedBundleDto, String> {
@@ -402,7 +402,7 @@ pub fn import_staged_bundle(
     import_staged_bundle_with_strategy_at(&staging_root, &import_root, &request.bundle_id, strategy)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn rollback_imported_bundle(
     request: RollbackImportedBundleRequestDto,
 ) -> Result<ReceivedBundleDto, String> {
@@ -410,7 +410,7 @@ pub fn rollback_imported_bundle(
     rollback_imported_bundle_at(&import_root, &request.bundle_id)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_manual_bundle(
     state: State<'_, AppState>,
     request: ManualBundleCreateRequestDto,
@@ -460,7 +460,7 @@ pub fn create_manual_bundle(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn handle_local_bridge_request(
     state: State<'_, AppState>,
     request_json: String,
@@ -473,7 +473,7 @@ pub fn handle_local_bridge_request(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn confirm_local_bridge_authorization(
     state: State<'_, AppState>,
     authorization_code: String,
@@ -487,7 +487,7 @@ pub fn confirm_local_bridge_authorization(
     Ok(local_bridge_authorization_to_dto(authorization))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_local_bridge_runtime_status(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgeRuntimeStatusDto, String> {
@@ -496,7 +496,7 @@ pub fn get_local_bridge_runtime_status(
     ))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_local_bridge_authorizations(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgeAuthorizationListDto, String> {
@@ -512,7 +512,7 @@ pub fn list_local_bridge_authorizations(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn revoke_local_bridge_authorization(
     state: State<'_, AppState>,
     client_id: String,
@@ -535,7 +535,7 @@ pub fn revoke_local_bridge_authorization(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn list_local_bridge_pending_actions(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgePendingActionListDto, String> {
@@ -544,7 +544,7 @@ pub fn list_local_bridge_pending_actions(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn remove_local_bridge_pending_action(
     state: State<'_, AppState>,
     request_id: String,
@@ -556,7 +556,150 @@ pub fn remove_local_bridge_pending_action(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
+pub fn respond_local_bridge_pending_action(
+    state: State<'_, AppState>,
+    request_id: String,
+    accept: bool,
+) -> Result<LocalBridgePendingActionRespondDto, String> {
+    let runtime = &state.local_bridge_runtime;
+
+    if !accept {
+        let action = take_local_bridge_pending_action_by_request_id(runtime, &request_id)?;
+        let declined = action.is_some();
+        if let Some(action) = action {
+            // The protocol has no dedicated "declined" lifecycle status; the
+            // message distinguishes a user rejection from a plain removal.
+            push_local_bridge_action_lifecycle_result(
+                runtime,
+                local_bridge_action_lifecycle_result(
+                    &action,
+                    LocalBridgeActionLifecycleStatus::Cancelled,
+                    None,
+                    "local bridge action was declined by the desktop user",
+                    None,
+                    match &action {
+                        LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
+                        LocalBridgePendingAction::ImportBundle(action) => {
+                            action.expected_bundle_type
+                        }
+                        LocalBridgePendingAction::RollbackBundleImport(_) => None,
+                    },
+                    match &action {
+                        LocalBridgePendingAction::SendBundle(action) => {
+                            action.target_device_id.as_deref()
+                        }
+                        LocalBridgePendingAction::ImportBundle(_) => None,
+                        LocalBridgePendingAction::RollbackBundleImport(_) => None,
+                    },
+                    now_ms(),
+                ),
+            )?;
+        }
+        return Ok(LocalBridgePendingActionRespondDto {
+            handled: declined,
+            accepted: false,
+            result: None,
+            actions: list_local_bridge_pending_actions_at(runtime)?,
+        });
+    }
+
+    let action = take_local_bridge_pending_action_by_request_id(runtime, &request_id)?;
+    let Some(action) = action else {
+        return Ok(LocalBridgePendingActionRespondDto {
+            handled: false,
+            accepted: true,
+            result: None,
+            actions: list_local_bridge_pending_actions_at(runtime)?,
+        });
+    };
+
+    // On failure the action is already gone from the queue, so record a
+    // failed lifecycle result here; otherwise the client would wait forever
+    // on a "running" action that will never finish.
+    let pending_action = action.clone();
+    let result = match action {
+        LocalBridgePendingAction::SendBundle(action) => {
+            execute_local_bridge_bundle_send_action_at(&state, action, now_ms()).map(Some)
+        }
+        LocalBridgePendingAction::ImportBundle(action) => {
+            let staging_root = bundle_staging_root()?;
+            let import_root = bundle_import_root()?;
+            let result = execute_local_bridge_bundle_import_action(
+                action,
+                &staging_root,
+                &import_root,
+                now_ms(),
+            );
+            match result {
+                Ok(result) => {
+                    push_local_bridge_pending_action_result_record(runtime, result.clone())?;
+                    Ok(Some(local_bridge_pending_action_result_to_dto(
+                        &result, false,
+                    )))
+                }
+                Err(error) => {
+                    push_failed_local_bridge_action_result(runtime, &pending_action, &error)?;
+                    Err(error)
+                }
+            }
+        }
+        LocalBridgePendingAction::RollbackBundleImport(action) => {
+            let import_root = bundle_import_root()?;
+            let result =
+                execute_local_bridge_bundle_rollback_action(action, &import_root, now_ms());
+            match result {
+                Ok(result) => {
+                    push_local_bridge_action_lifecycle_result(runtime, result.clone())?;
+                    Ok(Some(local_bridge_pending_action_result_to_dto(
+                        &result, false,
+                    )))
+                }
+                Err(error) => {
+                    push_failed_local_bridge_action_result(runtime, &pending_action, &error)?;
+                    Err(error)
+                }
+            }
+        }
+    }?;
+
+    Ok(LocalBridgePendingActionRespondDto {
+        handled: true,
+        accepted: true,
+        result,
+        actions: list_local_bridge_pending_actions_at(runtime)?,
+    })
+}
+
+fn push_failed_local_bridge_action_result(
+    runtime: &LocalBridgeRuntimeState,
+    action: &LocalBridgePendingAction,
+    error: &str,
+) -> Result<(), String> {
+    push_local_bridge_action_lifecycle_result(
+        runtime,
+        local_bridge_action_lifecycle_result(
+            action,
+            LocalBridgeActionLifecycleStatus::Failed,
+            None,
+            error,
+            None,
+            match action {
+                LocalBridgePendingAction::SendBundle(action) => Some(action.bundle_type),
+                LocalBridgePendingAction::ImportBundle(action) => action.expected_bundle_type,
+                LocalBridgePendingAction::RollbackBundleImport(_) => None,
+            },
+            match action {
+                LocalBridgePendingAction::SendBundle(action) => action.target_device_id.as_deref(),
+                LocalBridgePendingAction::ImportBundle(_) => None,
+                LocalBridgePendingAction::RollbackBundleImport(_) => None,
+            },
+            now_ms(),
+        ),
+    )
+}
+
+#[tauri::command(async)]
 pub fn list_local_bridge_pending_action_results(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgePendingActionResultListDto, String> {
@@ -565,7 +708,7 @@ pub fn list_local_bridge_pending_action_results(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn take_next_local_bridge_pending_action(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgePendingActionTakeDto, String> {
@@ -582,7 +725,7 @@ pub fn take_next_local_bridge_pending_action(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn preflight_next_local_bridge_bundle_send(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgeBundleSendPreflightDto, String> {
@@ -598,7 +741,7 @@ pub fn preflight_next_local_bridge_bundle_send(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn execute_next_local_bridge_bundle_import(
     state: State<'_, AppState>,
 ) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
@@ -612,7 +755,7 @@ pub fn execute_next_local_bridge_bundle_import(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn execute_next_local_bridge_bundle_send(
     state: State<'_, AppState>,
 ) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
@@ -624,7 +767,7 @@ pub fn execute_next_local_bridge_bundle_send(
     execute_next_local_bridge_bundle_send_at(&state, &trusted_devices, now_ms())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn run_local_bridge_runtime_worker_once(
     state: State<'_, AppState>,
 ) -> Result<Option<LocalBridgePendingActionResultDto>, String> {
@@ -699,7 +842,7 @@ pub(crate) fn run_local_bridge_runtime_worker_once_at(
     }
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn prune_local_bridge_authorizations(
     state: State<'_, AppState>,
 ) -> Result<LocalBridgeAuthorizationListDto, String> {
@@ -715,7 +858,7 @@ pub fn prune_local_bridge_authorizations(
     })
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_transfer_plan(app: AppHandle, paths: Vec<String>) -> Result<TransferPlanDto, String> {
     let paths = string_paths_to_path_bufs(paths)?;
     let plan = create_transfer_plan_with_scan_progress(&paths, |progress| {
@@ -725,7 +868,7 @@ pub fn create_transfer_plan(app: AppHandle, paths: Vec<String>) -> Result<Transf
     Ok(source_plan_to_dto(&plan))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn create_transfer_plan_from_text(
     app: AppHandle,
     paths_text: String,
@@ -738,7 +881,7 @@ pub fn create_transfer_plan_from_text(
     Ok(source_plan_to_dto(&plan))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn send_paths_to_code(
     state: State<'_, AppState>,
     connection_code: String,
@@ -748,7 +891,7 @@ pub fn send_paths_to_code(
     send_paths_to_endpoint(&state, endpoint, paths_text, peer)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn send_paths_to_device(
     state: State<'_, AppState>,
     device_id: String,
@@ -758,7 +901,7 @@ pub fn send_paths_to_device(
     send_paths_to_endpoint(&state, endpoint, paths_text, peer)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn resend_transfer(
     state: State<'_, AppState>,
     transfer_id: String,
@@ -781,7 +924,7 @@ pub fn resend_transfer(
     )
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_transfer_location(
     state: State<'_, AppState>,
     transfer_id: String,
@@ -1007,7 +1150,9 @@ fn send_paths_to_endpoint_with_history_id(
             record.error_message = Some(message.clone());
         }
         record.updated_at_ms = now_ms();
-        let _ = push_transfer_history_record(&state.transfer_history, record);
+        if let Err(error) = push_transfer_history_record(&state.transfer_history, record) {
+            eprintln!("nekodrop: failed to persist transfer history: {error}");
+        }
         message
     })?;
     clear_active_send_cancel(&state.active_send_cancel, &cancel);
@@ -1045,7 +1190,9 @@ fn send_paths_to_endpoint_with_history_id(
     record.source_paths = source_paths;
     record.updated_at_ms = now_ms();
     refresh_trusted_device_contact_from_peer(&state.trusted_devices, &peer);
-    let _ = push_transfer_history_record(&state.transfer_history, record);
+    if let Err(error) = push_transfer_history_record(&state.transfer_history, record) {
+        eprintln!("nekodrop: failed to persist transfer history: {error}");
+    }
     Ok(send_report_to_dto(&report))
 }
 
@@ -1122,41 +1269,41 @@ fn is_retryable_send_error(error: &str) -> bool {
         || lower.contains("由于目标计算机积极拒绝")
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_send_files() -> Result<Vec<String>, String> {
     choose_paths(PathDialogKind::Files)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_send_folders() -> Result<Vec<String>, String> {
     choose_paths(PathDialogKind::Folders)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_manual_bundle_source_dir() -> Result<Option<String>, String> {
     Ok(choose_paths(PathDialogKind::BundleSourceFolder)?
         .into_iter()
         .next())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn select_receive_dir() -> Result<Option<String>, String> {
     Ok(choose_paths(PathDialogKind::SingleFolder)?
         .into_iter()
         .next())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_receive_dir(state: State<'_, AppState>, receive_dir: String) -> Result<(), String> {
     persist_receive_dir(&state, &receive_dir)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_receive_port(state: State<'_, AppState>, receive_port: u16) -> Result<(), String> {
     persist_receive_port(&state, receive_port)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_receive_policy(
     state: State<'_, AppState>,
     receive_policy: String,
@@ -1165,12 +1312,12 @@ pub fn set_receive_policy(
     persist_receive_policy(&state, receive_policy)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn set_device_name(state: State<'_, AppState>, device_name: String) -> Result<String, String> {
     persist_device_name(&state, &device_name)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn open_path(path: String) -> Result<(), String> {
     let target = expand_home_dir(path.trim());
     if !target.exists() {
@@ -1180,7 +1327,7 @@ pub fn open_path(path: String) -> Result<(), String> {
     open_path_with_system(target)
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn start_receive_once(
     state: State<'_, AppState>,
     bind_host: Option<String>,
@@ -1281,6 +1428,12 @@ pub fn start_receive_once(
             .receive_session
             .lock()
             .map_err(|error| error.to_string())?;
+        if let Some(existing) = receive_session.as_ref() {
+            // Another start_receive_once call won the race while we were
+            // binding; drop our listener so its port is released immediately.
+            drop(listener);
+            return Ok(receive_session_to_dto(existing));
+        }
         *receive_session = Some(session.clone());
     }
     set_transfer_status(
@@ -1359,6 +1512,9 @@ pub fn start_receive_once(
                         },
                     );
                     continue;
+                }
+                if let Err(error) = stream.set_io_timeout(TCP_IO_STALL_TIMEOUT) {
+                    eprintln!("nekodrop: failed to set receive socket timeout: {error}");
                 }
                 let peer_host = peer_addr.ip().to_string();
                 let receive_policy = config
@@ -1545,7 +1701,11 @@ pub fn start_receive_once(
                                 &trusted_devices,
                                 &report,
                             );
-                            let _ = push_transfer_history_record(&transfer_history, record);
+                            if let Err(error) =
+                                push_transfer_history_record(&transfer_history, record)
+                            {
+                                eprintln!("nekodrop: failed to persist transfer history: {error}");
+                            }
                             if let Some(bundle) = report.bundle.as_ref() {
                                 let _ = push_local_bridge_bundle_received_event(
                                     &local_bridge_runtime,
@@ -1650,7 +1810,7 @@ pub fn start_receive_once(
     Ok(receive_session_to_dto(&session))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
     let receive_was_active = is_receive_transfer_active(&state.transfer_status);
     if let Some(cancel) = state
@@ -1737,7 +1897,7 @@ pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn cancel_current_transfer(state: State<'_, AppState>) -> Result<(), String> {
     let cancel = state
         .active_send_cancel
@@ -1764,7 +1924,7 @@ pub fn cancel_current_transfer(state: State<'_, AppState>) -> Result<(), String>
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_receive_status(state: State<'_, AppState>) -> Result<Option<String>, String> {
     let status = state
         .receive_status
@@ -1773,7 +1933,7 @@ pub fn get_receive_status(state: State<'_, AppState>) -> Result<Option<String>, 
     Ok(status.clone())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_receive_session(
     state: State<'_, AppState>,
 ) -> Result<Option<ReceiveSessionDto>, String> {
@@ -1784,7 +1944,7 @@ pub fn get_receive_session(
     Ok(session.as_ref().map(receive_session_to_dto))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_receive_port_diagnostics(
     state: State<'_, AppState>,
 ) -> Result<ReceivePortDiagnosticsDto, String> {
@@ -1802,7 +1962,7 @@ pub fn get_receive_port_diagnostics(
     ))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_last_receive_report(
     state: State<'_, AppState>,
 ) -> Result<Option<ReceiveReportDto>, String> {
@@ -1813,7 +1973,7 @@ pub fn get_last_receive_report(
     Ok(report.as_ref().map(receive_report_to_dto))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_pending_receive_offer(
     state: State<'_, AppState>,
 ) -> Result<Option<PendingReceiveOfferDto>, String> {
@@ -1824,7 +1984,7 @@ pub fn get_pending_receive_offer(
     Ok(offer.as_ref().map(pending_offer_to_dto))
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn respond_receive_offer(state: State<'_, AppState>, accept: bool) -> Result<(), String> {
     let offer = state
         .pending_receive_offer
@@ -1879,7 +2039,7 @@ pub fn respond_receive_offer(state: State<'_, AppState>, accept: bool) -> Result
     Ok(())
 }
 
-#[tauri::command]
+#[tauri::command(async)]
 pub fn get_transfer_status(
     state: State<'_, AppState>,
 ) -> Result<Option<TransferStatusDto>, String> {
@@ -3387,10 +3547,10 @@ fn list_local_bridge_pending_action_results_at(
         .collect())
 }
 
-fn remove_local_bridge_pending_action_at(
+fn take_local_bridge_pending_action_by_request_id(
     runtime: &LocalBridgeRuntimeState,
     request_id: &str,
-) -> Result<bool, String> {
+) -> Result<Option<LocalBridgePendingAction>, String> {
     if request_id.trim().is_empty() {
         return Err("request_id 不能为空".to_string());
     }
@@ -3402,10 +3562,18 @@ fn remove_local_bridge_pending_action_at(
         .iter()
         .position(|action| local_bridge_pending_action_request_id(action) == request_id)
     else {
+        return Ok(None);
+    };
+    Ok(Some(actions.remove(position)))
+}
+
+fn remove_local_bridge_pending_action_at(
+    runtime: &LocalBridgeRuntimeState,
+    request_id: &str,
+) -> Result<bool, String> {
+    let Some(action) = take_local_bridge_pending_action_by_request_id(runtime, request_id)? else {
         return Ok(false);
     };
-    let action = actions.remove(position);
-    drop(actions);
     push_local_bridge_action_lifecycle_result(
         runtime,
         local_bridge_action_lifecycle_result(
@@ -4576,6 +4744,19 @@ fn local_bridge_authorization_code(
     request: &LocalBridgeAuthorizationRequest,
     requested_at_ms: u128,
 ) -> String {
+    // The code exists so a human can confirm which client is asking. It must
+    // not be derivable from request fields an attacker controls, so draw it
+    // from the CSPRNG; keep the legacy digest only as a fallback for the
+    // practically-unreachable case of the system RNG failing.
+    let mut bytes = [0_u8; 3];
+    if getrandom::fill(&mut bytes).is_ok() {
+        let hex = bytes
+            .iter()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>();
+        return format!("{}-{}", &hex[..3], &hex[3..6]);
+    }
+
     let mut material = String::new();
     material.push_str(&request.request_id);
     material.push('\n');
@@ -4805,7 +4986,9 @@ fn push_receive_failure_history(
     record.target_host = Some(peer_host.to_string());
     record.receive_dir = Some(receive_dir.display().to_string());
     record.error_message = Some(error_message);
-    let _ = push_transfer_history_record(transfer_history, record);
+    if let Err(error) = push_transfer_history_record(transfer_history, record) {
+        eprintln!("nekodrop: failed to persist transfer history: {error}");
+    }
 }
 
 fn wait_for_receive_decision(
@@ -7961,6 +8144,53 @@ mod tests {
             }
             other => panic!("expected action.updated event, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn local_bridge_pending_action_can_be_taken_by_request_id() {
+        let runtime = LocalBridgeRuntimeState::default();
+        runtime.pending_actions.lock().unwrap().extend([
+            LocalBridgePendingAction::SendBundle(LocalBridgePendingSendBundleAction {
+                request_id: "bridge-send-1".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                target_device_id: Some("device-a".to_string()),
+                bundle_root: "bundle-a".to_string(),
+                bundle_type: BundleType::Workspace,
+                require_trusted_device: true,
+                requested_at_ms: 1_500,
+            }),
+            LocalBridgePendingAction::ImportBundle(LocalBridgePendingImportBundleAction {
+                request_id: "bridge-import-1".to_string(),
+                client: LocalBridgeClientIdentity {
+                    client_id: "local-agent-app".to_string(),
+                    display_name: "Local Agent App".to_string(),
+                    app_kind: Some("agent".to_string()),
+                },
+                staged_bundle_id: "bundle_1234567890".to_string(),
+                expected_bundle_type: Some(BundleType::Skill),
+                conflict_strategy: "reject".to_string(),
+                requested_at_ms: 1_600,
+            }),
+        ]);
+
+        let taken =
+            take_local_bridge_pending_action_by_request_id(&runtime, "bridge-import-1").unwrap();
+        let missing =
+            take_local_bridge_pending_action_by_request_id(&runtime, "bridge-missing").unwrap();
+        let actions = list_local_bridge_pending_actions_at(&runtime).unwrap();
+
+        assert!(matches!(
+            taken,
+            Some(LocalBridgePendingAction::ImportBundle(ref action)) if action.request_id == "bridge-import-1"
+        ));
+        assert!(missing.is_none());
+        // Taking by id must not disturb the queue order of remaining actions.
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].request_id, "bridge-send-1");
     }
 
     #[test]

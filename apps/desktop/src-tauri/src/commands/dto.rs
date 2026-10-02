@@ -399,6 +399,14 @@ pub struct LocalBridgePendingActionTakeDto {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LocalBridgePendingActionRespondDto {
+    pub handled: bool,
+    pub accepted: bool,
+    pub result: Option<LocalBridgePendingActionResultDto>,
+    pub actions: Vec<LocalBridgePendingActionDto>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct LocalBridgePendingActionResultDto {
     pub request_id: String,
     pub action_kind: String,

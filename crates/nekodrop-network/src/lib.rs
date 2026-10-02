@@ -35,4 +35,5 @@ pub use tcp_file::{
 };
 pub use transport::{
     connect_endpoint, Endpoint, NekoLinkTransport, TcpTransport, TransportKind, TransportStream,
+    TCP_IO_DECISION_TIMEOUT, TCP_IO_STALL_TIMEOUT,
 };

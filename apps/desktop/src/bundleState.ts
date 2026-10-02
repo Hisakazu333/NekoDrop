@@ -154,6 +154,14 @@ export function bundleImportStrategyLabel(strategy: string) {
   return strategy;
 }
 
+/**
+ * 收件箱中仍需用户处理的资料包（未导入，或导入失败可重试）
+ * Bundles that still need user action in the inbox (not yet imported, or a failed import that can be retried)
+ */
+export function isPendingInboxBundle(bundle: ReceivedBundleDto) {
+  return bundle.staging_status === "saved" || bundle.staging_status === "import_failed";
+}
+
 export function bundleRollbackBlockingLabel(reason: string | null) {
   if (reason === "destination_missing") return "目标已不存在";
   if (reason === "imported_file_missing") return "部分文件不在原位";

@@ -139,10 +139,15 @@ where
     })?;
 
     if initial_bytes == 0 && partial_path.exists() {
-        return Err(NekoDropError::Storage(format!(
-            "partial file already exists: {}",
-            partial_path.display()
-        )));
+        // A leftover partial has no resume offset attached to this attempt, so
+        // the incoming transfer is authoritative: discard the stale partial
+        // instead of refusing the transfer until the user deletes it by hand.
+        fs::remove_file(&partial_path).map_err(|error| {
+            NekoDropError::Storage(format!(
+                "failed to remove stale partial {}: {error}",
+                partial_path.display()
+            ))
+        })?;
     }
 
     let mut hasher = Sha256::new();
@@ -172,7 +177,8 @@ where
 
     while remaining > 0 {
         if should_cancel() {
-            let _ = fs::remove_file(&partial_path);
+            // Keep the partial on disk so a later attempt can resume from it,
+            // matching the early-EOF behavior below.
             return Err(NekoDropError::Storage("transfer cancelled".into()));
         }
 
@@ -198,7 +204,6 @@ where
         on_progress(bytes_written);
 
         if should_cancel() {
-            let _ = fs::remove_file(&partial_path);
             return Err(NekoDropError::Storage("transfer cancelled".into()));
         }
     }
@@ -212,6 +217,9 @@ where
 
     let actual_sha256 = hex::encode(hasher.finalize());
     if !actual_sha256.eq_ignore_ascii_case(expected_sha256) {
+        // The partial provably does not match the expected content; keeping it
+        // would poison every future resume attempt with the same bad prefix.
+        let _ = fs::remove_file(&partial_path);
         return Err(NekoDropError::Storage(format!(
             "checksum mismatch for {manifest_path}: expected {expected_sha256}, got {actual_sha256}"
         )));
@@ -425,11 +433,16 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_receive_removes_partial_file() {
+    fn cancelled_receive_keeps_partial_file_for_resume() {
         let dir = unique_temp_dir("received-cancel");
         let payload = b"hello over network".to_vec();
         let checksum = "b0cda4b2fff9211aaa4c49df724a81dfbad65bb2d13015d22eec9fb9ab327786";
-        let mut reader = Cursor::new(payload);
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let mut reader = CountingReader {
+            inner: Cursor::new(payload),
+            reads: std::sync::Arc::clone(&reads),
+        };
+        let cancel_after_first_read = reads;
 
         let result = write_received_file_with_progress_and_cancel(
             &dir,
@@ -438,14 +451,86 @@ mod tests {
             checksum,
             &mut reader,
             |_| {},
-            || true,
+            || cancel_after_first_read.load(std::sync::atomic::Ordering::SeqCst) > 0,
         );
 
         assert!(result.is_err());
         assert!(!dir.join("folder/sample.txt").exists());
-        assert!(!dir.join("folder/sample.txt.nekodrop-part").exists());
+        assert!(dir.join("folder/sample.txt.nekodrop-part").exists());
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn checksum_mismatch_removes_poisoned_partial() {
+        let dir = unique_temp_dir("received-mismatch-poison");
+        let mut reader = Cursor::new(b"bad".to_vec());
+
+        let result = write_received_file(
+            &dir,
+            "sample.txt",
+            3,
+            "0000000000000000000000000000000000000000000000000000000000000000",
+            &mut reader,
+        );
+
+        assert!(result.is_err());
+        assert!(!dir.join("sample.txt.nekodrop-part").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_zero_byte_partial_is_discarded_instead_of_blocking() {
+        let dir = unique_temp_dir("received-stale-partial");
+        fs::write(dir.join("sample.txt.nekodrop-part"), b"").unwrap();
+        let checksum = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        let mut reader = Cursor::new(b"hello".to_vec());
+
+        let received = write_received_file(&dir, "sample.txt", 5, checksum, &mut reader);
+
+        assert!(received.is_ok());
+        assert_eq!(fs::read_to_string(dir.join("sample.txt")).unwrap(), "hello");
+        assert!(!dir.join("sample.txt.nekodrop-part").exists());
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn stale_nonzero_partial_without_resume_offset_is_restarted() {
+        let dir = unique_temp_dir("received-stale-partial-nonzero");
+        fs::write(dir.join("sample.txt.nekodrop-part"), b"stale").unwrap();
+        let checksum = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+        let mut reader = Cursor::new(b"hello".to_vec());
+
+        let received = write_received_file_with_resume_and_cancel(
+            &dir,
+            "sample.txt",
+            5,
+            checksum,
+            0,
+            &mut reader,
+            |_| {},
+            || false,
+        );
+
+        assert!(received.is_ok());
+        assert_eq!(fs::read_to_string(dir.join("sample.txt")).unwrap(), "hello");
+
+        fs::remove_dir_all(dir).unwrap();
+    }
+
+    struct CountingReader<R> {
+        inner: R,
+        reads: std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    }
+
+    impl<R: Read> Read for CountingReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let read = self.inner.read(buf)?;
+            self.reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok(read)
+        }
     }
 
     #[test]

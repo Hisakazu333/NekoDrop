@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::Write,
     path::{Path, PathBuf},
     time::SystemTime,
 };
@@ -971,7 +972,34 @@ fn write_json_file<T: serde::Serialize>(path: &Path, value: &T) -> NekoDropResul
     let json = serde_json::to_vec_pretty(value).map_err(|error| {
         NekoDropError::Storage(format!("failed to serialize {}: {error}", path.display()))
     })?;
-    fs::write(path, json).map_err(|error| {
+
+    // Write-through-temp then rename so a crash never leaves a truncated JSON
+    // file behind (bundle manifests and import receipts must stay parseable).
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "bundle.json".to_string());
+    let temp_path = parent.join(format!(".{file_name}.nekodrop-tmp"));
+
+    let result = (|| {
+        let mut file = fs::File::create(&temp_path).map_err(|error| {
+            NekoDropError::Storage(format!("failed to create {}: {error}", temp_path.display()))
+        })?;
+        file.write_all(&json).map_err(|error| {
+            NekoDropError::Storage(format!("failed to write {}: {error}", temp_path.display()))
+        })?;
+        file.sync_all().map_err(|error| {
+            NekoDropError::Storage(format!("failed to sync {}: {error}", temp_path.display()))
+        })
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temp_path);
+        return Err(error);
+    }
+
+    fs::rename(&temp_path, path).map_err(|error| {
+        let _ = fs::remove_file(&temp_path);
         NekoDropError::Storage(format!("failed to write {}: {error}", path.display()))
     })
 }
