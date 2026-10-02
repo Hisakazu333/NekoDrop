@@ -12,6 +12,8 @@ interface SidebarProps {
  * Text-only navigation sidebar.
  */
 export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
+  const isMac =
+    typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac");
   const {
     mode,
     setMode,
@@ -47,7 +49,7 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-top">
+      <div className={`sidebar-top${isMac ? " has-traffic" : ""}`}>
         <span style={{ color: "var(--text)", fontSize: 16, display: "inline-flex" }}>
           <Icon name="paw" />
         </span>
