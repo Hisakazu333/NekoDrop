@@ -97,7 +97,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 目标：给上层数据传输建立统一包格式，不把 skills、session、agent profile 当作普通散文件乱传。
 
-规格文档：[BUNDLE_SPEC.md](BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；真实上层应用 adapter 还没有接入。
+规格文档：[BUNDLE_SPEC.md](../dev/BUNDLE_SPEC.md)。当前已有协议模型、校验、staging、手动创建、收到后查看、删除、过期清理、导入计划、冲突策略、导入到 NekoDrop 本机导入区和保守撤回。通用 adapter 样例已经覆盖导出、local bridge 请求、adapter-owned 目标导入和 adapter 私有 receipt 撤回；真实上层应用 adapter 还没有接入。
 
 候选包类型：
 
@@ -197,5 +197,5 @@ iroh 应该作为 NekoLink transport 接入，而不是直接替换 NekoDrop 的
 - 新功能合并后先更新 [STATUS.md](STATUS.md)。
 - 路线图只能写阶段目标和边界。
 - README 只写用户能理解的能力和方向。
-- 协议细节写入 [PROTOCOL.md](PROTOCOL.md)。
-- 安全边界写入 [SECURITY.md](SECURITY.md)。
+- 协议细节写入 [PROTOCOL.md](../dev/PROTOCOL.md)。
+- 安全边界写入 [SECURITY.md](../dev/SECURITY.md)。

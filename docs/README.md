@@ -1,55 +1,47 @@
-# NekoDrop Documentation
+# NekoDrop 文档索引
 
-This directory contains product, architecture, protocol, security, and roadmap documents for NekoDrop.
+NekoDrop 是 NekoLink 协议的第一个桌面落地项目：macOS / Windows 局域网安全文件传输。
 
-NekoDrop is an early desktop file transfer project. Some documents describe current behavior, while others describe planned protocol and ecosystem work. Use the status labels below to avoid mixing shipped features with future direction.
+文档按读者分组组织。改文档时请保持"链接进索引、索引不失真"。
 
-## Start Here
+## 用户与发布
 
-For users and release readers:
+- [产品定义](product/PRODUCT.md)：NekoDrop 做什么、不做什么。
+- [当前状态](product/STATUS.md)：什么已实现、什么是实验性、什么在计划中（状态的唯一事实来源）。
+- [路线图](product/ROADMAP.md)：按版本推进的阶段计划。
 
-- [Project README](../README.md): what NekoDrop is, how to build it, and how to use the current desktop app.
-- [Current Status](STATUS.md): source of truth for what is implemented, experimental, or planned.
-- [Security Model](SECURITY.md): trust, pairing, receive safety, and known security limits.
+## 开发者
 
-For developers:
+- [开发指南](dev/DEVELOPMENT.md)：环境搭建、构建、测试、打包、日常流程。
+- [架构](dev/ARCHITECTURE.md)：workspace 布局与职责边界。
+- [模块](dev/MODULES.md)：模块所有权与依赖方向；分模块文档见 [dev/modules/](dev/modules/)。
+- [协议](dev/PROTOCOL.md)：NekoLink 信封、传输流程、TCP 文件帧。
+- [Bundle 规范](dev/BUNDLE_SPEC.md)：资料包 manifest、checksums、权限、暂存与导入。
+- [Adapter 规范](dev/ADAPTER_SPEC.md)：本机应用接入 local bridge 的请求流程；可执行示例见 [examples/generic-adapter/](examples/generic-adapter/)。
+- [安全模型](dev/SECURITY.md)：信任、配对、接收安全与已知边界。
+- [代码审计](dev/audit-2026-10-03.md)：2026-10-03 全库审计报告与整改进度。
 
-- [Development](DEVELOPMENT.md): local setup, tests, packaging, and workflow.
-- [Architecture](ARCHITECTURE.md): workspace layout and responsibility boundaries.
-- [Protocol](PROTOCOL.md): NekoLink message envelope, transfer flow, and TCP file frame behavior.
-- [Modules](MODULES.md): module ownership and dependency direction.
-- [Large File Transfer Test Matrix](testing/LARGE_FILE_TRANSFER_MATRIX.md): manual release gate for Mac / Windows transfer reliability.
-- [Transfer Test Result Template](testing/RESULT_TEMPLATE.md): evidence template for release-candidate test runs.
+## 测试
 
-Branch workflow lives in [Development](DEVELOPMENT.md) and [CONTRIBUTING.md](../CONTRIBUTING.md). In short: feature work lands in `dev/<name>` or a short topic branch, core work rolls into `develop`, desktop work rolls into `desktop-develop`, documentation rolls into `docs-develop`, and releases roll from `develop` into `main`.
+- [大文件传输测试矩阵](testing/LARGE_FILE_TRANSFER_MATRIX.md)：Mac / Windows 发布前手工验证清单。
+- [测试结果模板](testing/RESULT_TEMPLATE.md)：发布候选测试记录模板。
 
-For maintainers and planning:
+## 示例与样例数据
 
-- [Product Definition](PRODUCT.md): product scope and user jobs.
-- [Roadmap](ROADMAP.md): versioned implementation phases.
-- [Future Iteration Plan](FUTURE_ITERATION_PLAN.md): long-term planning notes.
-- [Module Roadmap](modules/MODULE_ROADMAP.md): module-by-module future work.
+- [generic-adapter 示例](examples/generic-adapter/)：local bridge 通用请求顺序的可执行样板。
+- [bundle-samples](bundle-samples/)：session / skill / workspace 等资料包样例数据。
 
-## Status Labels
+## 历史归档
 
-Use these labels consistently:
+早期规划与设计笔记，仅作参考，不代表当前方向：
 
-- `Implemented`: code exists and the current desktop app can use it.
-- `Experimental`: code or interfaces exist, but the feature is not a supported user workflow yet.
-- `Planned`: product or protocol direction only.
-- `Out of scope`: intentionally not part of the current phase.
+- [archive/](archive/)：未来迭代计划、下一阶段分析、旧桌面设计稿、2026 年 6 月的 specs/plans。
 
-Chinese status labels in existing documents map to the same meaning:
+## 状态标签约定
 
-- `已接入` = Implemented
-- `实验中` = Experimental
-- `待接入` = Planned
-- `不做` = Out of scope
+全文统一使用以下标签，避免把未完成能力写成已完成：
 
-## Documentation Rules
-
-- User-facing documents should describe current behavior first.
-- Planned OpenNeko, NekoState, Relay, P2P, iroh, or mobile work must be marked as planned or experimental unless it is already implemented.
-- Internal product judgment should be written as project policy, not as conversation notes.
-- Protocol changes should update [Protocol](PROTOCOL.md), [Status](STATUS.md), and the relevant module document.
-- Release notes should only claim behavior verified by tests or manual packaging checks.
+- `Implemented`：代码存在，当前桌面应用可用。
+- `Experimental`：代码或接口存在，但还不是受支持的用户流程。
+- `Planned`：只有产品或协议方向。
+- `Out of scope`：明确不在当前阶段。
