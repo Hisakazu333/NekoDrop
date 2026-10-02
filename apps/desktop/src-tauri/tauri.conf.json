@@ -30,7 +30,8 @@
           "y": 16
         }
       }
-    ]
+    ],
+    "macOSPrivateApi": true
   },
   "bundle": {
     "active": true,
