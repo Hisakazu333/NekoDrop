@@ -125,7 +125,7 @@ export function HistoryView() {
           )}
           {transfers.length > 0 && (
             <button
-              className="text-btn is-danger"
+              className="btn-mini is-danger"
               onClick={clearTransferHistory}
               style={{ marginLeft: "auto" }}
               type="button"
@@ -144,7 +144,7 @@ export function HistoryView() {
               const label = statusLabel(transfer);
               return (
                 <div className="list-row" key={transfer.id}>
-                  <span className="row-icon">
+                  <span className="row-badge">
                     <Icon name={transfer.direction === "send" ? "arrow-up" : "upload"} />
                   </span>
                   <div className="row-main">
