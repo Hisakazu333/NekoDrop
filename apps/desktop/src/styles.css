@@ -1286,6 +1286,20 @@ html[data-theme="dark"] .quick-row button {
   align-items: center;
   padding-bottom: 6px;
 }
+.history-search {
+  margin-left: 10px;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-hover);
+  background: var(--input-bg);
+  padding: 5px 10px;
+  font-size: 12.5px;
+  width: 220px;
+  transition: border-color 0.12s var(--ease), box-shadow 0.12s var(--ease);
+}
+.history-search:focus {
+  border-color: var(--live);
+  box-shadow: 0 0 0 2px var(--live-soft);
+}
 .filter-line button {
   border: none;
   background: transparent;
