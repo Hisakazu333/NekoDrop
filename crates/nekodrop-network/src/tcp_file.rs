@@ -191,7 +191,7 @@ where
     let mut bytes_sent = 0_u64;
     loop {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let read = file.read(&mut buffer).map_err(|error| {
@@ -307,7 +307,7 @@ where
 
     for (index, file) in files.iter().enumerate() {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let file_size = file
@@ -351,7 +351,7 @@ where
                     total_bytes: resolved_total_bytes,
                 });
             },
-            || should_cancel(),
+            &mut should_cancel,
         )?;
         if offset == file_size {
             on_progress(TransferProgress {
@@ -370,6 +370,7 @@ where
     Ok(sent)
 }
 
+#[allow(clippy::too_many_arguments)] // 帧读取参数组
 pub fn send_encrypted_file_frames_with_resume_and_cancel<W, F, C>(
     stream: &mut W,
     transfer_id: &str,
@@ -412,7 +413,7 @@ where
 
     for (index, file) in files.iter().enumerate() {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let file_size = file
@@ -460,7 +461,7 @@ where
                     total_bytes: resolved_total_bytes,
                 });
             },
-            || should_cancel(),
+            &mut should_cancel,
         )?;
         if offset == file_size {
             on_progress(TransferProgress {
@@ -479,6 +480,7 @@ where
     Ok(sent)
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn send_single_encrypted_file_frame_from_offset_with_progress_and_cancel<W, F, C>(
     stream: &mut W,
     transfer_id: &str,
@@ -545,7 +547,7 @@ where
     let mut bytes_sent = 0_u64;
     loop {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let read = file.read(&mut buffer).map_err(|error| {
@@ -1571,9 +1573,9 @@ fn read_json_frame<T: for<'de> Deserialize<'de>>(stream: &mut impl Read) -> Neko
         .map_err(|error| NekoDropError::Network(format!("failed to decode JSON frame: {error}")))
 }
 
-fn resume_offsets_by_path<'a>(
-    resume_files: &'a [TransferResumeFile],
-) -> NekoDropResult<HashMap<&'a str, u64>> {
+fn resume_offsets_by_path(
+    resume_files: &[TransferResumeFile],
+) -> NekoDropResult<HashMap<&str, u64>> {
     let mut offsets = HashMap::new();
     for file in resume_files {
         if offsets

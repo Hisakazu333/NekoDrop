@@ -1,3 +1,4 @@
+use nekodrop_core::now_ms;
 use std::fs;
 use std::path::PathBuf;
 #[cfg(any(
@@ -6,7 +7,6 @@ use std::path::PathBuf;
 ))]
 use std::process::Command;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekolink_protocol::{
     Capability, DeviceIdentity, DeviceIdentitySigningKey, DeviceKind, PlatformKind,
@@ -53,13 +53,6 @@ impl LocalDeviceIdentity {
             signing_key_from_seed_hex(&persisted.signing_seed_hex)?
         };
         Ok(signing_key.public_key().public_key)
-    }
-
-    pub fn set_device_name(&self, device_name: &str) -> Result<String, String> {
-        let device_name = normalize_device_name(device_name)?;
-        let mut persisted = self.persisted.lock().map_err(|error| error.to_string())?;
-        persisted.device_name = device_name.clone();
-        Ok(device_name)
     }
 
     pub fn save_device_name(&self, device_name: &str) -> Result<String, String> {
@@ -358,13 +351,6 @@ fn signing_key_from_seed_hex(value: &str) -> Result<DeviceIdentitySigningKey, St
     Ok(DeviceIdentitySigningKey::from_seed(seed))
 }
 
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,20 +424,11 @@ mod tests {
         };
         let original_id = identity.public_identity().device_id;
 
-        let saved_name = identity.set_device_name("  Work Mac  ").unwrap();
+        let saved_name = identity.save_device_name("  Work Mac  ").unwrap();
         let public = identity.public_identity();
 
         assert_eq!(saved_name, "Work Mac");
         assert_eq!(public.device_name, "Work Mac");
         assert_eq!(public.device_id, original_id);
-    }
-
-    #[test]
-    fn rejects_empty_device_name_updates() {
-        let identity = LocalDeviceIdentity {
-            persisted: Arc::new(Mutex::new(new_device_identity().unwrap())),
-        };
-
-        assert!(identity.set_device_name("  \n  ").is_err());
     }
 }

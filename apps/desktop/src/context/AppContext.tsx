@@ -1,3 +1,13 @@
+import {
+  EMPTY_TRANSFER_METRICS, TransferMetrics, BusyMode, ComposerMode, AppearanceMode,
+  ReceivePolicyMode, errorMessage, normalizeReceivePolicy, readInitialAppearance,
+  portFromBindAddr, buildPathPayload, uniquePaths, keepIfEqual, resetTransferMetrics, APPEARANCE_STORAGE_KEY,
+  lastPathSegment, isReceiveTransferActivePhase, isCancelMessage, copyTextToClipboard
+} from "./helpers";
+import { useSettingsDomain } from "./settings";
+import { useComposerDomain } from "./composer";
+import { useInboxDomain } from "./inbox";
+import { useBridgeDomain } from "./bridge";
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { bindWindowDragDrop } from "../dragDrop";
@@ -49,100 +59,19 @@ import type {
 // 声明和工具函数 / Helper Declarations and Utility Functions
 // ---------------------------------------------------------
 
-type BusyMode =
-  | "scan"
-  | "send"
-  | "receive"
-  | "pick-files"
-  | "pick-folders"
-  | "pick-receive"
-  | "stop-receive"
-  | "receive-policy"
-  | "device-name"
-  | "cancel-transfer"
-  | "pair"
-  | "forget"
-  | "history"
-  | "resend"
-  | "bundle-import"
-  | "open";
 
-type ComposerMode = "overview" | "send" | "receive" | "devices" | "transfers" | "settings";
-type ReceivePolicyMode = "always_ask" | "block_all";
-type AppearanceMode = "light" | "dark";
-type TransferMetrics = {
-  speedBytesPerSecond: number | null;
-  etaSeconds: number | null;
-};
 
-const APPEARANCE_STORAGE_KEY = "nekodrop.appearance";
-const EMPTY_TRANSFER_METRICS = Object.freeze<TransferMetrics>({
-  speedBytesPerSecond: null,
-  etaSeconds: null
-});
 
-function readInitialAppearance(): AppearanceMode {
-  if (typeof window === "undefined") return "light";
-  return window.localStorage.getItem(APPEARANCE_STORAGE_KEY) === "dark" ? "dark" : "light";
-}
 
-function errorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message;
-  if (typeof error === "string") return error;
-  return String(error);
-}
 
-function normalizeReceivePolicy(policy: string): ReceivePolicyMode {
-  return policy === "block_all" ? "block_all" : "always_ask";
-}
 
-function portFromBindAddr(addr: string): number | null {
-  const parts = addr.split(":");
-  const portStr = parts[parts.length - 1];
-  const parsed = parseInt(portStr, 10);
-  return isNaN(parsed) ? null : parsed;
-}
 
-function uniquePaths(paths: string[]): string[] {
-  return Array.from(new Set(paths));
-}
 
-function buildPathPayload(selectedPaths: string[], manualPaths: string): string[] {
-  const manual = manualPaths
-    .split("\n")
-    .map((p) => p.trim())
-    .filter(Boolean);
-  return uniquePaths([...selectedPaths, ...manual]);
-}
 
-function keepIfEqual<T>(current: T, next: T): T {
-  if (Object.is(current, next)) return current;
-  if (current == null || next == null) return next;
-  return stableJson(current) === stableJson(next) ? current : next;
-}
 
-function resetTransferMetrics(
-  setTransferMetrics: (updater: (current: TransferMetrics) => TransferMetrics) => void
-) {
-  setTransferMetrics((current) => keepIfEqual(current, EMPTY_TRANSFER_METRICS));
-}
 
-function stableJson(value: unknown) {
-  return JSON.stringify(value);
-}
 
-function lastPathSegment(path: string) {
-  const normalized = path.replace(/\\/g, "/");
-  return normalized.split("/").filter(Boolean).pop() ?? path;
-}
 
-function isReceiveTransferActivePhase(phase: string): boolean {
-  return ["connecting", "transferring", "waiting_for_decision"].includes(phase);
-}
-
-function isCancelMessage(msg: string): boolean {
-  return msg.includes("cancel") || msg.includes("cancelled") || msg.includes("取消");
-}
 
 function isTrustedDeviceState(state: string): boolean {
   return state === "Trusted";
@@ -161,13 +90,6 @@ function trustedDeviceToDeviceDto(device: TrustedDeviceDto): DeviceDto {
   };
 }
 
-async function copyTextToClipboard(text: string): Promise<void> {
-  if (navigator.clipboard) {
-    await navigator.clipboard.writeText(text);
-    return;
-  }
-  throw new Error("剪贴板不可用");
-}
 
 // ---------------------------------------------------------
 // Context 接口定义 / Context Interface Definition
@@ -287,21 +209,7 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 // ---------------------------------------------------------
 
 export function AppProvider({ children }: { children: ReactNode }) {
-  const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
-  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
-  const [manualPaths, setManualPaths] = useState("");
-  const [manualBundleType, setManualBundleType] = useState("workspace");
-  const [manualBundleSourcePath, setManualBundleSourcePath] = useState("");
-  const [manualBundleDisplayName, setManualBundleDisplayName] = useState("");
-  const [manualBundleSourceApp, setManualBundleSourceApp] = useState("NekoDrop");
-  const [createdManualBundle, setCreatedManualBundle] = useState<ManualBundleCreateDto | null>(null);
   const [connectionCode, setConnectionCode] = useState("");
-  const [receiveDir, setReceiveDir] = useState("~/Downloads/NekoDrop");
-  const [receivePolicy, setReceivePolicy] = useState<ReceivePolicyMode>("always_ask");
-  const [bindPort, setBindPort] = useState("45821");
-  const [deviceNameInput, setDeviceNameInput] = useState("这台电脑");
-  const [plan, setPlan] = useState<TransferPlanDto | null>(null);
-  const [scanStatus, setScanStatus] = useState<TransferScanProgressDto | null>(null);
   const [sendReport, setSendReport] = useState<SendReportDto | null>(null);
   const [nearbyDevices, setNearbyDevices] = useState<DeviceDto[]>([]);
   const [discoveryStatus, setDiscoveryStatus] = useState<DiscoveryStatusDto | null>(null);
@@ -314,17 +222,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [transferStatus, setTransferStatus] = useState<TransferStatusDto | null>(null);
   const [transfers, setTransfers] = useState<TransferDto[]>([]);
   const [trustedDevices, setTrustedDevices] = useState<TrustedDeviceDto[]>([]);
-  const [stagedBundles, setStagedBundles] = useState<ReceivedBundleDto[]>([]);
   const [selectedTransferId, setSelectedTransferId] = useState<string | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
   const [selectedDeviceSnapshot, setSelectedDeviceSnapshot] = useState<DeviceDto | null>(null);
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
-  const [localBridgeStatus, setLocalBridgeStatus] = useState<LocalBridgeRuntimeStatusDto | null>(null);
-  const [localBridgeAuthorizations, setLocalBridgeAuthorizations] = useState<LocalBridgeAuthorizationDto[]>([]);
-  const [localBridgePendingActions, setLocalBridgePendingActions] = useState<LocalBridgePendingActionDto[]>([]);
-  const [localBridgeActionResults, setLocalBridgeActionResults] = useState<LocalBridgePendingActionResultDto[]>([]);
-  const [localBridgeCheck, setLocalBridgeCheck] = useState<string | null>(null);
-  const [localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode] = useState("");
   const [mode, setMode] = useState<ComposerMode>("send");
   const [appearance, setAppearance] = useState<AppearanceMode>(() => readInitialAppearance());
 
@@ -341,11 +242,46 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const realtimeRefreshInFlight = useRef(false);
   const directoryRefreshInFlight = useRef(false);
   const transfersRefreshSeq = useRef(0);
-  const scanSeq = useRef(0);
   const diagnosticsRefreshInFlight = useRef(false);
   const lastDirectoryRefreshAt = useRef(0);
   const lastDiagnosticsRefreshAt = useRef(0);
   const previousMode = useRef<ComposerMode | null>(null);
+
+const {
+    snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
+    setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
+    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort,
+    updateReceivePolicy, saveDeviceName, openPath,
+  } = useSettingsDomain({ setBusy, setError, setToast, refreshReceiveState, receiveSession, parseReceivePortValue });
+
+  const {
+    selectedPaths, setSelectedPaths, manualPaths, setManualPaths,
+    manualBundleType, setManualBundleType, manualBundleDisplayName, setManualBundleDisplayName,
+    manualBundleSourceApp, setManualBundleSourceApp, manualBundleSourcePath, setManualBundleSourcePath,
+    plan, setPlan, scanStatus, setScanStatus,
+    createdManualBundle, setCreatedManualBundle,
+    pickFiles, pickFolders, chooseManualBundleSourceDir, createManualBundleForSend,
+    applyPickedPaths, removePath, clearQueue, scanPaths,
+  } = useComposerDomain({ setBusy, setError, setToast, setMode, setSendReport });
+
+  const {
+    stagedBundles, setStagedBundles,
+    importCurrentStagedBundle, rollbackCurrentBundle, deleteCurrentStagedBundle,
+  } = useInboxDomain({ setBusy, setError, setToast, setReceiveReport, refreshDirectoryState, refreshReceiveState });
+
+  const {
+    localBridgeStatus, setLocalBridgeStatus,
+    localBridgeAuthorizations, setLocalBridgeAuthorizations,
+    localBridgePendingActions, setLocalBridgePendingActions,
+    localBridgeActionResults, setLocalBridgeActionResults,
+    localBridgeCheck, setLocalBridgeCheck,
+    localBridgeAuthorizationCode, setLocalBridgeAuthorizationCode,
+    refreshLocalBridgeStatus, refreshLocalBridgeAuthorizations,
+    refreshLocalBridgePendingActions, refreshLocalBridgeActionResults,
+    runLocalBridgeSelfCheck, confirmLocalBridgeAuthorization,
+    removeLocalBridgePendingAction, respondLocalBridgePendingAction,
+    revokeLocalBridgeAuthorization, pruneLocalBridgeAuthorizations,
+  } = useBridgeDomain({ setBusy, setError, setToast, refreshDirectoryState });
 
   const transferPaths = useMemo(
     () => buildPathPayload(selectedPaths, manualPaths),
@@ -370,6 +306,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // ---------------------------------------------------------
   // 数据更新与事件监听 / Data Update and Event Listening
   // ---------------------------------------------------------
+
+
 
   useEffect(() => {
     document.documentElement.dataset.theme = appearance;
@@ -467,7 +405,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!transferStatus || transferStatus.phase !== "transferring") {
       previousTransferStatus.current = transferStatus;
-      resetTransferMetrics(setTransferMetrics);
+      setTransferMetrics((current) => resetTransferMetrics(current));
       return;
     }
 
@@ -534,14 +472,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // 核心 API 调用 / Core API Invocations
   // ---------------------------------------------------------
 
-  async function refreshSnapshot() {
-    const nextSnapshot = await invokeCommand<AppSnapshot>("get_app_snapshot");
-    setSnapshot(nextSnapshot);
-    setDeviceNameInput(nextSnapshot.device_name);
-    setReceiveDir(nextSnapshot.receive_dir);
-    setBindPort(String(nextSnapshot.receive_port));
-    setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
-  }
 
   async function refreshReceiveState(options: { includeDiagnostics?: boolean; includeDirectoryState?: boolean } = {}) {
     await Promise.all([
@@ -613,244 +543,27 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setTransfers((current) => keepIfEqual(current, nextTransfers));
   }
 
-  async function pickFiles() {
-    setBusy("pick-files");
-    setError(null);
-    try {
-      const paths = await invokeCommand<string[]>("select_send_files");
-      await applyPickedPaths(paths);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function pickFolders() {
-    setBusy("pick-folders");
-    setError(null);
-    try {
-      const paths = await invokeCommand<string[]>("select_send_folders");
-      await applyPickedPaths(paths);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function chooseManualBundleSourceDir() {
-    setBusy("pick-folders");
-    setError(null);
-    try {
-      const picked = await invokeCommand<string | null>("select_manual_bundle_source_dir");
-      if (!picked) return;
-      setManualBundleSourcePath(picked);
-      if (!manualBundleDisplayName.trim()) {
-        setManualBundleDisplayName(lastPathSegment(picked));
-      }
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function createManualBundleForSend() {
-    const sourcePath = manualBundleSourcePath.trim();
-    if (!sourcePath) {
-      setError("选择来源目录");
-      return;
-    }
-    setBusy("scan");
-    setError(null);
-    setCreatedManualBundle(null);
-    try {
-      const bundle = await invokeCommand<ManualBundleCreateDto>("create_manual_bundle", {
-        request: {
-          source_path: sourcePath,
-          bundle_type: manualBundleType,
-          display_name: manualBundleDisplayName.trim() || lastPathSegment(sourcePath),
-          source_app: manualBundleSourceApp.trim() || "NekoDrop"
-        }
-      });
-      setCreatedManualBundle(bundle);
-      setToast(`已创建资料包：${bundle.display_name}`);
-      await applyPickedPaths([bundle.staging_path]);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function applyPickedPaths(paths: string[]) {
-    if (paths.length === 0) return;
-    const mergedPaths = uniquePaths([...selectedPaths, ...paths]);
-    setSelectedPaths(mergedPaths);
-    setSendReport(null);
-    setMode("send");
-    setToast(`已加入 ${paths.length} 个路径`);
-    await scanPaths(mergedPaths, manualPaths);
-  }
 
   const applyPickedPathsRef = useRef(applyPickedPaths);
   applyPickedPathsRef.current = applyPickedPaths;
 
-  function removePath(path: string) {
-    const nextPaths = selectedPaths.filter((item) => item !== path);
-    setSelectedPaths(nextPaths);
-    setPlan(null);
-    setScanStatus(null);
-    setSendReport(null);
-  }
 
-  function clearQueue() {
-    setSelectedPaths([]);
-    setManualPaths("");
-    setPlan(null);
-    setScanStatus(null);
-    setSendReport(null);
-  }
 
-  async function chooseReceiveDir() {
-    setBusy("pick-receive");
-    setError(null);
-    try {
-      const pickedDir = await invokeCommand<string | null>("select_receive_dir");
-      if (pickedDir) {
-        await invokeCommand<void>("set_receive_dir", { receiveDir: pickedDir });
-        setReceiveDir(pickedDir);
-        await refreshSnapshot();
-        setToast("接收目录已更新");
-      }
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function saveReceiveDir() {
-    if (receiveSession) return;
-    const nextReceiveDir = receiveDir.trim();
-    if (!nextReceiveDir || nextReceiveDir === snapshot?.receive_dir) return;
-    setBusy("pick-receive");
-    setError(null);
-    try {
-      await invokeCommand<void>("set_receive_dir", { receiveDir: nextReceiveDir });
-      setReceiveDir(nextReceiveDir);
-      setSnapshot((current) => (current ? { ...current, receive_dir: nextReceiveDir } : current));
-      await refreshSnapshot();
-      setToast("接收目录已保存");
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function saveReceivePort() {
-    if (receiveSession) return;
-    const nextReceivePort = parseReceivePortValue(bindPort);
-    if (nextReceivePort === null || nextReceivePort === snapshot?.receive_port) return;
-    setBusy("pick-receive");
-    setError(null);
-    try {
-      await invokeCommand<void>("set_receive_port", { receivePort: nextReceivePort });
-      setBindPort(String(nextReceivePort));
-      setSnapshot((current) => (current ? { ...current, receive_port: nextReceivePort } : current));
-      setToast("默认端口已保存");
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
   function parseReceivePortValue(val: string): number | null {
     const parsed = parseInt(val.trim(), 10);
     return isNaN(parsed) || parsed < 1 || parsed > 65535 ? null : parsed;
   }
 
-  async function updateReceivePolicy(nextPolicy: ReceivePolicyMode) {
-    if (nextPolicy === receivePolicy) return;
-    setBusy("receive-policy");
-    setError(null);
-    try {
-      await invokeCommand<void>("set_receive_policy", { receivePolicy: nextPolicy });
-      setReceivePolicy(nextPolicy);
-      setSnapshot((current) => (current ? { ...current, receive_policy: nextPolicy } : current));
-      setToast(nextPolicy === "block_all" ? "接收策略：阻止" : "接收策略：询问");
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function saveDeviceName() {
-    const nextName = deviceNameInput.trim();
-    if (!nextName || nextName === snapshot?.device_name) return;
-    setBusy("device-name");
-    setError(null);
-    try {
-      const savedName = await invokeCommand<string>("set_device_name", { deviceName: nextName });
-      setSnapshot((current) =>
-        current
-          ? {
-              ...current,
-              device_name: savedName,
-              device_identity: { ...current.device_identity, device_name: savedName }
-            }
-          : current
-      );
-      setDeviceNameInput(savedName);
-      setToast("设备名已保存");
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function openPath(path: string) {
-    setBusy("open");
-    setError(null);
-    try {
-      await invokeCommand<void>("open_path", { path });
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function scanPaths(paths = selectedPaths, manual = manualPaths) {
-    const payload = buildPathPayload(paths, manual);
-    if (payload.length === 0) return;
-
-    // Only the most recent scan may commit its plan or clear busy/scanStatus:
-    // a slow earlier scan must not overwrite a newer result or un-busy the
-    // UI while the newer scan is still running.
-    const requestId = ++scanSeq.current;
-    setBusy("scan");
-    setError(null);
-    setScanStatus(null);
-    setSendReport(null);
-    try {
-      const nextPlan = await invokeCommand<TransferPlanDto>("create_transfer_plan", { paths: payload });
-      if (requestId !== scanSeq.current) return;
-      setPlan(nextPlan);
-    } catch (nextError) {
-      if (requestId === scanSeq.current) setError(errorMessage(nextError));
-    } finally {
-      if (requestId === scanSeq.current) {
-        setScanStatus(null);
-        setBusy(null);
-      }
-    }
-  }
 
   async function startReceive(options: { receiveDirOverride?: string; receivePortOverride?: number; silent?: boolean } = {}) {
     const silent = options.silent ?? false;
@@ -1154,232 +867,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // 本地桥与资料包功能 / Local Bridge & Bundle Functions
   // ---------------------------------------------------------
 
-  async function refreshLocalBridgeStatus() {
-    const status = await invokeCommand<LocalBridgeRuntimeStatusDto>("get_local_bridge_runtime_status");
-    setLocalBridgeStatus((current) => keepIfEqual(current, status));
-  }
 
-  async function refreshLocalBridgeAuthorizations() {
-    const response = await invokeCommand<LocalBridgeAuthorizationListDto>("list_local_bridge_authorizations");
-    setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
-  }
 
-  async function refreshLocalBridgePendingActions() {
-    const response = await invokeCommand<LocalBridgePendingActionListDto>("list_local_bridge_pending_actions");
-    setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
-  }
 
-  async function refreshLocalBridgeActionResults() {
-    const response = await invokeCommand<LocalBridgePendingActionResultListDto>("list_local_bridge_pending_action_results");
-    setLocalBridgeActionResults((current) => keepIfEqual(current, response.results));
-  }
 
-  async function runLocalBridgeSelfCheck() {
-    setBusy("open");
-    setError(null);
-    try {
-      const response = await invokeCommand<LocalBridgeResponseDto>("handle_local_bridge_request", {
-        requestJson: JSON.stringify({
-          "kind": "devices.list",
-          "payload": {
-            request_id: `settings-self-check-${Date.now()}`,
-            trusted_only: true,
-            client: {
-              client_id: "nekodrop.settings",
-              display_name: "NekoDrop Settings"
-            }
-          }
-        })
-      });
-      setLocalBridgeCheck(
-        response.authorization_code
-          ? `${localBridgeStatusLabel(response.status)} · 授权码 ${response.authorization_code}`
-          : `${localBridgeStatusLabel(response.status)} · ${response.devices.length} 台可信设备 · ${response.staged_bundles.length} 个暂存资料包`
-      );
-      await refreshLocalBridgeStatus();
-    } catch (nextError) {
-      setLocalBridgeCheck("自测失败");
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function confirmLocalBridgeAuthorization() {
-    const code = localBridgeAuthorizationCode.trim();
-    if (!code) {
-      setLocalBridgeCheck("请输入授权码");
-      return;
-    }
-    setBusy("open");
-    setError(null);
-    try {
-      const authorization = await invokeCommand<LocalBridgeAuthorizationDto>("confirm_local_bridge_authorization", {
-        authorizationCode: code
-      });
-      setLocalBridgeAuthorizationCode("");
-      setLocalBridgeCheck(`已授权 ${authorization.display_name}`);
-      await refreshLocalBridgeStatus();
-      await refreshLocalBridgeAuthorizations();
-    } catch (nextError) {
-      setLocalBridgeCheck("授权失败");
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function removeLocalBridgePendingAction(action: LocalBridgePendingActionDto) {
-    setBusy("open");
-    setError(null);
-    try {
-      const response = await invokeCommand<{ actions: LocalBridgePendingActionDto[]; removed: boolean }>("remove_local_bridge_pending_action", {
-        requestId: action.request_id
-      });
-      setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
-      setToast("已处理该请求");
-      await refreshLocalBridgeStatus();
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function respondLocalBridgePendingAction(action: LocalBridgePendingActionDto, accept: boolean) {
-    setBusy("open");
-    setError(null);
-    try {
-      const response = await invokeCommand<{
-        handled: boolean;
-        accepted: boolean;
-        actions: LocalBridgePendingActionDto[];
-      }>("respond_local_bridge_pending_action", {
-        requestId: action.request_id,
-        accept
-      });
-      setLocalBridgePendingActions((current) => keepIfEqual(current, response.actions));
-      setToast(accept ? "已允许并执行该请求" : "已拒绝该请求");
-      await refreshLocalBridgeStatus();
-      await refreshLocalBridgeActionResults();
-      await refreshDirectoryState();
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function revokeLocalBridgeAuthorization(authorization: LocalBridgeAuthorizationDto, scope: string) {
-    setBusy("open");
-    setError(null);
-    try {
-      const response = await invokeCommand<{ authorizations: LocalBridgeAuthorizationDto[]; revoked: boolean }>("revoke_local_bridge_authorization", {
-        clientId: authorization.client_id,
-        scope
-      });
-      setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
-      setToast("已撤销授权");
-      await refreshLocalBridgeStatus();
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function pruneLocalBridgeAuthorizations() {
-    setBusy("open");
-    setError(null);
-    try {
-      const response = await invokeCommand<LocalBridgeAuthorizationListDto>("prune_local_bridge_authorizations");
-      setLocalBridgeAuthorizations((current) => keepIfEqual(current, response.authorizations));
-      setLocalBridgeCheck(response.pruned_count > 0 ? `已清理 ${response.pruned_count} 条过期授权` : "没有过期授权");
-      setToast("已清理过期授权");
-      await refreshLocalBridgeStatus();
-      await refreshLocalBridgeActionResults();
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function importCurrentStagedBundle(bundle: ReceivedBundleDto, conflictStrategy = "reject") {
-    setBusy("bundle-import");
-    setError(null);
-    try {
-      const imported = await invokeCommand<ReceivedBundleDto>("import_staged_bundle", {
-        request: {
-          bundle_id: bundle.bundle_id,
-          conflict_strategy: conflictStrategy
-        }
-      });
-      setStagedBundles((current) => current.map((item) => (item.bundle_id === imported.bundle_id ? imported : item)));
-      setReceiveReport((current) => {
-        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
-        return { ...current, bundle: imported };
-      });
-      const strategyLabel = imported.imported_with_strategy
-        ? ` · ${bundleImportStrategyLabel(imported.imported_with_strategy)}`
-        : "";
-      const skipped = imported.import_skipped_file_count > 0 ? `，跳过 ${imported.import_skipped_file_count} 个` : "";
-      setToast(`已导入：${imported.display_name}${skipped}${strategyLabel}`);
-    } catch (nextError) {
-      setStagedBundles((current) =>
-        current.map((item) => (item.bundle_id === bundle.bundle_id ? markBundleImportFailed(item) : item))
-      );
-      setReceiveReport((current) => {
-        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
-        return { ...current, bundle: markBundleImportFailed(current.bundle) };
-      });
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function rollbackCurrentBundle(bundle: ReceivedBundleDto) {
-    setBusy("bundle-import");
-    setError(null);
-    try {
-      const rolledBack = await invokeCommand<ReceivedBundleDto>("rollback_imported_bundle", {
-        request: {
-          bundle_id: bundle.bundle_id
-        }
-      });
-      setStagedBundles((current) =>
-        current.map((item) => (item.bundle_id === bundle.bundle_id ? rolledBack : item))
-      );
-      setReceiveReport((current) => {
-        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
-        return { ...current, bundle: rolledBack };
-      });
-      setToast(`已撤回：${rolledBack.display_name}`);
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
-  async function deleteCurrentStagedBundle(bundle: ReceivedBundleDto) {
-    setBusy("receive");
-    setError(null);
-    try {
-      await invokeCommand<boolean>("delete_staged_bundle", { bundleId: bundle.bundle_id });
-      setStagedBundles((current) => current.filter((item) => item.bundle_id !== bundle.bundle_id));
-      setReceiveReport((current) => {
-        if (!current?.bundle || current.bundle.bundle_id !== bundle.bundle_id) return current;
-        return { ...current, bundle: markBundleDeleted(current.bundle) };
-      });
-      setToast("已删除暂存资料包");
-    } catch (nextError) {
-      setError(errorMessage(nextError));
-    } finally {
-      setBusy(null);
-    }
-  }
 
   // ---------------------------------------------------------
   // 暴露的值 / Exposed Values

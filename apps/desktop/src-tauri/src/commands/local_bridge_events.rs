@@ -2,6 +2,7 @@ use nekolink_protocol::{LocalBridgeClientIdentity, LocalBridgeEvent};
 
 use super::local_bridge_responses::LocalBridgeEventPage;
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(super) fn local_bridge_events_after(
     events: &[LocalBridgeEvent],
     client: Option<&LocalBridgeClientIdentity>,
