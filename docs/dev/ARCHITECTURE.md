@@ -222,11 +222,16 @@ Current stable transport:
 - mDNS / DNS-SD for discovery
 - connection code and `IP:port` fallback
 
-Experimental placeholders:
+Second transport (integrated):
 
-- iroh
-- relay
-- P2P / NAT traversal
+- iroh: QUIC + NAT traversal + optional n0 public relay
+  (`crates/nekodrop-network/src/iroh_transport.rs`). Desktop receiving can be
+  switched `off` / `direct` / `relay` in Settings, and the sidecar exposes
+  `receive-iroh`. iroh bidirectional streams are bridged into a synchronous
+  `TcpStream`, so the existing session, file-frame, and bundle stack runs
+  unchanged. LAN TCP remains the default mainline.
+- Not implemented: a self-hosted relay server (relay mode uses the n0 public
+  relays, and connection metadata is visible to the relay).
 
 Future transports must sit under the same NekoLink session, file frame, and
 bundle semantics. They should not create a second product-specific protocol.
@@ -250,7 +255,8 @@ Known gaps:
 - legacy plain transfer compatibility still needs a retirement or migration policy
 - upper-layer adapters do not yet perform real app import/export
 - local bridge has short polling, but not a long-lived event stream
-- iroh / relay / P2P are not implemented transports
+- iroh is integrated as a second transport (direct or n0-relay mode); a
+  self-hosted relay server and transports beyond iroh are not implemented
 - mobile and Agent command channels are not current product paths
 
 ## Where New Work Goes

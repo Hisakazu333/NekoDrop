@@ -2,7 +2,7 @@
 
 这份文档记录当前仓库的真实能力。以后 README、路线图和 UI 文案都应该以这里为准，避免把已完成、实验中、待接入混在一起。
 
-更新时间：2026-06-25
+更新时间：2026-10-04
 
 ## 状态定义
 
@@ -62,8 +62,17 @@
 | 设备管理页 | 已接入 | 展示附近设备和可信设备；附近设备会区分已信任、未配对和暂不可配对，可信设备会显示在线状态或上次地址兜底发送；无附近设备时显示扫描中、未广播或发现异常，不再只显示 `0 附近在线`；选中离线可信设备后，发送页会标明正在使用上次地址。 |
 | 设置页 | 已接入 | 独立入口展示并保存本机设备名，展示 fingerprint、收件状态、监听地址、发现广播运行状态、托盘基础状态、接收目录、默认端口和接收策略；接收目录可选择或手动保存，默认端口可保存并用于下次打开收件，收件开启时锁定目录和端口，接收策略和收件开关来自现有真实能力；本机接入状态收在设置页，并提供内部只读自测和授权码确认，不作为日常主导航入口。 |
 | 桌面状态刷新 | 已接入 | 实时收件、待确认、配对、传输和发现状态通过一个桌面 snapshot 刷新；设备列表、可信设备和传输历史改为按页面需要慢刷新并避免重叠轮询；相同状态不会重复写入 React state，降低 macOS 和 Windows 启动后持续卡顿。 |
-| macOS DMG | 已接入 | `scripts/package-desktop.sh --dmg`。 |
-| Windows NSIS / MSI | 已接入 | `scripts/package-windows.ps1`。 |
+| 跨网收件（iroh） | 已接入 | 设置页可选 `off` / `direct` / `relay`，默认 `off`：`direct` 纯打洞直连（QUIC + NAT 穿透，零第三方参与），`relay` 经 n0 公共中继（仅转发密文，连接元数据对中继可见）。跨网收件生成独立的 iroh 连接码，与 TCP 收件共用同一入站处理体；局域网自动发现和发送仍走 mDNS + TCP 主线。 |
+| 文本快送 | 已接入 | 发送页输入框 ⌘↩（Windows `Ctrl+↩`）直发；文本暂存为 `.txt` 后走加密通道，sidecar `text` 发送结束后自动清理暂存文件，桌面端暂存文件保留在系统临时目录不自动删除；接收端自动复制进剪贴板（可在设置关闭），历史页保留手动复制。 |
+| 发送队列 | 已接入 | 设备忙线时自动排队；队列持久化在 localStorage，重启原样恢复（含暂停项）；失败自动重排一次（`retryOf` 上限），真实失败浮出给用户而不是无限循环。 |
+| 发送暂停 / 继续 | 已接入 | 发送中可暂停：取消当前发送但保留协议断点，载荷标记暂停回队；继续时从断点续传，不从头重传。 |
+| 发送限速 | 已接入 | 设置页可设 KB/s 上限（0 为不限）；sidecar `send` / `text` 也支持 `--limit <KB/s>`。 |
+| 拖拽直发 | 已接入 | 把文件 / 文件夹拖到主页设备列表的设备行上松手即发。 |
+| 按设备归档 | 已接入 | 开启 `organize_receive_by_device` 后，接收完成的文件移入「接收目录/发送设备名/」，历史路径同步改写。 |
+| 应用内更新检查 | 已接入 | 启动后读取 GitHub Releases 最新 tag，语义化版本比较后只在设置页提示（不自动下载、不静默安装）；检查失败静默。安装包仍未签名，自动更新未启用。 |
+| sidecar CLI 跨网 / 文本命令 | 已接入 | `nekodrop-sidecar receive-iroh <receive-dir> [--relay]` 跨网接收（`--relay` 启用 n0 公共中继，默认纯直连）；`text <target> <文本>` 文本快送，`send` / `text` 支持 `--limit <KB/s>`。CLI iroh 接收不处理配对（明确 decline pairing），建议只在受控环境使用。 |
+| macOS DMG | 已接入 | `scripts/package-desktop.sh --dmg`；Release 流水线同时产出 Apple Silicon（`aarch64.dmg`）和 Intel（交叉编译 `x64.dmg`）两种安装包。 |
+| Windows NSIS / MSI | 已接入 | `scripts/package-windows.ps1`；Release 流水线产出 `x64-setup.exe`。 |
 
 ## 协议与传输
 
@@ -81,17 +90,15 @@
 | File offer / decision | 已接入 | file.offer / file.accept / file.decline；桌面端发送 offer 会携带发送方 device_id、设备名和 fingerprint；协议校验会拒绝空 root_name、不安全 manifest_path、Windows 不安全路径片段和半截 sender identity。 |
 | TCP transport | 已接入 | 当前真实传输主线；接收文件帧数量有上限，并会按已接受 offer 的 file_count 做早期校验。 |
 | Transport 抽象 | 已接入 | `NekoLinkTransport`、`Endpoint`、`TransportKind`、`TcpTransport`。 |
-| iroh transport | 实验中 | 只有类型预留和明确错误，未接入 iroh runtime。 |
-| Relay / P2P transport | 实验中 | 只有类型预留和明确错误。 |
+| iroh transport | 已接入 | [iroh_transport.rs](../../crates/nekodrop-network/src/iroh_transport.rs) 基于 iroh 1.3.0（QUIC + NAT 穿透 + n0 中继）：接收端支持直连（`bind_direct_only`）和公网中继（`bind_with_public_relays`）两种模式，iroh 双向流桥接为同步 TcpStream，既有加密 session / file frame / bundle 栈原样复用。桌面收件按设置 off / direct / relay 起服务并生成第二张连接码；sidecar 提供 `receive-iroh`。TCP 仍是局域网默认主线。 |
+| Relay / P2P transport | 部分接入 | iroh 内置的 n0 公共中继和 QUIC NAT 打洞已随 iroh transport 接入（relay / direct 模式）；自建 Relay 服务器和 iroh 之外的独立 P2P transport 仍未实现。 |
 | NekoLink bundle manifest | 部分接入 | [BUNDLE_SPEC.md](../dev/BUNDLE_SPEC.md) 已定义包结构、权限、校验和导入边界；`nekolink-protocol` 已有 bundle manifest、checksums、permissions 类型和校验，`nekodrop-storage` 已能识别、校验、保存到 staging，也能把用户选择的目录打成 v1 bundle；`nekodrop-service` 已有接收完成后的 staged bundle report。桌面端的资料包创建入口已收进发送页，收到的 staged bundle 在收件流程里查看、删除和手动导入到本机导入区；导入计划会暴露将写入的文件数和冲突文件，默认拒绝覆盖，也支持重命名导入和跳过冲突文件；导入使用临时目录落盘，失败不留下半成品目标目录；成功后会写入 import receipt，记录目标目录、策略、实际导入和跳过的 payload 路径。现在可以基于 receipt 执行保守撤回：只删除本次导入记录里的文件，跳过冲突策略保留下来的既有文件，不写入第三方应用目录。桌面端会清理过期暂存，删除、导入失败、已导入、可撤回和已撤回状态会留在收件流程里。`bundle.send` 的本机 local bridge 执行入口现在可以消费待执行动作并交给桌面发送主线；`bundle.import` 可以消费待执行动作并把 staged bundle 导入本机导入区，结果会记录所用冲突策略、跳过文件数、receipt 和可撤回文件数；`bundle.rollback` 可以消费待执行动作并撤回 NekoDrop 本机导入区里的本次导入文件。`skill`、`session`、`workspace`、`agent_profile` 只允许 authenticated encrypted session 进入 staging / import；legacy plain 和非认证 encrypted session 收到这些 bundle 形态目录时只按普通文件保存。服务层已有 `received_bundle_staging_block_reason`，把阻断原因固定为 `legacy_plain` 或 `sensitive_bundle_requires_authenticated_session`，方便后续 relay / iroh 传输也复用同一条边界。上层应用自动导出 session / skill / workspace 还没有接入。 |
 | Adapter 规范和 bundle 样例 | 部分接入 | [ADAPTER_SPEC.md](../dev/ADAPTER_SPEC.md) 已定义上层应用导出/导入 bundle 的边界、`nekolink.adapter.v1` descriptor 和 `nekolink.adapter.app_manifest.v1` app manifest；[bundle-samples](../bundle-samples) 提供 `skill`、`session`、`workspace`、`agent_profile`、`config_snapshot` 五类可校验样例；[generic-adapter](../examples/generic-adapter) 能生成并校验通用 adapter descriptor，也能生成 app manifest，把上层应用的逻辑资源映射到 bundle 类型、runtime action、权限 scope、冲突策略和迁移策略，且拒绝把本机路径写进 manifest。示例还能生成导出、授权、发送、按动作观察事件、cursor 恢复、`event-state` watch loop 摘要、详情、带冲突策略的导入、按动作 `request_id` 精确查询 pending / running / result、演示超时重试复用同一个动作 `request_id`、按 `bundle.detail` 响应推导 receipt / rollback 状态、回滚请求和回滚结果查询的通用请求序列；`contract` 命令会输出 dry-run plan、action lifecycle、receipt state 和 rollback blocking reason 的固定集合，并明确 adapter 控制流优先读 `lifecycle_status`。workflow 可以从 app manifest resource 推导 bundle type、runtime action 和 bridge scope，避免上层应用在每步重复声明类型；示例也演示上层应用把已校验 bundle dry-run 到自己的数据目录、再写 adapter 私有 receipt、按 receipt 保守撤回未被改写的本次导入文件；dry-run 会返回 `generic.adapter.import_plan.v1`，状态固定为 `would_import`、`would_conflict`、`would_skip` 或 `cannot_import`；full-loop workflow 可以显式带出 `adapter_import_dry_run`、`adapter_import_confirm`、`adapter_import_target` 和 `adapter_rollback_target` 这些应用侧步骤，但只有调用方提供目标目录或 adapter receipt 时才输出，避免把 NekoDrop 描述成会自动写第三方应用目录。示例默认只申请 `bundle.read`，完整发送/导入/撤回流程会显式申请 `bundle.send`、`bundle.import.request` 和 `transfer.status.read`，并拒绝给 `skill`、`session`、`workspace`、`agent_profile` 关闭可信目标要求。真实上层应用 adapter 还没有接入。 |
 | 本机 local bridge 协议模型 | 部分接入 | `nekolink-protocol` 已定义 `LocalBridgeRequest` / `LocalBridgeEvent` 的 JSON 模型，覆盖查询设备、申请本机授权、查询 staged bundle 详情、发送 bundle、收到 bundle 通知、请求导入、请求撤回导入、查询传输状态、查询动作结果和 `events.poll` 事件轮询；请求可以带本机 `client` 标识，授权申请已有通用 scope：`device.read`、`transfer.status.read`、`bundle.read`、`bundle.send`、`bundle.import.request`。桌面端内部 handler 可以把只读请求映射到可信设备、staged bundle 列表/详情、导入 receipt 详情和 transfer status，并区分 `read_only` / `requires_user_confirmation`、`anonymous` / `identified`；`devices.list` 需要 `device.read` 授权，只有同时有 `bundle.read` 时才在列表响应里返回 staged bundle 摘要；`bundle.detail` 需要 `bundle.read` 授权，`transfer.status` 需要 `transfer.status.read` 授权。设置页可以触发一次内部 `devices.list` 只读自测，并显示 localhost runtime 的真实监听状态、地址、待确认授权、已授权数量、待执行动作数量、待执行细节和最近结果失败原因。桌面端启动时会开启只绑定 `127.0.0.1` 的 localhost runtime，只接受 `POST /bridge/request`，请求体有大小上限；只读请求和授权申请走同一套 handler。用户确认授权码后，runtime 会记录该 client 的限时权限并写入本机授权文件；下次启动会恢复未过期授权，运行时只刷新成功响应实际使用到的 scope 的最近使用时间。授权匹配按 `client_id`、`app_kind`、scope 和过期时间判断，不再只看 `client_id`。已授权 client 调用 `bundle.send` / `bundle.import` / `bundle.rollback` 时，runtime 会把请求写入内存待执行队列，后台 worker 会自动消费；同一 `client_id`、同一 `app_kind`、同一动作类型和同一 `request_id` 的 pending 重试会替换旧动作，不同动作类型或不同 client identity 不会互相覆盖；设置页可以查看概要并移除这些待执行动作；`bundle.send` 会先做 preflight，敏感 bundle 不能关闭可信目标要求，再复用现有 authenticated send 主线发送到目标设备；`bundle.import` 可以按 FIFO 消费待执行动作，并把 staged bundle 导入本机导入区，支持 `reject`、`rename`、`skip_conflicts`；`bundle.rollback` 只撤回 NekoDrop 本机导入区的 receipt 文件清单。动作生命周期会写入 `queued`、`running`、`succeeded`、`failed`、`conflict`、`cancelled`，授权 client 可通过 `events.poll` 的 `action.updated` 持续观察，也可用 `actions.results` 补偿查询自己的最新动作状态；传 `action_request_id` 时只查指定动作，结果表没有终态但动作仍在同 client identity 待执行队列时会返回脱敏 `queued`，queued `bundle.import` 和 `bundle.rollback` 会带公开 `bundle_id`，已有执行状态时会返回 `running` 或终态结果；不传时按时间游标返回最近结果。普通列表、事件和结果都不暴露本机 `bundle_root`，action 事件和 action result 查询都按 `client_id`、`app_kind` 和授权 scope 过滤。runtime 现在有内存事件队列，真实发送/接收主流程会写入 `transfer.updated`，收到 staged bundle 会写入 `bundle.received`；已授权 client 可用 `events.poll` 轮询快照、短等待新事件，或传 `action_request_id` 只观察某个动作；cursor 只对当前 client 可见的事件流有效，指向裁剪、无权限或其他 client 事件时会返回 `missing` 让调用方从快照重拉；事件响应会返回当前授权视图的可见 first/last/count，不暴露全局队列统计。 |
 
 ## 当前不能宣传为已完成
 
-- iroh 真实运行时
-- Relay 服务器
-- P2P / NAT 打洞
+- 自建 Relay 服务器（iroh relay 模式当前依赖 n0 公共中继）
 - key rotation / OS keychain 级别的长期密钥管理
 - 手机端互传主流程
 - OpenNeko Agent 指令通道
@@ -99,6 +106,7 @@
 - 本机 local bridge 真正长连接事件流订阅接口
 - NekoState 状态同步
 - 系统级 Windows 防火墙自动配置
+- 安装包代码签名和自动更新（当前安装包未签名，应用内只做新版本提示）
 - 云账号 / 云盘 / 中心化文件存储
 
 ## 下一阶段重点
@@ -122,7 +130,7 @@ V0.8
 
 V0.9
   transport 技术验证：
-  TCP 保持默认稳定路径，iroh / Relay / P2P 作为实验 transport 接入 NekoLink，不直接替换现有桌面互传主线。
+  TCP 保持默认稳定路径；iroh 已作为第二 transport 接入（QUIC + NAT 穿透，直连 / n0 中继两种模式，桌面收件 off / direct / relay 可选）。后续深化方向是自建 relay 服务器、更多 NAT 场景实机验证和跨网收件体验，不直接替换现有桌面互传主线。
 ```
 
 ## 文档维护规则

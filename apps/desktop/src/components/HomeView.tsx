@@ -191,8 +191,27 @@ export function HomeView() {
           {dragActive ? "拖到设备上松手即发" : "附近的设备"}
         </div>
         {rows.length === 0 ? (
-          <div className="inline-note">
-            还没有发现设备。确认对方也打开了 NekoDrop 且在同一网络；或用下方连接码跨网发送。
+          <div className="home-empty">
+            <div className="home-empty-title">还没有发现设备</div>
+            <p>
+              确认对方也打开了 NekoDrop 且在同一网络；或打开收件等对方主动发来，
+              手里有对方连接码时也可以直接按码发送。
+            </p>
+            <div className="home-empty-actions">
+              {!receiveSession && (
+                <button
+                  className="btn-mini is-primary"
+                  disabled={busy === "receive"}
+                  onClick={() => void startReceive({ silent: true })}
+                  type="button"
+                >
+                  打开收件
+                </button>
+              )}
+              <button className="btn-mini" onClick={() => setCodeOpen(true)} type="button">
+                通过连接码发送
+              </button>
+            </div>
           </div>
         ) : (
           <div className="list">
