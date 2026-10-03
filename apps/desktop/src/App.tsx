@@ -109,6 +109,7 @@ function AppContent() {
     localBridgePendingActions,
     stagedBundles,
     clearQueue,
+    clearSendQueue,
     setConnectionCode,
     setConnectionCodeOpen
   } = useAppContext();
@@ -143,12 +144,13 @@ function AppContent() {
   const inboxCount =
     localBridgePendingActions.length + stagedBundles.filter(isPendingInboxBundle).length;
 
-  // ⌘N / Ctrl+N：新传输 = 清空队列、复位连接码、回到发送页
+  // ⌘N / Ctrl+N：新传输 = 清空文件队列与待发队列、复位连接码、回到发送页
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
         clearQueue();
+        clearSendQueue();
         setConnectionCode("");
         setConnectionCodeOpen(false);
         setMode("send");
@@ -156,7 +158,7 @@ function AppContent() {
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [clearQueue, setConnectionCode, setConnectionCodeOpen, setMode]);
+  }, [clearQueue, clearSendQueue, setConnectionCode, setConnectionCodeOpen, setMode]);
 
   const renderMain = () => {
     switch (mode) {

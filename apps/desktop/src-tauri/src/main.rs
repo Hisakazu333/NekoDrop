@@ -29,6 +29,7 @@ pub fn run() {
             commands::list_transfers,
             commands::create_transfer_plan,
             commands::create_transfer_plan_from_text,
+            commands::stage_text_snippet,
             commands::send_paths_to_code,
             commands::send_paths_to_device,
             commands::resend_transfer,

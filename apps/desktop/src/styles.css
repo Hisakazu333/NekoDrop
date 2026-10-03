@@ -1048,8 +1048,16 @@ html[data-theme="dark"] .quick-row button {
 }
 .banner-ops {
   display: flex;
+  align-items: center;
   gap: 4px;
   flex-shrink: 0;
+}
+.queue-count {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--live);
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
 }
 .pair-code {
   font-family: var(--font-mono);

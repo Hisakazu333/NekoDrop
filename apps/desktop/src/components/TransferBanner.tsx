@@ -24,6 +24,8 @@ export function TransferBanner() {
     respondReceiveOffer,
     respondPairingRequest,
     cancelCurrentTransfer,
+    sendQueue,
+    cancelQueuedSend,
     busy
   } = useAppContext();
 
@@ -77,10 +79,10 @@ export function TransferBanner() {
     );
   }
 
-  if (!transferStatus) return null;
+  if (!transferStatus) return <QueueOnlyBanner />;
   const phase = transferStatus.phase;
   const passive = phase === "listening" || phase === "idle";
-  if (passive) return null;
+  if (passive) return <QueueOnlyBanner />;
 
   const isSend = transferStatus.direction === "send";
   const percent = Math.max(0, Math.min(100, Math.round((transferStatus.progress ?? 0) * 100)));
@@ -126,11 +128,45 @@ export function TransferBanner() {
       </div>
       {!isTerminal && (
         <div className="banner-ops">
+          {sendQueue.length > 0 && (
+            <span className="queue-count">队列 {sendQueue.length}</span>
+          )}
           <button className="text-btn is-danger" onClick={cancelCurrentTransfer} type="button">
             取消
           </button>
         </div>
       )}
+    </div>
+  );
+}
+
+// 没有进行中的传输但队列有货（出队间隙）：提示队列等待
+function QueueOnlyBanner() {
+  const { sendQueue, cancelQueuedSend } = useAppContext();
+  if (sendQueue.length === 0) return null;
+  return (
+    <div className="transfer-banner">
+      <Icon name="clock" className="banner-icon" />
+      <div className="banner-body">
+        <div className="banner-title">队列待发 · {sendQueue.length} 项</div>
+        <div className="banner-sub">{sendQueue.map((entry) => entry.label).join(" · ")}</div>
+      </div>
+      <div className="banner-ops">
+        <button
+          className="text-btn is-danger"
+          onClick={() => cancelQueuedSend(sendQueue[0].id)}
+          type="button"
+        >
+          移除首项
+        </button>
+        <button
+          className="text-btn"
+          onClick={() => sendQueue.forEach((entry) => cancelQueuedSend(entry.id))}
+          type="button"
+        >
+          清空
+        </button>
+      </div>
     </div>
   );
 }
