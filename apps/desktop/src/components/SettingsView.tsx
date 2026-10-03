@@ -62,11 +62,11 @@ export function SettingsView() {
           <span className="form-value" title={receiveDir}>
             {receiveDir}
           </span>
-          <button className="text-btn" disabled={busy === "pick-receive"} onClick={chooseReceiveDir} type="button">
+          <button className="btn-mini" disabled={busy === "pick-receive"} onClick={chooseReceiveDir} type="button">
             更改
           </button>
           <button
-            className="text-btn is-primary"
+            className="btn-mini is-primary"
             disabled={receiveDir === snapshot?.receive_dir || busy === "pick-receive"}
             onClick={saveReceiveDir}
             type="button"
@@ -159,7 +159,7 @@ export function SettingsView() {
             value={deviceNameInput}
           />
           <button
-            className="text-btn is-primary"
+            className="btn-mini is-primary"
             disabled={!deviceNameInput.trim() || deviceNameInput.trim() === snapshot?.device_name}
             onClick={saveDeviceName}
             type="button"
@@ -218,7 +218,7 @@ export function SettingsView() {
           <span className="form-value">
             {localBridgeStatus?.active ? `运行中 · ${localBridgeStatus.bind_host}:${localBridgeStatus.port}` : "未运行"}
           </span>
-          <button className="text-btn" onClick={runLocalBridgeSelfCheck} type="button">
+          <button className="btn-mini" onClick={runLocalBridgeSelfCheck} type="button">
             自检
           </button>
         </div>
@@ -233,7 +233,7 @@ export function SettingsView() {
             value={localBridgeAuthorizationCode}
           />
           <button
-            className="text-btn is-primary"
+            className="btn-mini is-primary"
             disabled={!localBridgeAuthorizationCode.trim()}
             onClick={confirmLocalBridgeAuthorization}
             type="button"
@@ -246,7 +246,7 @@ export function SettingsView() {
             待处理请求<small>外部应用想执行的动作</small>
           </div>
           <span className="form-value">{localBridgePendingActions.length} 项待确认</span>
-          <button className="text-btn" onClick={() => setMode("send")} type="button">
+          <button className="btn-mini" onClick={() => setMode("send")} type="button">
             去收件箱处理
           </button>
         </div>
@@ -257,7 +257,7 @@ export function SettingsView() {
           <span className="form-value">
             {localBridgeAuthorizations.map((auth) => auth.display_name).join("、") || "无"}
           </span>
-          <button className="text-btn" onClick={pruneLocalBridgeAuthorizations} type="button">
+          <button className="btn-mini" onClick={pruneLocalBridgeAuthorizations} type="button">
             清理过期
           </button>
         </div>
@@ -277,7 +277,7 @@ export function SettingsView() {
                   </div>
                   <div className="row-ops">
                     <button
-                      className="text-btn is-danger"
+                      className="btn-mini is-danger"
                       onClick={() => revokeLocalBridgeAuthorization(auth, scope)}
                       type="button"
                     >

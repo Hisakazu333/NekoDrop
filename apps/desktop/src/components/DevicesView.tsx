@@ -3,6 +3,24 @@ import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import type { DeviceDto, TrustedDeviceDto } from "../types";
 
+function deviceHue(name: string) {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0;
+  return hash % 360;
+}
+
+function DeviceAvatar({ name, online }: { name: string; online: boolean }) {
+  return (
+    <span
+      className="row-avatar"
+      style={{ backgroundColor: `hsl(${deviceHue(name)} 42% 50%)` }}
+    >
+      {name.slice(0, 1).toUpperCase()}
+      <span className={`status-dot ${online ? "is-online" : "is-offline"}`} />
+    </span>
+  );
+}
+
 function formatTime(ms: number | null | undefined) {
   if (!ms) return "";
   const date = new Date(Number(ms));
@@ -55,12 +73,12 @@ export function DevicesView() {
           </div>
         </div>
         <div className="row-ops">
-          <button className="text-btn" onClick={() => aim(device.id)} type="button">
+          <button className="btn-mini" onClick={() => aim(device.id)} type="button">
             选择
           </button>
           {trusted ? (
             <button
-              className="text-btn is-primary"
+              className="btn-mini is-primary"
               disabled={busy === "send"}
               onClick={() => sendFilesToDevice(device)}
               type="button"
@@ -69,7 +87,7 @@ export function DevicesView() {
             </button>
           ) : (
             <button
-              className="text-btn is-primary"
+              className="btn-mini is-primary"
               disabled={busy === "pair"}
               onClick={() => requestPairing(device)}
               type="button"
@@ -87,9 +105,7 @@ export function DevicesView() {
     const displayName = device.alias ?? device.device_name;
     return (
       <div className="list-row" key={device.device_id}>
-        <span className="row-icon">
-          <Icon name="shield" />
-        </span>
+        <DeviceAvatar name={displayName} online={false} />
         <div className="row-main">
           {renaming ? (
             <div className="rename-inline">
@@ -109,7 +125,7 @@ export function DevicesView() {
                 value={aliasDraft}
               />
               <button
-                className="text-btn is-primary"
+                className="btn-mini is-primary"
                 onClick={() =>
                   void setTrustedDeviceAlias(device.device_id, aliasDraft).then(() =>
                     setRenamingId(null)
@@ -119,7 +135,7 @@ export function DevicesView() {
               >
                 保存
               </button>
-              <button className="text-btn" onClick={() => setRenamingId(null)} type="button">
+              <button className="btn-mini" onClick={() => setRenamingId(null)} type="button">
                 取消
               </button>
             </div>
@@ -138,11 +154,11 @@ export function DevicesView() {
         <div className="row-ops" style={{ opacity: renaming ? 1 : undefined }}>
           {!renaming && (
             <>
-              <button className="text-btn" onClick={() => aim(device.device_id)} type="button">
+              <button className="btn-mini" onClick={() => aim(device.device_id)} type="button">
                 选择
               </button>
               <button
-                className="text-btn"
+                className="btn-mini"
                 onClick={() => {
                   setRenamingId(device.device_id);
                   setAliasDraft(device.alias ?? "");
@@ -151,7 +167,7 @@ export function DevicesView() {
               >
                 备注
               </button>
-              <button className="text-btn is-danger" onClick={() => forgetTrustedDevice(device)} type="button">
+              <button className="btn-mini is-danger" onClick={() => forgetTrustedDevice(device)} type="button">
                 忘记
               </button>
             </>
