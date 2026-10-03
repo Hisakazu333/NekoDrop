@@ -265,7 +265,11 @@ fn add_or_update_device(
 
     refresh_trusted_device_endpoint(trusted_devices, &device);
 
-    if let Ok(mut devices) = nearby_devices.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut devices = nearby_devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(existing) = devices
             .iter_mut()
             .find(|item| item.id.as_str() == device_id || item.host == device.host)
@@ -275,10 +279,18 @@ fn add_or_update_device(
             devices.push(device);
         }
     }
-    if let Ok(mut seen_at) = nearby_seen_at.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut seen_at = nearby_seen_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         seen_at.insert(device_id.clone(), Instant::now());
     }
-    if let Ok(mut fullnames) = nearby_fullnames.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut fullnames = nearby_fullnames
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let fullname = info.get_fullname().to_string();
         fullnames.retain(|known_fullname, known_device_id| {
             known_device_id != &device_id || known_fullname == &fullname
@@ -341,10 +353,18 @@ fn remove_device_by_fullname(
         fullname.to_string()
     };
 
-    if let Ok(mut devices) = nearby_devices.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut devices = nearby_devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         devices.retain(|device| device.id.as_str() != device_id);
     }
-    if let Ok(mut seen_at) = nearby_seen_at.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut seen_at = nearby_seen_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         seen_at.remove(&device_id);
     }
 }
@@ -373,13 +393,25 @@ fn purge_stale_devices(
         return;
     }
 
-    if let Ok(mut devices) = nearby_devices.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut devices = nearby_devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         devices.retain(|device| !stale_ids.contains(device.id.as_str()));
     }
-    if let Ok(mut seen_at) = nearby_seen_at.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut seen_at = nearby_seen_at
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         seen_at.retain(|device_id, _| !stale_ids.contains(device_id));
     }
-    if let Ok(mut fullnames) = nearby_fullnames.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut fullnames = nearby_fullnames
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         fullnames.retain(|_, device_id| !stale_ids.contains(device_id));
     }
 }
@@ -436,7 +468,11 @@ fn update_discovery_status(
     discovery_status: &Arc<Mutex<DiscoveryStatusState>>,
     update: impl FnOnce(&mut DiscoveryStatusState),
 ) {
-    if let Ok(mut status) = discovery_status.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut status = discovery_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         update(&mut status);
     }
 }

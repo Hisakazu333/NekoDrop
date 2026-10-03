@@ -30,8 +30,10 @@ pub(crate) fn push_local_bridge_transfer_status_event(
         runtime,
         LocalBridgeEvent::TransferUpdated(nekolink_protocol::LocalBridgeTransferUpdatedEvent {
             event_id: format!(
-                "transfer:{transfer_id}:{}:{}",
-                status.phase, status.updated_at_ms
+                "transfer:{transfer_id}:{}:{}-{}",
+                status.phase,
+                status.updated_at_ms,
+                next_event_seq()
             ),
             transfer_id: transfer_id.to_string(),
             phase,
@@ -144,4 +146,12 @@ pub(crate) fn wait_for_local_bridge_events(
         &action_results,
         now_ms,
     )
+}
+
+/// 同毫秒内两次同 phase 的进度事件会产生重复 event_id，导致长轮询唤醒
+/// 条件与游标分页失效；追加单调序号保证唯一。
+pub(crate) fn next_event_seq() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
+    SEQ.fetch_add(1, Ordering::Relaxed)
 }

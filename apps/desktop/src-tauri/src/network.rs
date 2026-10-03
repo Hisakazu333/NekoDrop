@@ -56,7 +56,11 @@ fn cached_lan_ipv4s() -> Option<Vec<Ipv4Addr>> {
 
 fn store_cached_lan_ipv4s(ips: &[Ipv4Addr]) {
     let cache = LAN_IP_CACHE.get_or_init(|| Mutex::new(None));
-    if let Ok(mut cached) = cache.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut cached = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *cached = Some(CachedLanIps {
             checked_at: Instant::now(),
             ips: ips.to_vec(),

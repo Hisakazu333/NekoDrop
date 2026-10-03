@@ -95,7 +95,11 @@ pub(crate) fn clear_active_send_cancel(
     active_send_cancel: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
     cancel: &Arc<AtomicBool>,
 ) {
-    if let Ok(mut active) = active_send_cancel.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut active = active_send_cancel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if active
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, cancel))
@@ -192,9 +196,8 @@ pub(crate) fn send_paths_to_endpoint_with_history_id(
                 },
                 || cancel_for_attempt.load(Ordering::SeqCst),
             )
-            .map_err(|error| error.to_string())
         },
-        |retry_number, retry_limit, error| {
+        |retry_number, retry_limit, error: &nekodrop_core::NekoDropError| {
             let (file_index, current_file, bytes_transferred, _) =
                 current_transfer_progress(&state.transfer_status);
             set_transfer_status(
@@ -210,19 +213,20 @@ pub(crate) fn send_paths_to_endpoint_with_history_id(
                     total_bytes: plan.total_bytes(),
                     message: format!(
                         "连接中断，正在自动重试 {retry_number}/{retry_limit}：{}",
-                        friendly_transfer_error(error)
+                        friendly_transfer_error(&error.to_string())
                     ),
                     updated_at_ms: now_ms(),
                 },
             );
         },
     )
-    .map_err(|error| {
-        let cancelled = cancel.load(Ordering::SeqCst) || error.contains("transfer cancelled");
+    .map_err(|error: nekodrop_core::NekoDropError| {
+        let cancelled = cancel.load(Ordering::SeqCst)
+            || matches!(error, nekodrop_core::NekoDropError::TransferCancelled);
         let message = if cancelled {
             "传输已取消".to_string()
         } else {
-            friendly_transfer_error(&error)
+            friendly_transfer_error(&error.to_string())
         };
         let status_phase = if cancelled { "cancelled" } else { "failed" };
         let (file_index, current_file, bytes_transferred, _) =
@@ -322,10 +326,13 @@ pub(crate) fn history_transfer_id(
 
 pub(crate) const SEND_AUTO_RETRY_LIMIT: usize = 1;
 
-pub(crate) fn send_with_auto_retry<T, S, R>(mut send: S, mut on_retry: R) -> Result<T, String>
+pub(crate) fn send_with_auto_retry<T, S, R>(
+    mut send: S,
+    mut on_retry: R,
+) -> Result<T, nekodrop_core::NekoDropError>
 where
-    S: FnMut() -> Result<T, String>,
-    R: FnMut(usize, usize, &str),
+    S: FnMut() -> Result<T, nekodrop_core::NekoDropError>,
+    R: FnMut(usize, usize, &nekodrop_core::NekoDropError),
 {
     for attempt_index in 0..=SEND_AUTO_RETRY_LIMIT {
         match send() {
@@ -342,45 +349,44 @@ where
     unreachable!("send retry loop always returns from success or final error")
 }
 
-pub(crate) fn is_retryable_send_error(error: &str) -> bool {
-    let lower = error.to_lowercase();
-
-    if lower.contains("transfer cancelled")
-        || lower.contains("receiver declined")
-        || lower.contains("transfer declined by receiver")
-        || lower.contains("checksum")
-        || lower.contains("sha-256")
-        || lower.contains("sha256")
-        || lower.contains("does not match accepted offer")
-        || lower.contains("no such file")
-        || lower.contains("not found")
-        || lower.contains("路径不存在")
-        || lower.contains("permission denied")
-        || lower.contains("access is denied")
-        || lower.contains("operation not permitted")
-        || lower.contains("unsupported connection code")
-        || lower.contains("invalid connection code")
-        || lower.contains("invalid endpoint")
-        || lower.contains("transport is not available")
-        || lower.contains("unsupported transport")
-        || lower.contains("requested iroh")
-        || lower.contains("requested relay")
-        || lower.contains("requested quic")
-    {
-        return false;
+pub(crate) fn is_retryable_send_error(error: &nekodrop_core::NekoDropError) -> bool {
+    use nekodrop_core::NekoDropError;
+    match error {
+        // 语义结局：重试只会得到同样结果
+        NekoDropError::TransferDeclined(_)
+        | NekoDropError::TransferCancelled
+        | NekoDropError::InvalidConnectionCode(_)
+        | NekoDropError::UnsupportedTransport(_)
+        | NekoDropError::UnsupportedProtocol
+        | NekoDropError::DeviceNotTrusted
+        | NekoDropError::PairingRequired
+        | NekoDropError::TransferAlreadyFinished
+        | NekoDropError::InvalidManifestPath(_)
+        | NekoDropError::InvalidDeviceName
+        | NekoDropError::Storage(_) => false,
+        // 连接层的瞬时故障才值得自动重试；列表刻意收窄，
+        // 只覆盖 OS 级瞬时信号（含 DNS 解析失败——它是暂态的）。
+        NekoDropError::Network(message) => {
+            let lower = message.to_lowercase();
+            [
+                "failed to connect",
+                "failed to resolve",
+                "connection refused",
+                "actively refused",
+                "connection reset",
+                "connection aborted",
+                "broken pipe",
+                "timed out",
+                "timeout",
+                "network is unreachable",
+                "no route to host",
+                "host unreachable",
+                "连接尝试失败",
+                "积极拒绝",
+            ]
+            .iter()
+            .any(|marker| lower.contains(marker))
+        }
+        NekoDropError::Io { .. } => true,
     }
-
-    lower.contains("failed to connect")
-        || lower.contains("connection refused")
-        || lower.contains("actively refused")
-        || lower.contains("connection reset")
-        || lower.contains("connection aborted")
-        || lower.contains("broken pipe")
-        || lower.contains("timed out")
-        || lower.contains("timeout")
-        || lower.contains("network is unreachable")
-        || lower.contains("no route to host")
-        || lower.contains("host unreachable")
-        || lower.contains("连接尝试失败")
-        || lower.contains("由于目标计算机积极拒绝")
 }

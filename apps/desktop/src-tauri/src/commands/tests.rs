@@ -320,7 +320,9 @@ fn send_auto_retry_retries_once_for_transient_network_error() {
         || {
             attempts += 1;
             if attempts == 1 {
-                Err("failed to connect to 192.168.1.20:45821: Connection refused".to_string())
+                Err(NekoDropError::Network(
+                    "failed to connect to 192.168.1.20:45821: Connection refused".to_string(),
+                ))
             } else {
                 Ok("sent")
             }
@@ -340,17 +342,18 @@ fn send_auto_retry_retries_once_for_transient_network_error() {
 
 #[test]
 fn send_auto_retry_does_not_retry_terminal_failures() {
-    for error in [
-        "transfer cancelled",
-        "receiver declined transfer: no reason provided",
-        "incoming file does not match accepted offer",
-    ] {
+    let terminal_errors = [
+        NekoDropError::TransferCancelled,
+        NekoDropError::TransferDeclined("no reason provided".to_string()),
+        NekoDropError::Storage("incoming file does not match accepted offer".to_string()),
+    ];
+    for error in terminal_errors {
         let mut attempts = 0;
 
         let result = send_with_auto_retry(
             || {
                 attempts += 1;
-                Err::<(), _>(error.to_string())
+                Err::<(), _>(error.clone())
             },
             |_, _, _| panic!("terminal send failures must not be retried"),
         );
@@ -367,12 +370,17 @@ fn send_auto_retry_stops_after_retry_limit() {
     let result = send_with_auto_retry(
         || {
             attempts += 1;
-            Err::<(), _>("connection reset by peer".to_string())
+            Err::<(), _>(NekoDropError::Network(
+                "connection reset by peer".to_string(),
+            ))
         },
         |_, _, _| {},
     );
 
-    assert_eq!(result.unwrap_err(), "connection reset by peer");
+    assert_eq!(
+        result.unwrap_err(),
+        NekoDropError::Network("connection reset by peer".to_string())
+    );
     assert_eq!(attempts, 2);
 }
 
@@ -5391,7 +5399,9 @@ fn local_bridge_transfer_status_producer_pushes_transfer_updated_event() {
     assert_eq!(events.len(), 1);
     match &events[0] {
         nekolink_protocol::LocalBridgeEvent::TransferUpdated(event) => {
-            assert_eq!(event.event_id, "transfer:transfer-1:completed:42");
+            assert!(event
+                .event_id
+                .starts_with("transfer:transfer-1:completed:42-"));
             assert_eq!(event.transfer_id, "transfer-1");
             assert_eq!(
                 event.phase,

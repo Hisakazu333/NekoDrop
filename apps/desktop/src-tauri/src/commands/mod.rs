@@ -225,7 +225,11 @@ pub(crate) fn set_transfer_status(
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
     status: TransferStatusState,
 ) {
-    if let Ok(mut slot) = transfer_status.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut slot = transfer_status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *slot = Some(status);
     }
 }

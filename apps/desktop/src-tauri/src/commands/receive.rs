@@ -10,7 +10,11 @@ pub(crate) fn clear_active_receive_cancel(
     active_receive_cancel: &Arc<Mutex<Option<Arc<AtomicBool>>>>,
     cancel: &Arc<AtomicBool>,
 ) {
-    if let Ok(mut active) = active_receive_cancel.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut active = active_receive_cancel
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if active
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, cancel))
@@ -162,10 +166,18 @@ pub fn start_receive_once(
     let bundle_staging_root_for_thread = bundle_staging_root.clone();
     thread::spawn(move || loop {
         if cancel.load(Ordering::SeqCst) {
-            if let Ok(mut status) = receive_status.lock() {
+            {
+                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                let mut status = receive_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *status = Some("收件已关闭".to_string());
             }
-            if let Ok(mut active_session) = receive_session.lock() {
+            {
+                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                let mut active_session = receive_session
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *active_session = None;
             }
             set_transfer_status(
@@ -230,7 +242,11 @@ pub fn start_receive_once(
                 let local_for_signing = local_device_identity.clone();
                 let peer_host_for_pairing = peer_host.clone();
                 let current_receive_cancel = Arc::new(AtomicBool::new(false));
-                if let Ok(mut active_cancel) = active_receive_cancel.lock() {
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut active_cancel = active_receive_cancel
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *active_cancel = Some(current_receive_cancel.clone());
                 }
                 let result =
@@ -254,7 +270,9 @@ pub fn start_receive_once(
                                 signed_binding,
                             )
                             .map_err(NekoDropError::Network)?;
-                            if let Ok(mut slot) = receive_trust_for_session.lock() {
+                            {
+                                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                                let mut slot = receive_trust_for_session.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
                                 *slot = trust_context;
                             }
                             Ok(())
@@ -307,7 +325,11 @@ pub fn start_receive_once(
                         },
                     );
                 clear_active_receive_cancel(&active_receive_cancel, &current_receive_cancel);
-                if let Ok(mut status) = receive_status.lock() {
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut status = receive_status
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *status = Some(match &result {
                         Ok(IncomingSessionReport::Transfer(report)) => {
                             format!("接收完成：{} 个文件", report.files.len())
@@ -340,10 +362,18 @@ pub fn start_receive_once(
                         }
                     });
                 }
-                if let Ok(mut pending) = pending_receive_offer.lock() {
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut pending = pending_receive_offer
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *pending = None;
                 }
-                if let Ok(mut pending) = pending_pairing_request.lock() {
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut pending = pending_pairing_request
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *pending = None;
                 }
                 if let Ok(report) = result {
@@ -406,7 +436,11 @@ pub fn start_receive_once(
                                     bundle,
                                 );
                             }
-                            if let Ok(mut last_report) = last_receive_report.lock() {
+                            {
+                                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                                let mut last_report = last_receive_report
+                                    .lock()
+                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                                 *last_report = Some(report);
                             }
                         }
@@ -444,7 +478,11 @@ pub fn start_receive_once(
                     && !is_receive_terminal_offer_status(&transfer_status, "blocked")
                     && !is_receive_terminal_offer_status(&transfer_status, "cancelled")
                 {
-                    if let Ok(status) = receive_status.lock() {
+                    {
+                        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                        let status = receive_status
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
                         let failure_message = status
                             .clone()
                             .unwrap_or_else(|| "接收失败，继续等待下一次连接".to_string());
@@ -477,7 +515,11 @@ pub fn start_receive_once(
                 thread::sleep(Duration::from_millis(120));
             }
             Err(error) => {
-                if let Ok(mut status) = receive_status.lock() {
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut status = receive_status
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *status = Some(format!("接收监听异常：{error}"));
                 }
                 set_transfer_status(
@@ -531,7 +573,11 @@ pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
         .take();
     if let Some(offer) = pending {
         let (decision_lock, decision_cvar) = &*offer.decision;
-        if let Ok(mut decision) = decision_lock.lock() {
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut decision = decision_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *decision = Some(ReceiveDecision::Decline);
             decision_cvar.notify_all();
         }
@@ -543,7 +589,11 @@ pub fn stop_receive_once(state: State<'_, AppState>) -> Result<(), String> {
         .take();
     if let Some(request) = pending_pairing {
         let (decision_lock, decision_cvar) = &*request.decision;
-        if let Ok(mut decision) = decision_lock.lock() {
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut decision = decision_lock
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             *decision = Some(ReceiveDecision::Decline);
             decision_cvar.notify_all();
         }
@@ -693,7 +743,12 @@ pub fn respond_receive_offer(state: State<'_, AppState>, accept: bool) -> Result
         ReceiveDecision::Decline
     });
     decision_cvar.notify_all();
-    if let Ok(mut pending) = state.pending_receive_offer.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut pending = state
+            .pending_receive_offer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *pending = None;
     }
     if accept {
@@ -872,7 +927,11 @@ pub(crate) fn wait_for_receive_decision(
         decision: decision.clone(),
     };
 
-    if let Ok(mut offer_slot) = pending_receive_offer.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut offer_slot = pending_receive_offer
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *offer_slot = Some(pending);
     }
     set_transfer_status(

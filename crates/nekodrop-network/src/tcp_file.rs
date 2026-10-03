@@ -191,7 +191,7 @@ where
     let mut bytes_sent = 0_u64;
     loop {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let read = file.read(&mut buffer).map_err(|error| {
@@ -307,7 +307,7 @@ where
 
     for (index, file) in files.iter().enumerate() {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let file_size = file
@@ -413,7 +413,7 @@ where
 
     for (index, file) in files.iter().enumerate() {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let file_size = file
@@ -547,7 +547,7 @@ where
     let mut bytes_sent = 0_u64;
     loop {
         if should_cancel() {
-            return Err(NekoDropError::Network("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let read = file.read(&mut buffer).map_err(|error| {

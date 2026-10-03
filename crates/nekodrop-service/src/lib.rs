@@ -208,7 +208,7 @@ where
     let decision = read_transfer_decision(&mut stream)?;
     stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     if should_cancel() {
-        return Err(NekoDropError::Network("transfer cancelled".into()));
+        return Err(NekoDropError::TransferCancelled);
     }
     if !decision.accepted {
         return Err(NekoDropError::Network(format!(
@@ -266,7 +266,7 @@ where
     let decision = session.read_transfer_decision(&mut stream)?;
     stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     if should_cancel() {
-        return Err(NekoDropError::Network("transfer cancelled".into()));
+        return Err(NekoDropError::TransferCancelled);
     }
     if !decision.accepted {
         return Err(NekoDropError::Network(format!(
@@ -362,7 +362,7 @@ where
     let decision = session.read_transfer_decision(&mut stream)?;
     stream.set_io_timeout(TCP_IO_STALL_TIMEOUT)?;
     if should_cancel() {
-        return Err(NekoDropError::Network("transfer cancelled".into()));
+        return Err(NekoDropError::TransferCancelled);
     }
     if !decision.accepted {
         return Err(NekoDropError::Network(format!(
@@ -960,7 +960,7 @@ where
     let files =
         receive_file_frames_with_expected_count(stream, offer.file_count, |header, stream| {
             if should_cancel() {
-                return Err(NekoDropError::Network("transfer cancelled".into()));
+                return Err(NekoDropError::TransferCancelled);
             }
             let expected = offer.files.get(file_index).ok_or_else(|| {
                 NekoDropError::Network(format!(
@@ -1116,7 +1116,7 @@ where
         keys,
         |header, stream| {
             if should_cancel() {
-                return Err(NekoDropError::Network("transfer cancelled".into()));
+                return Err(NekoDropError::TransferCancelled);
             }
             let expected = offer.files.get(file_index).ok_or_else(|| {
                 NekoDropError::Network(format!(
@@ -1670,12 +1670,16 @@ fn resume_offsets_by_path(
     Ok(offsets)
 }
 
+/// 同一毫秒内发起的多个传输会拿到相同时间戳；追加单调序号保证 ID 唯一。
 fn next_transfer_id() -> String {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static SEQ: AtomicU64 = AtomicU64::new(0);
     let millis = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_millis())
         .unwrap_or_default();
-    format!("transfer-{millis}")
+    let seq = SEQ.fetch_add(1, Ordering::Relaxed);
+    format!("transfer-{millis}-{seq}")
 }
 
 #[cfg(test)]

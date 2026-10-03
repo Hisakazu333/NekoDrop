@@ -403,7 +403,12 @@ fn set_local_bridge_runtime_status(
     port: u16,
     last_error: Option<String>,
 ) {
-    if let Ok(mut status) = runtime.status.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut status = runtime
+            .status
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *status = LocalBridgeRuntimeStatusState {
             active,
             bind_host: LOCAL_BRIDGE_BIND_HOST.to_string(),

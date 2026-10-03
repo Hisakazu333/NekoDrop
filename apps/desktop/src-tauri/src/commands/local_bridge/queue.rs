@@ -247,7 +247,13 @@ pub fn run_local_bridge_runtime_worker_once(
 pub(crate) fn start_local_bridge_runtime_worker(app: AppHandle) {
     thread::spawn(move || loop {
         let state = app.state::<AppState>();
-        if let Ok(mut actions) = state.local_bridge_runtime.pending_actions.lock() {
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut actions = state
+                .local_bridge_runtime
+                .pending_actions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
             while actions.is_empty() {
                 match state
                     .local_bridge_runtime

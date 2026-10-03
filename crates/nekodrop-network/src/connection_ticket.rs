@@ -112,15 +112,15 @@ impl ConnectionTicket {
             return Err(NekoDropError::Network("empty connection code".into()));
         };
         if prefix != PREFIX {
-            return Err(NekoDropError::Network(format!(
-                "unsupported connection code prefix: {prefix}"
+            return Err(NekoDropError::InvalidConnectionCode(format!(
+                "unsupported prefix: {prefix}"
             )));
         }
 
         let mut fields = BTreeMap::new();
         for part in parts {
             let (key, value) = part.split_once('=').ok_or_else(|| {
-                NekoDropError::Network(format!("invalid connection code field: {part}"))
+                NekoDropError::InvalidConnectionCode(format!("invalid field: {part}"))
             })?;
             fields.insert(key.to_string(), decode_field(value)?);
         }

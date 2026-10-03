@@ -180,7 +180,7 @@ where
         if should_cancel() {
             // Keep the partial on disk so a later attempt can resume from it,
             // matching the early-EOF behavior below.
-            return Err(NekoDropError::Storage("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let max_read = remaining.min(buffer.len() as u64) as usize;
@@ -205,7 +205,7 @@ where
         on_progress(bytes_written);
 
         if should_cancel() {
-            return Err(NekoDropError::Storage("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
     }
 

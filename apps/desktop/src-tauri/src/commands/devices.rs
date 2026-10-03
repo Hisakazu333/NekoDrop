@@ -83,7 +83,12 @@ pub fn trust_nearby_device(
         save_trusted_devices(&next_trusted_devices)?;
         *trusted_devices = next_trusted_devices;
     }
-    if let Ok(mut devices) = state.nearby_devices.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut devices = state
+            .nearby_devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(device) = devices
             .iter_mut()
             .find(|device| device.id.as_str() == device_id)
@@ -140,7 +145,12 @@ pub fn request_device_pairing(
 
     let record = trust_device_record(&local_identity, &device)?;
     persist_trusted_device(&state, record.clone())?;
-    if let Ok(mut devices) = state.nearby_devices.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut devices = state
+            .nearby_devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(device) = devices
             .iter_mut()
             .find(|device| device.id.as_str() == device_id)
@@ -163,7 +173,12 @@ pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> R
         save_trusted_devices(&next_trusted_devices)?;
         *trusted_devices = next_trusted_devices;
     }
-    if let Ok(mut devices) = state.nearby_devices.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut devices = state
+            .nearby_devices
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         if let Some(device) = devices
             .iter_mut()
             .find(|device| device.id.as_str() == device_id)
@@ -208,7 +223,12 @@ pub fn respond_pairing_request(state: State<'_, AppState>, accept: bool) -> Resu
         ReceiveDecision::Decline
     });
     decision_cvar.notify_all();
-    if let Ok(mut pending) = state.pending_pairing_request.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut pending = state
+            .pending_pairing_request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *pending = None;
     }
     Ok(())
@@ -308,7 +328,11 @@ pub(crate) fn wait_for_pairing_decision(
         decision: decision.clone(),
     };
 
-    if let Ok(mut request_slot) = pending_pairing_request.lock() {
+    {
+        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+        let mut request_slot = pending_pairing_request
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         *request_slot = Some(pending);
     }
 
@@ -324,7 +348,11 @@ pub(crate) fn wait_for_pairing_decision(
         };
         guard = next_guard;
         if timeout.timed_out() {
-            if let Ok(mut request_slot) = pending_pairing_request.lock() {
+            {
+                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                let mut request_slot = pending_pairing_request
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
                 *request_slot = None;
             }
             return PairingDecisionPayload::reject("等待确认超时");
