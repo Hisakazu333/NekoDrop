@@ -500,6 +500,12 @@ html[data-theme="dark"] .setup-card:hover {
   background: var(--bg-active);
   font-weight: 500;
 }
+
+/* 拖拽文件悬停窗口时，可直发的设备行亮起 / rows glow while dragging files */
+.side-row.is-drop-hint {
+  background: var(--live-soft);
+  box-shadow: inset 0 0 0 1px var(--live);
+}
 .side-row.is-offline {
   color: var(--text-3);
 }

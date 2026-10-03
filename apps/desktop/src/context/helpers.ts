@@ -69,6 +69,23 @@ export function uniquePaths(paths: string[]): string[] {
   return Array.from(new Set(paths));
 }
 
+/** 拖放命中：物理坐标 → CSS 像素 → 命中带 data-device-drop-id 的元素 */
+export function deviceIdAtDropPosition(
+  position: { x: number; y: number },
+  devicePixelRatio: number
+): string | null {
+  const cssX = position.x / (devicePixelRatio || 1);
+  const cssY = position.y / (devicePixelRatio || 1);
+  const rows = document.querySelectorAll<HTMLElement>("[data-device-drop-id]");
+  for (const row of Array.from(rows)) {
+    const rect = row.getBoundingClientRect();
+    if (cssX >= rect.left && cssX <= rect.right && cssY >= rect.top && cssY <= rect.bottom) {
+      return row.dataset.deviceDropId ?? null;
+    }
+  }
+  return null;
+}
+
 export function buildPathPayload(selectedPaths: string[], manualPaths: string): string[] {
   const manual = manualPaths
     .split("\n")

@@ -17,6 +17,7 @@ type CommandName =
   | "read_received_text"
   | "set_trusted_device_alias"
   | "set_send_limit"
+  | "set_organize_receive_by_device"
   | "send_paths_to_device"
   | "resend_transfer"
   | "open_transfer_location"

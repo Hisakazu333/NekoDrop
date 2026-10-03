@@ -12,6 +12,7 @@ pub fn get_app_snapshot(state: State<'_, AppState>) -> Result<AppSnapshot, Strin
         receive_port: config.receive_port,
         receive_policy: receive_policy_label(config.receive_policy).to_string(),
         send_limit_kbps: config.send_limit_kbps,
+        organize_receive_by_device: config.organize_receive_by_device,
         discovery_enabled: config.discovery_enabled,
         tray_enabled: config.tray_enabled,
         device_identity: device_identity_to_dto(&identity),
