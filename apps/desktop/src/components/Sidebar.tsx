@@ -27,6 +27,7 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
     setConnectionCodeOpen,
     setConnectionCode,
     clearQueue,
+    clearSendQueue,
     appearance,
     setAppearance
   } = useAppContext();
@@ -65,9 +66,10 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
     setMode("send");
   };
 
-  // 新传输：清空队列、关掉连接码、回到发送页（目标保留，方便连发）
+  // 新传输：清空文件队列与待发队列、关掉连接码、回到发送页（目标保留，方便连发）
   const newTransfer = () => {
     clearQueue();
+    clearSendQueue();
     setConnectionCode("");
     setConnectionCodeOpen(false);
     setMode("send");

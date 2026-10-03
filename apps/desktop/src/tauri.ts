@@ -13,6 +13,7 @@ type CommandName =
   | "create_transfer_plan"
   | "create_transfer_plan_from_text"
   | "send_paths_to_code"
+  | "stage_text_snippet"
   | "send_paths_to_device"
   | "resend_transfer"
   | "open_transfer_location"
