@@ -122,8 +122,8 @@ use crate::transfer_history::{
 };
 use crate::trusted_devices::{
     pairing_code_for_device, pairing_code_for_values, refresh_trusted_device_contact,
-    save_trusted_devices, trust_device_record, trusted_device_record_from_remote,
-    upsert_trusted_device, TrustedDeviceRecord,
+    save_trusted_devices, set_alias_on_trusted_device, trust_device_record,
+    trusted_device_record_from_remote, upsert_trusted_device, TrustedDeviceRecord,
 };
 
 #[cfg(test)]

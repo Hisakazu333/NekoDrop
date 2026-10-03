@@ -478,6 +478,7 @@ fn transfer_history_dto_exposes_optional_security_mode() {
 fn legacy_plain_receive_report_does_not_refresh_trusted_device_contact() {
     let public_key = test_public_key("device-a");
     let trusted = Arc::new(Mutex::new(vec![TrustedDeviceRecord {
+        alias: None,
         schema_version: 1,
         device_id: "device-a".to_string(),
         device_name: "Known Mac".to_string(),
@@ -5753,6 +5754,7 @@ fn receive_policy_block_all_rejects_offer_without_pending_prompt() {
 fn receive_policy_auto_accept_trusted_requires_authenticated_session() {
     let public_key = test_public_key("device-a");
     let trusted = Arc::new(Mutex::new(vec![TrustedDeviceRecord {
+        alias: None,
         schema_version: 1,
         device_id: "device-a".to_string(),
         device_name: "MacBook".to_string(),
@@ -6007,6 +6009,7 @@ fn trusted_record_with_public_key(
     public_key_fingerprint: &str,
 ) -> TrustedDeviceRecord {
     TrustedDeviceRecord {
+        alias: None,
         schema_version: 1,
         device_id: device_id.to_string(),
         device_name: device_name.to_string(),

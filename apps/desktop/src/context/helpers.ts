@@ -94,6 +94,8 @@ export interface QueuedSend {
   pathsText: string;
   label: string;
   enqueuedAtMs: number;
+  /** 暂停的条目不自动出队，等"继续"唤醒 / paused entries wait for resume */
+  paused?: boolean;
 }
 
 export const MAX_SEND_QUEUE = 20;
@@ -103,10 +105,17 @@ export function enqueueSend(queue: QueuedSend[], entry: QueuedSend): QueuedSend[
   return [...queue, entry];
 }
 
+/** 出队第一条未暂停的条目（保持其余顺序）/ pop first non-paused entry */
 export function dequeueSend(queue: QueuedSend[]): { head: QueuedSend | null; rest: QueuedSend[] } {
-  if (queue.length === 0) return { head: null, rest: queue };
-  const [head, ...rest] = queue;
+  const index = queue.findIndex((entry) => !entry.paused);
+  if (index === -1) return { head: null, rest: queue };
+  const head = queue[index];
+  const rest = queue.filter((_, i) => i !== index);
   return { head, rest };
+}
+
+export function resumeQueuedSend(queue: QueuedSend[], id: string): QueuedSend[] {
+  return queue.map((entry) => (entry.id === id ? { ...entry, paused: false } : entry));
 }
 
 /** 队列条目摘要：首个路径名或"文本片段"，多个时附计数 */
