@@ -290,6 +290,18 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
 .app-shell a {
   -webkit-app-region: no-drag;
 }
+/* 滚动容器与其内容必须 no-drag：drag 区在 macOS 会吞掉滚轮事件，
+   导致主区滚轮滚动完全失效（窗口拖动由标签条与侧栏空白承担）。 */
+.main-pane,
+.main-pane * {
+  -webkit-app-region: no-drag;
+}
+.sidebar-scroll,
+.sidebar-scroll *,
+.side-scroll,
+.side-scroll * {
+  -webkit-app-region: no-drag;
+}
 
 /* --------------------------------------------------------------------------
    侧栏 / Sidebar — 1:1 Notion 侧栏
