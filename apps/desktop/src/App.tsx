@@ -8,18 +8,38 @@ import { SettingsView } from "./components/SettingsView";
 import { TransferPanel } from "./components/TransferPanel";
 import { InboxDrawer } from "./components/InboxDrawer";
 import { isPendingInboxBundle } from "./bundleState";
+import { shouldShowActiveTransferBar } from "./transferProgress";
 
 /**
  * 应用外壳：窄导航栏 + 主区 + 常驻传输面板（右侧）。
  * 布局按文件传输任务组织：发送/接收是主页，传输状态永远可见。
  */
 function AppContent() {
-  const { error, toast, mode, setMode, localBridgePendingActions, stagedBundles } = useAppContext();
+  const {
+    error,
+    toast,
+    mode,
+    setMode,
+    localBridgePendingActions,
+    stagedBundles,
+    pendingReceiveOffer,
+    pendingPairingRequest,
+    transferStatus
+  } = useAppContext();
   const [inboxOpen, setInboxOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(true);
 
   const inboxCount =
     localBridgePendingActions.length + stagedBundles.filter(isPendingInboxBundle).length;
+
+  // 面板收起时，FAB 用角标补上决策/传输盲区：warn=有待决策，live=传输进行中
+  const hasPendingDecision = Boolean(pendingReceiveOffer || pendingPairingRequest);
+  const hasLiveTransfer = Boolean(transferStatus && shouldShowActiveTransferBar(transferStatus));
+  const fabLabel = hasPendingDecision
+    ? "展开传输面板（有待处理的传输请求）"
+    : hasLiveTransfer
+      ? "展开传输面板（传输进行中）"
+      : "展开传输面板";
 
   // ⌘1..4 切页 / ⌘N 新传输
   useEffect(() => {
@@ -65,13 +85,19 @@ function AppContent() {
       </div>
       {!panelOpen && (
         <button
-          aria-label="展开传输面板"
+          aria-label={fabLabel}
           className="panel-fab"
           onClick={() => setPanelOpen(true)}
-          title="展开传输面板"
+          title={fabLabel}
           type="button"
         >
           ⇄
+          {hasPendingDecision && (
+            <span aria-hidden="true" className="panel-fab-dot is-warn" />
+          )}
+          {hasLiveTransfer && (
+            <span aria-hidden="true" className="panel-fab-dot is-live" />
+          )}
         </button>
       )}
 

@@ -28,6 +28,7 @@
 - 传输历史持久化
 - 历史记录打开位置、重发、继续发送、删除、清空
 - NekoLink transport 抽象和 TCP 实现
+- iroh 跨网收件：直连打洞或 n0 公共中继，设置页 off / direct / relay
 - 桌面传输 offer / accept / decline 走 encrypted `session.control`
 - encrypted session 路径的文件 payload 走加密 file frames
 - offer / decision 控制消息读取路径带 replay window
@@ -36,7 +37,7 @@
 - local bridge localhost runtime、授权码确认、限时授权持久化
 - local bridge `bundle.send` / `bundle.import` 待执行队列、后台 worker、动作生命周期事件
 
-当前还没有接入 iroh 真实运行时、Relay / P2P、手机端互传主流程、上层应用自动导出 / 真实导入、local bridge 长连接事件流和 Agent 指令通道。界面和文档应将这些能力标记为规划中或实验中，不应把占位数据描述为真实桌面能力。
+iroh 已接入为第二 transport：桌面收件可开跨网（直连打洞或 n0 公共中继），sidecar 提供 `receive-iroh`；TCP 仍是局域网默认主线。当前还没有接入自建 Relay 服务器、手机端互传主流程、上层应用自动导出 / 真实导入、local bridge 长连接事件流和 Agent 指令通道。界面和文档应将这些能力标记为规划中或实验中，不应把占位数据描述为真实桌面能力。
 
 ## 本地检查
 
@@ -244,10 +245,17 @@ nekolink-protocol/src/lib.rs
 不依赖桌面的命令行收发，适合脚本与远程机器：
 
 ```bash
-cargo run -p nekodrop-sidecar -- plan <path> [path...]        # 预演：列出文件/大小/SHA-256
-cargo run -p nekodrop-sidecar -- receive 0.0.0.0:0 <目录>      # 监听并打印连接码，收一个传输
-cargo run -p nekodrop-sidecar -- send <host:port|连接码> <路径> # 发送文件/目录
-cargo run -p nekodrop-sidecar -- text <host:port|连接码> <文本> # 文本快送（暂存 .txt 后走加密通道）
+cargo run -p nekodrop-sidecar -- plan <path> [path...]                       # 预演：列出文件/大小/SHA-256
+cargo run -p nekodrop-sidecar -- receive 0.0.0.0:0 <目录>                     # TCP 监听并打印连接码，收一个传输
+cargo run -p nekodrop-sidecar -- receive-iroh <目录> [--relay]                # iroh 跨网接收；--relay 启用 n0 公网中继（默认纯直连打洞）
+cargo run -p nekodrop-sidecar -- send <host:port|连接码> <路径> [路径...] [--limit <KB/s>]  # 发送文件/目录，可限速
+cargo run -p nekodrop-sidecar -- text <host:port|连接码> <文本> [--limit <KB/s>]           # 文本快送（暂存 .txt 后走加密通道）
 ```
 
-`text` 与桌面端共用 `nekodrop-service::stage_text_snippet`（2 MB 上限、同秒防覆盖），发送完成后自动清理暂存文件。
+`receive-iroh` 会自动创建接收目录，打印 iroh 节点连接码（`nekodrop-v1;transport=iroh;...`），收完一个连接即退出。不带 `--relay` 时纯打洞直连（零第三方参与）；带 `--relay` 时经 n0 公共中继，可跨 NAT 收件，连接元数据对中继可见。
+
+`--limit <KB/s>` 可出现在参数任意位置，缺省或 `0` 为不限速；`send` 和 `text` 都支持。
+
+`text` 与桌面端共用 `nekodrop-service::stage_text_snippet`（2 MB 上限、同秒防覆盖），该 helper 只负责写入不负责删除；sidecar `text` 发送结束后自动清理暂存文件，桌面端发送后暂存文件保留在系统临时目录。
+
+边界：`receive-iroh` 不做配对校验——配对请求一律明确 decline（`apps/sidecar/src/main.rs` 的 pairing 回调直接拒绝），传输也不经接收端逐个确认，只建议在受控环境、临时目录中使用。
