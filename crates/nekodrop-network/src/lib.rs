@@ -1,6 +1,7 @@
 pub mod client;
 pub mod connection_ticket;
 pub mod discovery;
+pub mod iroh_transport;
 pub mod protocol;
 pub mod server;
 pub mod tcp_file;

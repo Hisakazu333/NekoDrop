@@ -20,6 +20,8 @@ impl Default for ReceiveServerConfig {
 impl ReceiveServerConfig {
     pub fn endpoint(&self) -> Endpoint {
         Endpoint {
+            relay_url: None,
+            direct_addrs: Vec::new(),
             host: self.bind_host.clone(),
             port: self.port,
             transport: self.transport,
