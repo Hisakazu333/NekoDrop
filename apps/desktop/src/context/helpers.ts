@@ -17,6 +17,52 @@ export const EMPTY_TRANSFER_METRICS = Object.freeze<TransferMetrics>({
   etaSeconds: null
 });
 
+export const SEND_QUEUE_STORAGE_KEY = "nekodrop.sendQueue";
+
+/** 队列持久化：写入失败静默（隐私模式/localStorage 不可用） */
+export function saveSendQueue(queue: QueuedSend[]) {
+  try {
+    localStorage.setItem(SEND_QUEUE_STORAGE_KEY, JSON.stringify(queue));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** 读取持久化队列：格式坏/字段缺一律丢弃该条，绝不把垃圾放进发送链 */
+export function loadSendQueue(): QueuedSend[] {
+  try {
+    const raw = localStorage.getItem(SEND_QUEUE_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const valid: QueuedSend[] = [];
+    for (const item of parsed) {
+      const entry = item as Partial<QueuedSend>;
+      if (
+        typeof entry.id === "string" &&
+        (entry.kind === "device" || entry.kind === "code") &&
+        typeof entry.target === "string" &&
+        typeof entry.pathsText === "string" &&
+        typeof entry.label === "string" &&
+        typeof entry.enqueuedAtMs === "number"
+      ) {
+        valid.push({
+          id: entry.id,
+          kind: entry.kind,
+          target: entry.target,
+          pathsText: entry.pathsText,
+          label: entry.label,
+          enqueuedAtMs: entry.enqueuedAtMs,
+          paused: Boolean(entry.paused),
+        });
+      }
+    }
+    return valid;
+  } catch {
+    return [];
+  }
+}
+
 export const APPEARANCE_STORAGE_KEY = "nekodrop.appearance";
 export const TEXT_SNIPPET_AUTO_COPY_STORAGE_KEY = "nekodrop.textSnippetAutoCopy";
 
@@ -133,6 +179,8 @@ export interface QueuedSend {
   enqueuedAtMs: number;
   /** 暂停的条目不自动出队，等"继续"唤醒 / paused entries wait for resume */
   paused?: boolean;
+  /** 自动重试次数（上限 1，防死循环） */
+  retryOf?: number;
 }
 
 export const MAX_SEND_QUEUE = 20;
