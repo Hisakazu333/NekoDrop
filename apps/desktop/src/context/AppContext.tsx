@@ -6,7 +6,7 @@ import {
   readTextSnippetAutoCopy, writeTextSnippetAutoCopy,
   deviceIdAtDropPosition,
   QueuedSend, QueuedSendKind, enqueueSend, dequeueSend, queuedSendLabel,
-  resumeQueuedSend as resumeQueuedEntry
+  resumeQueuedSend as resumeQueuedEntry, saveSendQueue, loadSendQueue
 } from "./helpers";
 import { useSettingsDomain } from "./settings";
 import { useComposerDomain } from "./composer";
@@ -259,7 +259,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [transferMetrics, setTransferMetrics] = useState<TransferMetrics>(EMPTY_TRANSFER_METRICS);
-  const [sendQueue, setSendQueue] = useState<QueuedSend[]>([]);
+  const [sendQueue, setSendQueue] = useState<QueuedSend[]>(() => loadSendQueue());
   const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const queueFlushInFlight = useRef(false);
   const queueSeq = useRef(0);
@@ -826,6 +826,11 @@ const {
     await dispatchSend("device", device.id, payload.join("\n"), `已发送到 ${device.name}`);
   }
 
+  // 队列变更落盘（重启恢复）；暂停条目一并保留
+  useEffect(() => {
+    saveSendQueue(sendQueue);
+  }, [sendQueue]);
+
   // 空闲时自动出队发送（跳过暂停条目；失败不回队，报错继续下一条）
   useEffect(() => {
     if (busy !== null || queueFlushInFlight.current) return;
@@ -833,7 +838,13 @@ const {
     if (!head) return;
     queueFlushInFlight.current = true;
     setSendQueue(rest);
-    void runSend(head.kind, head.target, head.pathsText, `队列发送完成（${head.label}）`).finally(() => {
+    void runSend(head.kind, head.target, head.pathsText, `队列发送完成（${head.label}）`).catch(() => {
+      // 失败自动重排队一次：Network 类瞬时错误常见于对端刚上线/拥塞；
+      // retryOf 计数防死循环——同一条最多自动重试 1 次，再失败就留给用户手动
+      if ((head.retryOf ?? 0) < 1) {
+        setSendQueue((current) => enqueueSend(current, { ...head, retryOf: (head.retryOf ?? 0) + 1 }));
+      }
+    }).finally(() => {
       queueFlushInFlight.current = false;
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
