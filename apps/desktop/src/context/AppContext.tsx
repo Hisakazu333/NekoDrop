@@ -3,6 +3,7 @@ import {
   ReceivePolicyMode, errorMessage, normalizeReceivePolicy, readInitialAppearance,
   portFromBindAddr, buildPathPayload, uniquePaths, keepIfEqual, resetTransferMetrics, APPEARANCE_STORAGE_KEY,
   lastPathSegment, isReceiveTransferActivePhase, isCancelMessage, copyTextToClipboard,
+  readTextSnippetAutoCopy, writeTextSnippetAutoCopy,
   QueuedSend, QueuedSendKind, enqueueSend, dequeueSend, queuedSendLabel,
   resumeQueuedSend as resumeQueuedEntry
 } from "./helpers";
@@ -195,6 +196,8 @@ interface AppContextType {
   respondPairingRequest: (accept: boolean) => Promise<void>;
   forgetTrustedDevice: (device: TrustedDeviceDto) => Promise<void>;
   setTrustedDeviceAlias: (deviceId: string, alias: string) => Promise<void>;
+  autoCopyTextSnippets: boolean;
+  setTextSnippetAutoCopy: (enabled: boolean) => void;
   respondReceiveOffer: (accept: boolean) => Promise<void>;
   copyConnectionCode: () => Promise<void>;
 
@@ -236,6 +239,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [connectionCodeOpen, setConnectionCodeOpen] = useState(false);
   const [mode, setMode] = useState<ComposerMode>("send");
   const [appearance, setAppearance] = useState<AppearanceMode>(() => readInitialAppearance());
+  const [autoCopyTextSnippets, setAutoCopyTextSnippetsState] = useState(() =>
+    readTextSnippetAutoCopy()
+  );
+  const seenTextSnippetIds = useRef<Set<string> | null>(null);
 
   const [dragActive, setDragActive] = useState(false);
   const [dragDropReady, setDragDropReady] = useState(false);
@@ -447,6 +454,42 @@ const {
       })
     );
   }, [transferStatus]);
+
+  // 接收文本自动复制：新出现的"接收成功·单 txt"记录直接进剪贴板（可在设置关闭）。
+  // 首次运行先把既有历史标记为已见，避免启动时复制旧文本。
+  const autoCopyRef = useRef(autoCopyTextSnippets);
+  autoCopyRef.current = autoCopyTextSnippets;
+  useEffect(() => {
+    const snippetRecords = transfers.filter(
+      (transfer) =>
+        transfer.direction === "receive" &&
+        (transfer.status === "succeeded" || transfer.status === "done") &&
+        transfer.file_count === 1 &&
+        (transfer.root_name ?? "").toLowerCase().endsWith(".txt")
+    );
+    if (seenTextSnippetIds.current == null) {
+      seenTextSnippetIds.current = new Set(snippetRecords.map((transfer) => transfer.id));
+      return;
+    }
+    const fresh = snippetRecords.filter((transfer) => !seenTextSnippetIds.current!.has(transfer.id));
+    for (const transfer of fresh) seenTextSnippetIds.current!.add(transfer.id);
+    if (fresh.length === 0 || !autoCopyRef.current) return;
+    const target = fresh[fresh.length - 1];
+    void (async () => {
+      try {
+        const text = await invokeCommand<string>("read_received_text", { transferId: target.id });
+        await copyTextToClipboard(text);
+        setToast(`文本已自动复制（${target.root_name}）`);
+      } catch {
+        // 读取或剪贴板失败时静默：手动复制按钮仍在历史页可用
+      }
+    })();
+  }, [transfers]);
+
+  function setTextSnippetAutoCopy(enabled: boolean) {
+    setAutoCopyTextSnippetsState(enabled);
+    writeTextSnippetAutoCopy(enabled);
+  }
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -1081,6 +1124,8 @@ const {
     respondPairingRequest,
     forgetTrustedDevice,
     setTrustedDeviceAlias,
+    autoCopyTextSnippets,
+    setTextSnippetAutoCopy,
     respondReceiveOffer,
     copyConnectionCode,
 
