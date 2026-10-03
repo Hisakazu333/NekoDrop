@@ -19,6 +19,7 @@ export type IconName =
   | "moon"
   | "overview"
   | "package"
+  | "plus"
   | "paw"
   | "plug"
   | "refresh"
@@ -101,6 +102,7 @@ const ICONS: Record<IconName, React.ReactNode> = {
   package: (
     <path d="M4 8l8-4.2L20 8v8.2L12 20.4 4 16.2V8Zm8 4.2L4 8m8 4.2L20 8m-8 4.2v8.2" />
   ),
+  plus: <path d="M12 5v14M5 12h14" />,
   paw: (
     <>
       <path d="M12 13.8c1.9 0 4.6 1.5 4.6 3.9 0 1.6-1.2 2.7-2.8 2.7-.7 0-1.2-.35-1.8-.35s-1.1.35-1.8.35c-1.6 0-2.8-1.1-2.8-2.7 0-2.4 2.7-3.9 4.6-3.9Z" />
