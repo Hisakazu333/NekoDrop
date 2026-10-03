@@ -14,6 +14,7 @@ pub fn handle_local_bridge_request(
     )
 }
 
+#[cfg(test)]
 pub(crate) fn handle_local_bridge_request_at(
     request_json: &str,
     trusted_devices: &[TrustedDeviceRecord],
@@ -60,6 +61,7 @@ pub(crate) fn handle_local_bridge_request_for_runtime(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(crate) fn handle_local_bridge_request_with_runtime_at(
     request_json: &str,
     trusted_devices: &[TrustedDeviceRecord],
@@ -330,6 +332,7 @@ pub(crate) fn handle_local_bridge_request_with_runtime_at(
     Ok(response)
 }
 
+#[cfg(test)]
 pub(crate) fn handle_local_bridge_request_with_auth_at(
     request_json: &str,
     trusted_devices: &[TrustedDeviceRecord],
@@ -356,6 +359,7 @@ pub(crate) fn handle_local_bridge_request_with_auth_at(
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(crate) fn handle_validated_local_bridge_request_with_auth_at(
     request: LocalBridgeRequest,
     trusted_devices: &[TrustedDeviceRecord],

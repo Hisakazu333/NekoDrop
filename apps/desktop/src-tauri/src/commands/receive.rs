@@ -747,7 +747,7 @@ pub(crate) fn push_receive_failure_history(
     transfer_history: &Arc<Mutex<Vec<TransferHistoryRecord>>>,
     transfer_status: &Arc<Mutex<Option<TransferStatusState>>>,
     peer_host: &str,
-    receive_dir: &PathBuf,
+    receive_dir: &Path,
     error_message: String,
 ) {
     let status = transfer_status

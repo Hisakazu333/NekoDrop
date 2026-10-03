@@ -93,6 +93,7 @@ pub(crate) fn local_bridge_transfer_phase_from_status(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(crate) fn wait_for_local_bridge_events(
     runtime: &LocalBridgeRuntimeState,
     request: nekolink_protocol::LocalBridgePollEventsRequest,

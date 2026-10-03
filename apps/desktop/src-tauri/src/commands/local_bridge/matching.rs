@@ -1,6 +1,7 @@
 use super::super::*;
 use super::*;
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(crate) fn local_bridge_action_results_for_client(
     client: Option<&LocalBridgeClientIdentity>,
     authorizations: &[LocalBridgeAuthorizationRecord],

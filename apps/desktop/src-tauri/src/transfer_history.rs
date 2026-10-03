@@ -140,6 +140,7 @@ fn transfer_history_file_path() -> Result<PathBuf, String> {
     Ok(app_config_dir()?.join("transfer_history.json"))
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn new_transfer_history_record(
     id: String,
     direction: impl Into<String>,

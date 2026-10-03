@@ -1,5 +1,4 @@
 use super::super::*;
-use super::*;
 
 #[tauri::command(async)]
 pub fn confirm_local_bridge_authorization(
@@ -118,6 +117,7 @@ pub(crate) fn confirm_local_bridge_runtime_authorization_and_persist(
     Ok(authorization)
 }
 
+#[cfg(test)]
 pub(crate) fn confirm_local_bridge_runtime_authorization_and_save_at(
     runtime: &LocalBridgeRuntimeState,
     authorization_code: &str,

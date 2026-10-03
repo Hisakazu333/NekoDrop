@@ -1,6 +1,6 @@
+use nekodrop_core::now_ms;
 use std::fs;
 use std::io::ErrorKind;
-use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -9,7 +9,7 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nekodrop_core::{Device, DeviceTrustState, NekoDropError, ReceivePolicy};
+use nekodrop_core::{DeviceTrustState, NekoDropError, ReceivePolicy};
 use nekodrop_network::{
     ConnectionTicket, Endpoint, PairingDecisionPayload, PairingRequestPayload, TransferOffer,
     TransferProgress, TransportStream, TCP_IO_STALL_TIMEOUT,
@@ -29,7 +29,6 @@ use nekolink_protocol::{
     LocalBridgeActionUpdatedEvent, LocalBridgeAuthorizationRequest,
     LocalBridgeBundleSendPreflightEvent, LocalBridgeBundleSendPreflightStatus,
     LocalBridgeClientIdentity, LocalBridgeEvent, LocalBridgePermissionScope, LocalBridgeRequest,
-    SignedSessionIdentityBinding,
 };
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State};
@@ -81,10 +80,10 @@ use path_dialog::{
 };
 use receive_diagnostics::{receive_port_diagnostics_from_session, receive_session_to_dto};
 use staged_bundles::{
-    delete_staged_bundle_at, find_staged_bundle_dto_at, import_staged_bundle_at,
-    import_staged_bundle_with_strategy_at, latest_bundle_import_receipt_dto_at,
-    list_staged_bundle_dtos_at, parse_import_conflict_strategy, prune_staged_bundle_dtos_at,
-    rollback_imported_bundle_at, validate_safe_bundle_id,
+    delete_staged_bundle_at, find_staged_bundle_dto_at, import_staged_bundle_with_strategy_at,
+    latest_bundle_import_receipt_dto_at, list_staged_bundle_dtos_at,
+    parse_import_conflict_strategy, prune_staged_bundle_dtos_at, rollback_imported_bundle_at,
+    validate_safe_bundle_id,
 };
 use transfer_dtos::{
     pending_offer_to_dto, pending_pairing_request_to_dto, pending_resume_summary_from_offer,
@@ -247,11 +246,4 @@ pub(crate) fn current_transfer_progress(
             )
         })
         .unwrap_or((0, None, 0, 0))
-}
-
-pub(crate) fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
 }

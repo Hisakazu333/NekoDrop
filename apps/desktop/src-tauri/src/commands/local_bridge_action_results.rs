@@ -8,6 +8,7 @@ use crate::app_state::{
 use super::bundle_helpers::{bundle_type_from_label, bundle_type_label};
 use super::dto::LocalBridgeBundleSendPreflightDto;
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(super) fn local_bridge_bundle_import_result(
     status: &str,
     action: &LocalBridgePendingImportBundleAction,
@@ -142,6 +143,7 @@ pub(super) fn local_bridge_bundle_send_result(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub(super) fn local_bridge_action_lifecycle_result(
     action: &LocalBridgePendingAction,
     lifecycle_status: LocalBridgeActionLifecycleStatus,

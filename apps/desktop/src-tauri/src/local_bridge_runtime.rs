@@ -28,7 +28,6 @@ struct LocalBridgeRuntimeContext {
 
 #[derive(Debug)]
 struct LocalBridgeHttpRequest {
-    path: String,
     body: String,
 }
 
@@ -276,7 +275,6 @@ fn parse_local_bridge_http_request(bytes: &[u8]) -> Result<LocalBridgeHttpReques
         .map_err(|error| format!("local bridge request body is not UTF-8: {error}"))?;
 
     Ok(LocalBridgeHttpRequest {
-        path: path.to_string(),
         body: body.to_string(),
     })
 }
@@ -455,7 +453,6 @@ mod tests {
 
         let parsed = parse_local_bridge_http_request(http.as_bytes()).unwrap();
 
-        assert_eq!(parsed.path, "/bridge/request");
         assert_eq!(parsed.body, request);
     }
 

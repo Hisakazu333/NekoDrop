@@ -347,9 +347,7 @@ pub(crate) fn local_bridge_retry_send_response(
     pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
 ) -> Option<LocalBridgeResponseDto> {
-    let Some(request_client) = request.client.as_ref() else {
-        return None;
-    };
+    let request_client = request.client.as_ref()?;
     let request_kind = "bundle.send";
     let request_id = request.request_id.as_str();
 
@@ -417,9 +415,7 @@ pub(crate) fn local_bridge_retry_import_response(
     pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
 ) -> Option<LocalBridgeResponseDto> {
-    let Some(request_client) = request.client.as_ref() else {
-        return None;
-    };
+    let request_client = request.client.as_ref()?;
     let request_kind = "bundle.import";
     let request_id = request.request_id.as_str();
 
@@ -487,9 +483,7 @@ pub(crate) fn local_bridge_retry_rollback_response(
     pending_actions: &[LocalBridgePendingAction],
     action_results: &[LocalBridgePendingActionResult],
 ) -> Option<LocalBridgeResponseDto> {
-    let Some(request_client) = request.client.as_ref() else {
-        return None;
-    };
+    let request_client = request.client.as_ref()?;
     let request_kind = "bundle.rollback";
     let request_id = request.request_id.as_str();
 

@@ -70,7 +70,7 @@ pub(crate) fn persist_receive_dir(state: &AppState, receive_dir: &str) -> Result
 
 pub(crate) fn persist_receive_dir_path(
     state: &AppState,
-    receive_dir_path: &PathBuf,
+    receive_dir_path: &Path,
 ) -> Result<(), String> {
     let receive_dir = receive_dir_path.display().to_string();
     let mut config = state.config.lock().map_err(|error| error.to_string())?;

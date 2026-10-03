@@ -1,8 +1,9 @@
+use nekodrop_core::now_ms;
 use std::collections::{HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use mdns_sd::{ResolvedService, ServiceDaemon, ServiceEvent, ServiceInfo};
 use nekodrop_core::{Device, DeviceId, DevicePlatform, DeviceTrustState};
@@ -408,13 +409,6 @@ fn platform_wire_label(platform: DevicePlatform) -> &'static str {
         DevicePlatform::Linux => "linux",
         DevicePlatform::Unknown => "unknown",
     }
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
 }
 
 fn service_instance_name(device_name: &str, device_id: &str) -> String {

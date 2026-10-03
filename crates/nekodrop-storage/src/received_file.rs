@@ -82,6 +82,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn write_received_file_with_resume_and_cancel<R, F, C>(
     receive_dir: &Path,
     manifest_path: &str,

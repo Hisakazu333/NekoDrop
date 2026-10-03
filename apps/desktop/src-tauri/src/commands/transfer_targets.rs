@@ -12,7 +12,7 @@ use crate::transfer_history::TransferHistoryRecord;
 use crate::trusted_devices::{trusted_record_matches, TrustedDeviceRecord};
 
 #[derive(Debug, Clone)]
-pub(super) struct TransferPeer {
+pub(crate) struct TransferPeer {
     pub(super) device_id: Option<String>,
     pub(super) name: Option<String>,
     pub(super) fingerprint: Option<String>,

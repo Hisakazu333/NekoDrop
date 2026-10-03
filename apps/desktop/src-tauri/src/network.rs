@@ -94,7 +94,7 @@ fn candidate_ipv4s_from_os() -> Vec<Ipv4Addr> {
 
     #[cfg(target_os = "macos")]
     {
-        return command_ipv4s("/sbin/ifconfig", &[]);
+        command_ipv4s("/sbin/ifconfig", &[])
     }
 
     #[cfg(all(not(target_os = "windows"), not(target_os = "macos")))]

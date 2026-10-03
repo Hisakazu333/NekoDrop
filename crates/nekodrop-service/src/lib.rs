@@ -106,6 +106,8 @@ pub enum TransferProgressEvent {
     },
 }
 
+// 会话报告为瞬态值，直接内联负载避免 Box 分配；变体大小差异可接受。
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum IncomingSessionReport {
     Transfer(TransferReceiveReport),
@@ -223,7 +225,7 @@ where
         plan.total_bytes(),
         &decision.resume_files,
         |progress| on_progress(TransferProgressEvent::Sending(progress)),
-        || should_cancel(),
+        should_cancel,
     )?;
 
     Ok(TransferSendReport { plan, sent_files })
@@ -285,7 +287,7 @@ where
         &mut session.counters,
         &session.cipher,
         |progress| on_progress(TransferProgressEvent::Sending(progress)),
-        || should_cancel(),
+        should_cancel,
     )?;
 
     Ok(TransferSendReport { plan, sent_files })
@@ -381,7 +383,7 @@ where
         &mut session.counters,
         &session.cipher,
         |progress| on_progress(TransferProgressEvent::Sending(progress)),
-        || should_cancel(),
+        should_cancel,
     )?;
 
     Ok(TransferSendReport { plan, sent_files })
@@ -550,7 +552,7 @@ pub fn accept_incoming_stream_with_cancel<D, H, P, C>(
     decide: D,
     handle_pairing: H,
     on_progress: P,
-    mut should_cancel: C,
+    should_cancel: C,
 ) -> NekoDropResult<IncomingSessionReport>
 where
     D: FnOnce(&TransferOffer) -> bool,
@@ -568,7 +570,7 @@ where
         decide,
         handle_pairing,
         on_progress,
-        || should_cancel(),
+        should_cancel,
     )
 }
 
@@ -601,7 +603,7 @@ where
                 session,
                 decide,
                 on_progress,
-                || should_cancel(),
+                &mut should_cancel,
             )
             .map(IncomingSessionReport::Transfer)
         }
@@ -613,11 +615,12 @@ where
             decide,
             handle_pairing,
             on_progress,
-            || should_cancel(),
+            should_cancel,
         ),
     }
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn accept_incoming_stream_with_encrypted_control_bundle_staging_and_cancel<D, H, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -648,7 +651,7 @@ where
                 session,
                 decide,
                 on_progress,
-                || should_cancel(),
+                &mut should_cancel,
             )
             .map(IncomingSessionReport::Transfer)
         }
@@ -660,11 +663,12 @@ where
             decide,
             handle_pairing,
             on_progress,
-            || should_cancel(),
+            should_cancel,
         ),
     }
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn accept_incoming_stream_with_authenticated_control_bundle_staging_and_cancel<D, H, P, S, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -697,6 +701,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel<
     D,
     H,
@@ -744,7 +749,7 @@ where
                 session,
                 decide,
                 on_progress,
-                || should_cancel(),
+                &mut should_cancel,
             )
             .map(IncomingSessionReport::Transfer)
         }
@@ -756,11 +761,12 @@ where
             decide,
             handle_pairing,
             on_progress,
-            || should_cancel(),
+            should_cancel,
         ),
     }
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 fn accept_plain_incoming_frame_with_cancel<D, H, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -769,7 +775,7 @@ fn accept_plain_incoming_frame_with_cancel<D, H, P, C>(
     decide: D,
     handle_pairing: H,
     on_progress: P,
-    mut should_cancel: C,
+    should_cancel: C,
 ) -> NekoDropResult<IncomingSessionReport>
 where
     D: FnOnce(&TransferOffer) -> bool,
@@ -792,7 +798,7 @@ where
                 offer,
                 decide,
                 on_progress,
-                || should_cancel(),
+                should_cancel,
             )
             .map(IncomingSessionReport::Transfer)
         }
@@ -833,7 +839,7 @@ fn accept_transfer_offer_stream_with_decision_and_cancel<D, P, C>(
     offer: TransferOffer,
     decide: D,
     on_progress: P,
-    mut should_cancel: C,
+    should_cancel: C,
 ) -> NekoDropResult<TransferReceiveReport>
 where
     D: FnOnce(&TransferOffer) -> bool,
@@ -847,13 +853,14 @@ where
         offer,
         decide,
         on_progress,
-        || should_cancel(),
+        should_cancel,
         |stream, offer, decision| {
             write_transfer_decision_for_transfer(stream, &offer.transfer_id, decision)
         },
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 fn accept_transfer_offer_stream_with_encrypted_decision_and_cancel<D, P, C>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -863,7 +870,7 @@ fn accept_transfer_offer_stream_with_encrypted_decision_and_cancel<D, P, C>(
     mut session: ActiveSessionControl,
     decide: D,
     on_progress: P,
-    mut should_cancel: C,
+    should_cancel: C,
 ) -> NekoDropResult<TransferReceiveReport>
 where
     D: FnOnce(&TransferOffer) -> bool,
@@ -881,7 +888,7 @@ where
         &keys,
         decide,
         on_progress,
-        || should_cancel(),
+        should_cancel,
         |stream, _offer, decision| {
             let message_id = session.next_message_id("decision");
             let header = session.next_send_control_header()?;
@@ -897,6 +904,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 fn accept_transfer_offer_stream_with_decision_writer_and_cancel<D, P, C, W>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -1010,7 +1018,7 @@ where
                         total_bytes: offer.total_bytes,
                     }));
                 },
-                || should_cancel(),
+                &mut should_cancel,
             )?;
             bytes_transferred = bytes_transferred
                 .saturating_add(received.bytes_written.saturating_sub(header.offset));
@@ -1047,6 +1055,7 @@ where
     })
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 fn accept_encrypted_transfer_offer_stream_with_decision_writer_and_cancel<D, P, C, W>(
     stream: &mut TcpStream,
     receive_dir: &Path,
@@ -1165,7 +1174,7 @@ where
                         total_bytes: offer.total_bytes,
                     }));
                 },
-                || should_cancel(),
+                &mut should_cancel,
             )?;
             bytes_transferred = bytes_transferred
                 .saturating_add(received.bytes_written.saturating_sub(header.offset));
