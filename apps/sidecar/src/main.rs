@@ -2,11 +2,13 @@ use std::env;
 use std::net::TcpListener;
 use std::path::PathBuf;
 
+use nekodrop_network::iroh_transport::IrohServer;
 use nekodrop_network::Endpoint;
 use nekodrop_service::{
-    accept_transfer, connection_code_for_endpoint, create_transfer_plan,
+    accept_incoming_stream, accept_transfer, connection_code_for_endpoint, create_transfer_plan,
     endpoint_from_connection_code, send_paths_with_progress, stage_text_snippet, SendPacer,
 };
+use nekolink_protocol::PairingDecisionPayload;
 
 fn main() {
     if let Err(error) = run() {
@@ -25,6 +27,7 @@ fn run() -> Result<(), String> {
     match command {
         "plan" => run_plan(&args[1..]),
         "receive" => run_receive(&args[1..]),
+        "receive-iroh" => run_receive_iroh(&args[1..]),
         "send" => run_send(&args[1..]),
         "text" => run_text(&args[1..]),
         "help" | "--help" | "-h" => {
@@ -95,6 +98,71 @@ fn run_receive(args: &[String]) -> Result<(), String> {
         );
     }
 
+    Ok(())
+}
+
+fn run_receive_iroh(args: &[String]) -> Result<(), String> {
+    let use_relays = args.iter().any(|a| a == "--relay");
+    let dir_arg = args.iter().find(|a| !a.starts_with("--")).ok_or_else(|| {
+        print_usage();
+        "receive-iroh requires <receive-dir> [--relay]".to_string()
+    })?;
+    let receive_dir = PathBuf::from(dir_arg);
+    std::fs::create_dir_all(&receive_dir)
+        .map_err(|error| format!("failed to create receive dir: {error}"))?;
+
+    let server = if use_relays {
+        IrohServer::bind_with_public_relays()
+    } else {
+        IrohServer::bind_direct_only()
+    }
+    .map_err(|error| error.to_string())?;
+
+    let endpoint = nekodrop_network::Endpoint {
+        host: server.node_id_hex(),
+        port: 0,
+        transport: nekodrop_network::TransportKind::Iroh,
+        relay_url: server.relay_url(),
+        direct_addrs: server.direct_addrs(),
+    };
+    let code = nekodrop_network::ConnectionTicket::new(endpoint)
+        .and_then(|ticket| ticket.to_code())
+        .map_err(|error| error.to_string())?;
+    println!(
+        "iroh-node={} relay={}",
+        server.node_id_hex(),
+        server.relay_url().as_deref().unwrap_or("disabled")
+    );
+    println!("code={code}");
+
+    let mut stream = server
+        .accept_transfer_stream()
+        .map_err(|error| error.to_string())?;
+    let report = accept_incoming_stream(
+        &mut stream,
+        &receive_dir,
+        |_| true,
+        |_| PairingDecisionPayload::reject("sidecar receive-iroh 不处理配对"),
+        |_| {},
+    )
+    .map_err(|error| error.to_string())?;
+    match report {
+        nekodrop_service::IncomingSessionReport::Transfer(report) => {
+            println!("received files={}", report.files.len());
+            for file in report.files {
+                println!(
+                    "received path={} bytes={} sha256={} verified={}",
+                    file.path.display(),
+                    file.bytes_written,
+                    file.sha256,
+                    file.verified
+                );
+            }
+        }
+        nekodrop_service::IncomingSessionReport::Pairing(_) => {
+            println!("received pairing (declined)");
+        }
+    }
     Ok(())
 }
 
@@ -205,6 +273,7 @@ fn print_usage() {
          Commands:\n\
          nekodrop-sidecar plan <path> [path...]\n\
          nekodrop-sidecar receive <bind-host:port> <receive-dir>\n\
+         nekodrop-sidecar receive-iroh <receive-dir> [--relay]\n\
          nekodrop-sidecar send <host:port|connection-code> <path> [path...] [--limit <KB/s>]\n\
          nekodrop-sidecar text <host:port|connection-code> <text...> [--limit <KB/s>]"
     );

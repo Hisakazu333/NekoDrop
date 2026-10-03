@@ -9,6 +9,8 @@ nekolink-protocol = { path = "../nekolink-protocol" }
 nekodrop-core = { path = "../nekodrop-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+iroh = { version = "1.3.0", default-features = false, features = ["tls-ring"] }
+tokio = { version = "1.53.2", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "macros", "test-util"] }
 
 [dev-dependencies]
 nekodrop-storage = { path = "../nekodrop-storage" }
