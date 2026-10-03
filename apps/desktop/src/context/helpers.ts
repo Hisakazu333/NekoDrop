@@ -80,6 +80,43 @@ export function isCancelMessage(msg: string): boolean {
   return msg.includes("cancel") || msg.includes("cancelled") || msg.includes("取消");
 }
 
+/* ------------------------------------------------------------------ */
+/* 发送队列 / send queue（忙线时入队，完成后自动依序发出）               */
+/* ------------------------------------------------------------------ */
+
+export type QueuedSendKind = "device" | "code";
+
+export interface QueuedSend {
+  id: string;
+  kind: QueuedSendKind;
+  /** deviceId（device）或连接码（code） */
+  target: string;
+  pathsText: string;
+  label: string;
+  enqueuedAtMs: number;
+}
+
+export const MAX_SEND_QUEUE = 20;
+
+export function enqueueSend(queue: QueuedSend[], entry: QueuedSend): QueuedSend[] {
+  if (queue.length >= MAX_SEND_QUEUE) return queue;
+  return [...queue, entry];
+}
+
+export function dequeueSend(queue: QueuedSend[]): { head: QueuedSend | null; rest: QueuedSend[] } {
+  if (queue.length === 0) return { head: null, rest: queue };
+  const [head, ...rest] = queue;
+  return { head, rest };
+}
+
+/** 队列条目摘要：首个路径名或"文本片段"，多个时附计数 */
+export function queuedSendLabel(pathsText: string): string {
+  const paths = pathsText.split("\n").map((p) => p.trim()).filter(Boolean);
+  if (paths.length === 0) return "空传输";
+  const first = lastPathSegment(paths[0]);
+  return paths.length > 1 ? `${first} 等 ${paths.length} 项` : first;
+}
+
 export async function copyTextToClipboard(text: string): Promise<void> {
   if (navigator.clipboard) {
     await navigator.clipboard.writeText(text);

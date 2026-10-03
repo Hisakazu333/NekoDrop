@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { formatBytes } from "../transferProgress";
@@ -54,8 +54,34 @@ export function SendView() {
 
   const [bundleFormOpen, setBundleFormOpen] = useState(false);
   const [stripOpen, setStripOpen] = useState(true);
+  const [composerText, setComposerText] = useState("");
   const codeReady = connectionCode.trim().length > 0;
-  const canSend = selectedPaths.length > 0 && !busy && (Boolean(selectedDevice) || codeReady);
+  const hasPayload = selectedPaths.length > 0 || composerText.trim().length > 0;
+  const targetReady = Boolean(selectedDevice) || codeReady;
+  const busySend = busy === "send";
+  // 忙线时按钮切换为"排队"语义；cancel-transfer 期间不允许新动作
+  const canSend = hasPayload && targetReady && busy !== "cancel-transfer" && busy !== "receive";
+
+  // ⌘V 粘贴：文本进输入框（文件粘贴交给系统拖拽通道）
+  useEffect(() => {
+    const onPaste = (event: ClipboardEvent) => {
+      if (connectionCodeOpen) return;
+      const text = event.clipboardData?.getData("text/plain");
+      if (text && text.trim().length > 0) {
+        setComposerText((current) => (current.length === 0 ? text : current));
+      }
+    };
+    window.addEventListener("paste", onPaste);
+    return () => window.removeEventListener("paste", onPaste);
+  }, [connectionCodeOpen]);
+
+  const submitSend = async () => {
+    if (!canSend) return;
+    const text = composerText;
+    await sendCurrentTransfer(text);
+    // 入队或开始发送后清空输入框（失败时 stage 报错则保留）
+    setComposerText("");
+  };
 
   // 橙色目标动作：已选设备显示去向；点按跳设备页换目标（连接码模式则先收起）
   const targetLabel = connectionCodeOpen
@@ -71,15 +97,19 @@ export function SendView() {
     setMode("devices");
   };
 
-  // 状态位只说真话：队列条目 / 接收中 / 待选择文件
+  // 状态位只说真话：文本/队列条目 / 接收中 / 待选择
   const noteText =
-    plan && selectedPaths.length > 0
-      ? `${selectedPaths.length} 项 · ${formatBytes(plan.total_bytes)}`
-      : receiveSession
-        ? "收件开启"
-        : selectedDevice
-          ? `待发往 ${selectedDevice.name}`
-          : "待选择文件";
+    busySend && hasPayload
+      ? "传输中 · 点按加入队列"
+      : plan && selectedPaths.length > 0
+        ? `${selectedPaths.length} 项${composerText.trim() ? " + 文本" : ""} · ${formatBytes(plan.total_bytes)}`
+        : composerText.trim()
+          ? "文本待发"
+          : receiveSession
+            ? "收件开启"
+            : selectedDevice
+              ? `待发往 ${selectedDevice.name}`
+              : "待选择文件";
 
   const stripDevices = [
     ...nearbyDevices.map((device) => ({ id: device.id, name: device.name, online: true })),
@@ -120,11 +150,16 @@ export function SendView() {
             />
           ) : (
             <textarea
-              onPointerDown={(event) => event.preventDefault()}
-              placeholder={selectedPaths.length === 0 ? "把文件拖到这里，或点击选择" : " "}
-              readOnly
+              onChange={(event) => setComposerText(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+                  event.preventDefault();
+                  void submitSend();
+                }
+              }}
+              placeholder={selectedPaths.length === 0 ? "输入文本直接发送，或把文件拖到这里" : "可附上说明文字一起发送"}
               rows={1}
-              style={{ pointerEvents: "none", caretColor: "transparent" }}
+              value={composerText}
             />
           )}
 
@@ -219,11 +254,19 @@ export function SendView() {
               {noteText}
             </span>
             <button
-              aria-label="发送"
+              aria-label={busySend ? "排队发送" : "发送"}
               className="send-button"
               disabled={!canSend}
-              onClick={sendCurrentTransfer}
-              title={selectedDevice ? `发送至 ${selectedDevice.name}` : codeReady ? "通过连接码发送" : "先选择目标"}
+              onClick={() => void submitSend()}
+              title={
+                !targetReady
+                  ? "先选择目标"
+                  : busySend
+                    ? "正在传输，点按加入队列自动依序发送"
+                    : selectedDevice
+                      ? `发送至 ${selectedDevice.name}（⌘↩）`
+                      : "通过连接码发送（⌘↩）"
+              }
               type="button"
             >
               <Icon name="arrow-up" />

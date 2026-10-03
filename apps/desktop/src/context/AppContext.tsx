@@ -2,7 +2,8 @@ import {
   EMPTY_TRANSFER_METRICS, TransferMetrics, BusyMode, ComposerMode, AppearanceMode,
   ReceivePolicyMode, errorMessage, normalizeReceivePolicy, readInitialAppearance,
   portFromBindAddr, buildPathPayload, uniquePaths, keepIfEqual, resetTransferMetrics, APPEARANCE_STORAGE_KEY,
-  lastPathSegment, isReceiveTransferActivePhase, isCancelMessage, copyTextToClipboard
+  lastPathSegment, isReceiveTransferActivePhase, isCancelMessage, copyTextToClipboard,
+  QueuedSend, QueuedSendKind, enqueueSend, dequeueSend, queuedSendLabel
 } from "./helpers";
 import { useSettingsDomain } from "./settings";
 import { useComposerDomain } from "./composer";
@@ -178,7 +179,10 @@ interface AppContextType {
   startReceive: (options?: { receiveDirOverride?: string; receivePortOverride?: number; silent?: boolean }) => Promise<void>;
   stopReceive: () => Promise<void>;
   sendFilesToDevice: (device: DeviceDto) => Promise<void>;
-  sendCurrentTransfer: () => Promise<void>;
+  sendCurrentTransfer: (textSnippet?: string) => Promise<void>;
+  sendQueue: QueuedSend[];
+  cancelQueuedSend: (id: string) => void;
+  clearSendQueue: () => void;
   cancelCurrentTransfer: () => Promise<void>;
   resendTransfer: (transfer: TransferDto) => Promise<void>;
   openTransferLocation: (transfer: TransferDto) => Promise<void>;
@@ -235,6 +239,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [transferMetrics, setTransferMetrics] = useState<TransferMetrics>(EMPTY_TRANSFER_METRICS);
+  const [sendQueue, setSendQueue] = useState<QueuedSend[]>([]);
+  const queueFlushInFlight = useRef(false);
+  const queueSeq = useRef(0);
 
   const desktopRuntime = useMemo(() => isTauriRuntime(), []);
   const previousTransferStatus = useRef<TransferStatusDto | null>(null);
@@ -611,26 +618,23 @@ const {
     }
   }
 
-  async function sendFiles() {
-    const payload = transferPaths;
-    if (payload.length === 0) {
-      setMode("send");
-      setError("未选择文件");
-      return;
-    }
-
+  // 共享发送内核：设备或连接码，直接发送与队列出队共用
+  async function runSend(kind: QueuedSendKind, target: string, pathsText: string, successToast: string) {
     setBusy("send");
     setError(null);
     setSendReport(null);
     try {
-      const report = await invokeCommand<SendReportDto>("send_paths_to_code", {
-        connectionCode: trimmedConnectionCode,
-        pathsText: payload.join("\n")
-      });
+      const command = kind === "device" ? "send_paths_to_device" : "send_paths_to_code";
+      const args =
+        kind === "device"
+          ? { deviceId: target, pathsText }
+          : { connectionCode: target, pathsText };
+      const report = await invokeCommand<SendReportDto>(command, args);
       setSendReport(report);
-      setToast(`发送完成：${report.file_count} 个文件`);
+      setToast(`${successToast}：${report.file_count} 个文件`);
       await refreshTransfers();
     } catch (nextError) {
+      setMode("send");
       const message = errorMessage(nextError);
       if (isCancelMessage(message)) {
         setToast("传输已取消");
@@ -641,6 +645,17 @@ const {
     } finally {
       setBusy(null);
     }
+  }
+
+  async function sendFiles() {
+    const payload = transferPaths;
+    if (payload.length === 0) {
+      setMode("send");
+      setError("未选择文件");
+      return;
+    }
+
+    await runSend("code", trimmedConnectionCode, payload.join("\n"), "发送完成");
   }
 
   async function sendFilesToDevice(device: DeviceDto) {
@@ -651,50 +666,90 @@ const {
       return;
     }
 
-    setBusy("send");
-    setError(null);
-    setSendReport(null);
-    try {
-      const report = await invokeCommand<SendReportDto>("send_paths_to_device", {
-        deviceId: device.id,
-        pathsText: payload.join("\n")
-      });
-      setSendReport(report);
-      setToast(`已发送到 ${device.name}`);
-      await refreshTransfers();
-    } catch (nextError) {
-      setMode("send");
-      const message = errorMessage(nextError);
-      if (isCancelMessage(message)) {
-        setToast("传输已取消");
-      } else {
-        setError(message);
-      }
-      await refreshTransfers().catch(() => undefined);
-    } finally {
-      setBusy(null);
-    }
+    await runSend("device", device.id, payload.join("\n"), `已发送到 ${device.name}`);
   }
 
-  async function sendCurrentTransfer() {
-    if (transferPaths.length === 0) {
+  async function sendCurrentTransfer(textSnippet?: string) {
+    let payload = transferPaths;
+    if (textSnippet != null && textSnippet.trim().length > 0) {
+      try {
+        const snippetPath = await invokeCommand<string>("stage_text_snippet", {
+          text: textSnippet
+        });
+        payload = uniquePaths([snippetPath, ...payload]);
+      } catch (nextError) {
+        setError(errorMessage(nextError));
+        return;
+      }
+    }
+    if (payload.length === 0) {
       setMode("send");
       setError("未选择文件");
       return;
     }
 
+    // 解析目标：优先设备，其次连接码
+    let kind: QueuedSendKind | null = null;
+    let target = "";
+    let successToast = "";
     if (selectedDevice) {
-      await sendFilesToDevice(selectedDevice);
+      kind = "device";
+      target = selectedDevice.id;
+      successToast = `已发送到 ${selectedDevice.name}`;
+    } else if (trimmedConnectionCode.length > 0) {
+      kind = "code";
+      target = trimmedConnectionCode;
+      successToast = "发送完成";
+    } else {
+      setMode("send");
+      setError("选择目标");
       return;
     }
 
-    if (trimmedConnectionCode.length > 0) {
-      await sendFiles();
+    // 忙线 → 入队；空闲 → 立即发送
+    if (busy !== null) {
+      queueSeq.current += 1;
+      const entry: QueuedSend = {
+        id: `queue-${Date.now()}-${queueSeq.current}`,
+        kind,
+        target,
+        pathsText: payload.join("\n"),
+        label: queuedSendLabel(payload.join("\n")),
+        enqueuedAtMs: Date.now()
+      };
+      const next = enqueueSend(sendQueue, entry);
+      if (next === sendQueue) {
+        setError(`队列已满（最多 20 项）`);
+        return;
+      }
+      setSendQueue(next);
+      clearQueue();
+      setToast(`已加入队列（第 ${next.length} 位）：${entry.label}`);
       return;
     }
 
-    setMode("send");
-    setError("选择目标");
+    await runSend(kind, target, payload.join("\n"), successToast);
+  }
+
+  // 空闲时自动出队发送（失败不回队，直接报错继续下一条）
+  useEffect(() => {
+    if (busy !== null || queueFlushInFlight.current) return;
+    const { head, rest } = dequeueSend(sendQueue);
+    if (!head) return;
+    queueFlushInFlight.current = true;
+    setSendQueue(rest);
+    void runSend(head.kind, head.target, head.pathsText, `队列发送完成（${head.label}）`).finally(() => {
+      queueFlushInFlight.current = false;
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [busy, sendQueue]);
+
+  function cancelQueuedSend(id: string) {
+    setSendQueue((current) => current.filter((entry) => entry.id !== id));
+  }
+
+  function clearSendQueue() {
+    setSendQueue([]);
   }
 
   async function cancelCurrentTransfer() {
@@ -968,6 +1023,9 @@ const {
     stopReceive,
     sendFilesToDevice,
     sendCurrentTransfer,
+    sendQueue,
+    cancelQueuedSend,
+    clearSendQueue,
     cancelCurrentTransfer,
     resendTransfer,
     openTransferLocation,
