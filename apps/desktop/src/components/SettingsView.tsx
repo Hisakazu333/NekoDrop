@@ -38,6 +38,9 @@ export function SettingsView() {
     pruneLocalBridgeAuthorizations,
     autoCopyTextSnippets,
     setTextSnippetAutoCopy,
+    sendLimitInput,
+    setSendLimitInput,
+    saveSendLimit,
     setMode,
     busy
   } = useAppContext();
@@ -84,6 +87,23 @@ export function SettingsView() {
             onChange={(event) => setBindPort(event.target.value)}
             pattern="[0-9]*"
             value={bindPort}
+          />
+        </div>
+        <div className="form-row">
+          <div className="form-label">
+            发送限速<small>KB/s，0 = 不限速</small>
+          </div>
+          <input
+            inputMode="numeric"
+            onBlur={() => {
+              void saveSendLimit();
+            }}
+            onChange={(event) => setSendLimitInput(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void saveSendLimit();
+            }}
+            pattern="[0-9]*"
+            value={sendLimitInput}
           />
         </div>
         <div className="form-row">

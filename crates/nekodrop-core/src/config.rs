@@ -14,6 +14,8 @@ pub struct AppConfig {
     pub tray_enabled: bool,
     pub discovery_enabled: bool,
     pub receive_policy: ReceivePolicy,
+    /// 发送限速（KB/s），0 = 不限
+    pub send_limit_kbps: u32,
 }
 
 impl Default for AppConfig {
@@ -26,6 +28,7 @@ impl Default for AppConfig {
             tray_enabled: false,
             discovery_enabled: true,
             receive_policy: ReceivePolicy::AlwaysAsk,
+            send_limit_kbps: 0,
         }
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{NekoDropError, NekoDropResult};
 use nekodrop_network::{
@@ -1682,6 +1682,70 @@ fn next_transfer_id() -> String {
     format!("transfer-{millis}-{seq}")
 }
 
+/* ------------------------------------------------------------------ */
+/* 发送限速 / send throttle                                            */
+/* ------------------------------------------------------------------ */
+
+/// 单次最长睡眠：保证取消标志在 100ms 内仍被协议层轮询到。
+pub const SEND_PACER_MAX_SLEEP_NS: u128 = 100 * 1_000_000;
+
+/// 纯计算：本窗口已发 bytes、已耗 elapsed_ns 时，为守住 limit_bps 还需睡多久。
+/// None 表示无需睡眠（不限速或尚未超速）。
+pub fn throttle_sleep_ns(limit_bps: u64, window_bytes: u64, elapsed_ns: u128) -> Option<u128> {
+    if limit_bps == 0 || window_bytes == 0 {
+        return None;
+    }
+    // 允许发掉的字节 = 速率 × 已耗时间；超出部分折算成需要等待的时间
+    let allowed_ns = (window_bytes as u128)
+        .saturating_mul(1_000_000_000)
+        .saturating_div(limit_bps as u128);
+    if allowed_ns <= elapsed_ns {
+        return None;
+    }
+    Some((allowed_ns - elapsed_ns).min(SEND_PACER_MAX_SLEEP_NS))
+}
+
+/// 进度回调层限速器：在发送线程的块间隙就地睡眠，无需改动协议签名。
+pub struct SendPacer {
+    limit_bps: u64,
+    window_start: Instant,
+    window_anchor: u64,
+    window_bytes: u64,
+}
+
+impl SendPacer {
+    /// limit_kbps = 0 表示不限速。
+    pub fn from_kbps(limit_kbps: u32) -> Self {
+        Self {
+            limit_bps: u64::from(limit_kbps) * 1024,
+            window_start: Instant::now(),
+            window_anchor: 0,
+            window_bytes: 0,
+        }
+    }
+
+    pub fn is_unlimited(&self) -> bool {
+        self.limit_bps == 0
+    }
+
+    /// 观测累计进度并在超速时睡眠。窗口重置保证长传输不会累计历史等待。
+    pub fn observe(&mut self, cumulative_bytes: u64) {
+        if self.is_unlimited() {
+            return;
+        }
+        self.window_bytes = cumulative_bytes.saturating_sub(self.window_anchor);
+        let elapsed = self.window_start.elapsed().as_nanos();
+        if let Some(sleep_ns) = throttle_sleep_ns(self.limit_bps, self.window_bytes, elapsed) {
+            std::thread::sleep(Duration::from_nanos(sleep_ns as u64));
+        }
+        // 窗口超过 1 秒则重新锚定，避免长时间运行后浮点式漂移
+        if self.window_start.elapsed() >= Duration::from_secs(1) {
+            self.window_anchor = cumulative_bytes;
+            self.window_start = Instant::now();
+        }
+    }
+}
+
 /// 文本快送暂存：把文本写入 base_dir 下的时间戳命名 .txt（同秒重名追加序号），
 /// 供桌面端与 sidecar CLI 共用。
 pub const MAX_TEXT_SNIPPET_BYTES: usize = 2 * 1024 * 1024;
@@ -3079,5 +3143,64 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&second).unwrap(), "second");
         assert!(first.to_string_lossy().ends_with(".txt"));
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn throttle_math_holds_the_rate() {
+        // 1 MB/s 限速：窗口内 256KiB 已耗 0.2s → 允许 0.25s，还需睡 0.05s
+        let sleep = throttle_sleep_ns(1024 * 1024, 256 * 1024, 200_000_000).unwrap();
+        assert_eq!(sleep, 50_000_000, "got {sleep}");
+        // 需要等更久时被单次封顶（保证取消响应）
+        let capped_case = throttle_sleep_ns(1024 * 1024, 256 * 1024, 0).unwrap();
+        assert_eq!(capped_case, SEND_PACER_MAX_SLEEP_NS);
+        // 未超速不睡
+        assert_eq!(
+            throttle_sleep_ns(1024 * 1024, 100 * 1024, 100_000_000),
+            None
+        );
+        // 不限速 / 零字节不睡
+        assert_eq!(throttle_sleep_ns(0, 999_999, 1), None);
+        assert_eq!(throttle_sleep_ns(1024, 0, 1), None);
+        // 单次睡眠封顶 100ms（保证取消响应）
+        let capped = throttle_sleep_ns(1, 1024 * 1024, 0).unwrap();
+        assert_eq!(capped, SEND_PACER_MAX_SLEEP_NS);
+    }
+
+    #[test]
+    fn send_paths_respects_throttle_on_loopback() {
+        // 回环实测：512KB 数据限 512KB/s，至少应耗约 1 秒（下限放宽到 0.6s 抗 CI 抖动）
+        let dir = std::env::temp_dir().join(format!("nekodrop-throttle-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let payload = dir.join("payload.bin");
+        std::fs::write(&payload, vec![7_u8; 512 * 1024]).unwrap();
+        let receive_dir = dir.join("recv");
+        std::fs::create_dir_all(&receive_dir).unwrap();
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            accept_transfer(&listener, &receive_dir).unwrap();
+        });
+
+        let mut pacer = SendPacer::from_kbps(512);
+        let started = Instant::now();
+        let report = send_paths_with_progress(
+            &Endpoint::tcp(addr.ip().to_string(), addr.port()),
+            &[payload],
+            |event| {
+                if let TransferProgressEvent::Sending(progress) = event {
+                    pacer.observe(progress.bytes_transferred);
+                }
+            },
+        )
+        .unwrap();
+        assert_eq!(report.sent_files.len(), 1);
+        let elapsed = started.elapsed();
+        server.join().unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(
+            elapsed >= Duration::from_millis(600),
+            "throttled transfer finished too fast: {elapsed:?}"
+        );
     }
 }

@@ -175,6 +175,9 @@ interface AppContextType {
   saveReceiveDir: () => Promise<void>;
   saveReceivePort: () => Promise<void>;
   updateReceivePolicy: (policy: ReceivePolicyMode) => Promise<void>;
+  sendLimitInput: string;
+  setSendLimitInput: (value: string) => void;
+  saveSendLimit: () => Promise<void>;
   saveDeviceName: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   scanPaths: (paths?: string[], manual?: string) => Promise<void>;
@@ -269,6 +272,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 const {
     snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
+    sendLimitInput, setSendLimitInput, saveSendLimit,
     setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
     refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort,
     updateReceivePolicy, saveDeviceName, openPath,
@@ -1102,6 +1106,9 @@ const {
     chooseReceiveDir,
     saveReceiveDir,
     saveReceivePort,
+    sendLimitInput,
+    setSendLimitInput,
+    saveSendLimit,
     updateReceivePolicy,
     saveDeviceName,
     openPath,
