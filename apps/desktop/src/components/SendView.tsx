@@ -78,7 +78,7 @@ export function SendView() {
     <div className="send-view">
       <div className="send-hero">
         <div className="hero-avatar">
-          <Icon name="paw" />
+          <Icon name="mascot" />
         </div>
         <h2>要发送什么？</h2>
       </div>
@@ -102,7 +102,7 @@ export function SendView() {
           ) : (
             <textarea
               onPointerDown={(event) => event.preventDefault()}
-              placeholder={selectedPaths.length === 0 ? "把文件或文件夹拖到这里，或点击下方选择" : " "}
+              placeholder={selectedPaths.length === 0 ? "把文件拖到这里，或点击选择" : " "}
               readOnly
               rows={1}
               style={{ pointerEvents: "none", caretColor: "transparent" }}
@@ -217,7 +217,7 @@ export function SendView() {
           <div className="composer-strip">
             <span className="strip-label">点设备直接发送</span>
             <div className="strip-dots">
-              {stripDevices.length === 0 && <span className="strip-none">暂无附近设备</span>}
+              {stripDevices.length === 0 && <span className="strip-none">等待发现设备…</span>}
               {stripDevices.slice(0, 8).map((device) => (
                 <button
                   className={`strip-dot ${device.online ? "" : "is-offline"}`}

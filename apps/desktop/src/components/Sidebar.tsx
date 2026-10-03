@@ -3,6 +3,7 @@ import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 
 interface SidebarProps {
+  collapsed?: boolean;
   inboxCount: number;
   onToggleInbox: () => void;
 }
@@ -11,7 +12,7 @@ interface SidebarProps {
  * 侧栏（1:1 Notion 式）：主页芯片 + 图标行 + 设置进度卡 + 设备行 + 工具行 + 底部胶囊
  * Notion-style sidebar: home chip, icon row, setup card, device rows, footer pill.
  */
-export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
+export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: SidebarProps) {
   const {
     mode,
     setMode,
@@ -21,7 +22,9 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
     selectedDeviceId,
     setSelectedDeviceId,
     setConnectionCodeOpen,
-    setConnectionCode
+    setConnectionCode,
+    appearance,
+    setAppearance
   } = useAppContext();
 
   const [filterOpen, setFilterOpen] = useState(false);
@@ -56,16 +59,24 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
     setMode("send");
   };
 
+  const openHelp = () => {
+    try {
+      window.open("https://github.com/Hisakazu333/NekoDrop/tree/main/docs", "_blank", "noopener");
+    } catch {
+      /* 桌面端无默认浏览器句柄时静默忽略 / ignore when webview blocks popups */
+    }
+  };
+
   return (
-    <aside className="sidebar">
+    <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
       <div className="side-top">
         <button
           className={`home-chip ${mode === "send" ? "is-active" : ""}`}
           onClick={() => setMode("send")}
           type="button"
         >
-          <Icon name="paw" />
-          <span>发送</span>
+          <Icon name="home" />
+          <span>主页</span>
         </button>
         <button
           aria-label="收件箱"
@@ -82,6 +93,15 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
         </button>
         <button aria-label="历史" className="icon-btn" onClick={() => setMode("transfers")} title="历史" type="button">
           <Icon name="clock" />
+        </button>
+        <button
+          aria-label="切换主题"
+          className="icon-btn"
+          onClick={() => setAppearance(appearance === "dark" ? "light" : "dark")}
+          title={appearance === "dark" ? "切换至浅色" : "切换至深色"}
+          type="button"
+        >
+          <Icon name={appearance === "dark" ? "sun" : "moon"} />
         </button>
         <span className="spacer" />
         <button
@@ -110,7 +130,7 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
       )}
 
       <button className="setup-card" onClick={() => setMode("settings")} title="查看设置" type="button">
-        <span className="setup-title">完成初始设置</span>
+        <span className="setup-title">设置你的工作空间</span>
         <span className="setup-track">
           <i style={{ width: `${setupPercent}%` }} />
           <span className="setup-knob" style={{ left: `${setupPercent}%` }}>
@@ -172,6 +192,13 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
           <Icon name="clock" />
           <span className="row-name">历史</span>
         </button>
+        <button className="side-row" onClick={openHelp} type="button">
+          <span className="row-icon-wrap">
+            <Icon name="help" />
+            <span className="dot" />
+          </span>
+          <span className="row-name">帮助</span>
+        </button>
         <button className="side-row" onClick={() => setMode("settings")} type="button">
           <Icon name="settings" />
           <span className="row-name">设置</span>
@@ -185,7 +212,7 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
           <kbd>⌘N</kbd>
         </button>
         <button aria-label="通过连接码发送" className="compose-circle" onClick={openConnectionCode} title="通过连接码发送" type="button">
-          <Icon name="link" />
+          <Icon name="compose" />
         </button>
       </div>
     </aside>
