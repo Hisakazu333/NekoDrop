@@ -2796,7 +2796,7 @@ dependencies = [
 
 [[package]]
 name = "nekodrop-core"
-version = "0.1.0"
+version = "0.1.1"
 
 [[package]]
 name = "nekodrop-desktop"
@@ -2821,7 +2821,7 @@ dependencies = [
 
 [[package]]
 name = "nekodrop-network"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "iroh",
  "nekodrop-core",
@@ -2834,7 +2834,7 @@ dependencies = [
 
 [[package]]
 name = "nekodrop-service"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nekodrop-core",
  "nekodrop-network",
@@ -2844,7 +2844,7 @@ dependencies = [
 
 [[package]]
 name = "nekodrop-sidecar"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "nekodrop-network",
  "nekodrop-service",
@@ -2853,7 +2853,7 @@ dependencies = [
 
 [[package]]
 name = "nekodrop-storage"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "filetime",
  "hex",
@@ -2869,7 +2869,7 @@ dependencies = [
 
 [[package]]
 name = "nekolink-protocol"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "aes-gcm",
  "base64 0.22.1",
