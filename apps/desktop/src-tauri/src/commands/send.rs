@@ -182,12 +182,18 @@ pub(crate) fn send_paths_to_endpoint_with_history_id(
     let transfer_status = state.transfer_status.clone();
     let local_bridge_runtime = state.local_bridge_runtime.clone();
     let cancel_for_send = cancel.clone();
+    let send_limit_kbps = state
+        .config
+        .lock()
+        .map(|config| config.send_limit_kbps)
+        .unwrap_or(0);
     let report = send_with_auto_retry(
         || {
             let transfer_status = transfer_status.clone();
             let runtime_for_progress = local_bridge_runtime.clone();
             let transfer_id_for_progress = transfer_id.clone();
             let cancel_for_attempt = cancel_for_send.clone();
+            let mut pacer_for_attempt = nekodrop_service::SendPacer::from_kbps(send_limit_kbps);
             let local_device_identity = local_device_identity.clone();
             let peer_for_verifier = peer.clone();
             send_plan_with_authenticated_session_peer_verifier_and_cancel(
@@ -204,6 +210,9 @@ pub(crate) fn send_paths_to_endpoint_with_history_id(
                         .map_err(NekoDropError::Network)
                 },
                 move |event| {
+                    if let nekodrop_service::TransferProgressEvent::Sending(ref progress) = event {
+                        pacer_for_attempt.observe(progress.bytes_transferred);
+                    }
                     if let Some(status) = status_from_progress_event("send", None, event) {
                         set_transfer_status_and_push_bridge_event(
                             &transfer_status,

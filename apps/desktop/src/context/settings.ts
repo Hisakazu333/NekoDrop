@@ -20,6 +20,8 @@ export function useSettingsDomain(deps: SettingsDeps) {
 
   const [bindPort, setBindPort] = useState("45821");
 
+  const [sendLimitInput, setSendLimitInput] = useState("0");
+
   const [receiveDir, setReceiveDir] = useState("~/Downloads/NekoDrop");
 
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
@@ -30,6 +32,7 @@ export function useSettingsDomain(deps: SettingsDeps) {
     setDeviceNameInput(nextSnapshot.device_name);
     setReceiveDir(nextSnapshot.receive_dir);
     setBindPort(String(nextSnapshot.receive_port));
+    setSendLimitInput(String(nextSnapshot.send_limit_kbps ?? 0));
     setReceivePolicy(normalizeReceivePolicy(nextSnapshot.receive_policy));
   }
 
@@ -81,6 +84,27 @@ export function useSettingsDomain(deps: SettingsDeps) {
       setBindPort(String(nextReceivePort));
       setSnapshot((current) => (current ? { ...current, receive_port: nextReceivePort } : current));
       setToast("默认端口已保存");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function saveSendLimit() {
+    const nextLimit = Number.parseInt(sendLimitInput.trim(), 10);
+    if (!Number.isFinite(nextLimit) || nextLimit < 0 || nextLimit > 1_000_000) {
+      setError("限速需为 0-1000000 KB/s（0 = 不限）");
+      return;
+    }
+    if (nextLimit === snapshot?.send_limit_kbps) return;
+    setBusy("pick-receive");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_send_limit", { sendLimitKbps: nextLimit });
+      setSendLimitInput(String(nextLimit));
+      setSnapshot((current) => (current ? { ...current, send_limit_kbps: nextLimit } : current));
+      setToast(nextLimit === 0 ? "已解除发送限速" : `发送限速：${nextLimit} KB/s`);
     } catch (nextError) {
       setError(errorMessage(nextError));
     } finally {
@@ -143,7 +167,7 @@ export function useSettingsDomain(deps: SettingsDeps) {
   return {
     snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
     setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
-    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort,
+    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort, sendLimitInput, setSendLimitInput, saveSendLimit,
     updateReceivePolicy, saveDeviceName, openPath,
   };
 }

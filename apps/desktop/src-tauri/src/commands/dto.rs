@@ -6,6 +6,7 @@ pub struct AppSnapshot {
     pub receive_dir: String,
     pub receive_port: u16,
     pub receive_policy: String,
+    pub send_limit_kbps: u32,
     pub discovery_enabled: bool,
     pub tray_enabled: bool,
     pub device_identity: DeviceIdentityDto,

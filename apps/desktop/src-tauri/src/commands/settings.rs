@@ -49,6 +49,20 @@ pub fn set_device_name(state: State<'_, AppState>, device_name: String) -> Resul
 }
 
 #[tauri::command(async)]
+pub fn set_send_limit(state: State<'_, AppState>, send_limit_kbps: u32) -> Result<(), String> {
+    let send_limit_kbps = send_limit_kbps.min(1_000_000);
+    let mut config = state.config.lock().map_err(|error| error.to_string())?;
+    if config.send_limit_kbps == send_limit_kbps {
+        return Ok(());
+    }
+    let mut next_config = config.clone();
+    next_config.send_limit_kbps = send_limit_kbps;
+    save_app_config(&next_config)?;
+    *config = next_config;
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn open_path(path: String) -> Result<(), String> {
     let target = expand_home_dir(path.trim());
     if !target.exists() {
