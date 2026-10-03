@@ -1682,6 +1682,38 @@ fn next_transfer_id() -> String {
     format!("transfer-{millis}-{seq}")
 }
 
+/// 文本快送暂存：把文本写入 base_dir 下的时间戳命名 .txt（同秒重名追加序号），
+/// 供桌面端与 sidecar CLI 共用。
+pub const MAX_TEXT_SNIPPET_BYTES: usize = 2 * 1024 * 1024;
+
+pub fn stage_text_snippet(base_dir: &Path, text: &str, now_millis: u64) -> NekoDropResult<PathBuf> {
+    let io_error = |error: std::io::Error| NekoDropError::Io {
+        kind: error.kind().to_string(),
+        message: error.to_string(),
+    };
+    let dir = base_dir.join("nekodrop-snippets");
+    std::fs::create_dir_all(&dir).map_err(io_error)?;
+    let seconds = (now_millis / 1000) % 86_400;
+    let (hour, minute, second) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
+    // 同一秒重复发送时避免覆盖：文件已存在则追加序号
+    let mut seq = 0;
+    loop {
+        let suffix = if seq == 0 {
+            String::new()
+        } else {
+            format!("-{seq}")
+        };
+        let path = dir.join(format!(
+            "NekoDrop 文本 {hour:02}{minute:02}{second:02}{suffix}.txt"
+        ));
+        if !path.exists() {
+            std::fs::write(&path, text).map_err(io_error)?;
+            return Ok(path);
+        }
+        seq += 1;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -3035,5 +3067,17 @@ mod tests {
         )
         .unwrap();
         root
+    }
+
+    #[test]
+    fn stage_text_snippet_writes_readable_unique_files() {
+        let base = std::env::temp_dir().join(format!("nekodrop-svc-test-{}", std::process::id()));
+        let first = stage_text_snippet(&base, "hello neko", 1_000_000_000).unwrap();
+        let second = stage_text_snippet(&base, "second", 1_000_000_000).unwrap();
+        assert_ne!(first, second);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "hello neko");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "second");
+        assert!(first.to_string_lossy().ends_with(".txt"));
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use nekodrop_network::Endpoint;
 use nekodrop_service::{
     accept_transfer, connection_code_for_endpoint, create_transfer_plan,
-    endpoint_from_connection_code, send_paths,
+    endpoint_from_connection_code, send_paths, stage_text_snippet,
 };
 
 fn main() {
@@ -26,6 +26,7 @@ fn run() -> Result<(), String> {
         "plan" => run_plan(&args[1..]),
         "receive" => run_receive(&args[1..]),
         "send" => run_send(&args[1..]),
+        "text" => run_text(&args[1..]),
         "help" | "--help" | "-h" => {
             print_usage();
             Ok(())
@@ -119,6 +120,36 @@ fn run_send(args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
+fn run_text(args: &[String]) -> Result<(), String> {
+    if args.len() < 2 {
+        print_usage();
+        return Err("text requires <host:port|connection-code> <text...>".into());
+    }
+
+    let endpoint = parse_endpoint_or_connection_code(&args[0])?;
+    let text = args[1..].join(" ");
+    if text.trim().is_empty() {
+        return Err("text cannot be empty".into());
+    }
+    let now_millis = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    let snippet = stage_text_snippet(&std::env::temp_dir(), &text, now_millis)
+        .map_err(|error| error.to_string())?;
+    let report =
+        send_paths(&endpoint, std::slice::from_ref(&snippet)).map_err(|error| error.to_string());
+    // 发送结束（成败皆然）清理暂存文件
+    let _ = std::fs::remove_file(&snippet);
+    let report = report?;
+    println!(
+        "sent text bytes={} root={}",
+        report.plan.total_bytes(),
+        report.plan.manifest.root_name
+    );
+    Ok(())
+}
+
 fn parse_endpoint_or_connection_code(value: &str) -> Result<Endpoint, String> {
     if value.starts_with("nekodrop-v1;") {
         return endpoint_from_connection_code(value).map_err(|error| error.to_string());
@@ -140,6 +171,7 @@ fn print_usage() {
          Commands:\n\
          nekodrop-sidecar plan <path> [path...]\n\
          nekodrop-sidecar receive <bind-host:port> <receive-dir>\n\
-         nekodrop-sidecar send <host:port|connection-code> <path> [path...]"
+         nekodrop-sidecar send <host:port|connection-code> <path> [path...]\n\
+         nekodrop-sidecar text <host:port|connection-code> <text...>"
     );
 }
