@@ -37,41 +37,9 @@ pub fn stage_text_snippet(text: String) -> Result<String, String> {
         return Err("文本超过 2 MB 上限，请改用文件发送".to_string());
     }
     let now_millis = u64::try_from(nekodrop_core::now_ms()).unwrap_or(0);
-    stage_text_snippet_at(&std::env::temp_dir(), &text, now_millis)
+    nekodrop_service::stage_text_snippet(&std::env::temp_dir(), &text, now_millis)
         .map(|path| path.to_string_lossy().into_owned())
         .map_err(|error| error.to_string())
-}
-
-fn stage_text_snippet_at(
-    base: &Path,
-    text: &str,
-    now_millis: u64,
-) -> Result<PathBuf, NekoDropError> {
-    let io_error = |error: std::io::Error| NekoDropError::Io {
-        kind: error.kind().to_string(),
-        message: error.to_string(),
-    };
-    let dir = base.join("nekodrop-snippets");
-    std::fs::create_dir_all(&dir).map_err(io_error)?;
-    let seconds = (now_millis / 1000) % 86_400;
-    let (hour, minute, second) = (seconds / 3600, (seconds % 3600) / 60, seconds % 60);
-    // 同一秒重复发送时避免覆盖：文件已存在则追加序号
-    let mut seq = 0;
-    loop {
-        let suffix = if seq == 0 {
-            String::new()
-        } else {
-            format!("-{seq}")
-        };
-        let path = dir.join(format!(
-            "NekoDrop 文本 {hour:02}{minute:02}{second:02}{suffix}.txt"
-        ));
-        if !path.exists() {
-            std::fs::write(&path, text).map_err(io_error)?;
-            return Ok(path);
-        }
-        seq += 1;
-    }
 }
 
 #[tauri::command(async)]
@@ -444,26 +412,16 @@ pub(crate) fn is_retryable_send_error(error: &nekodrop_core::NekoDropError) -> b
 
 #[cfg(test)]
 mod text_snippet_tests {
-    use super::*;
+    // 实现已下沉 nekodrop-service::stage_text_snippet；这里保留桌面命令侧的
+    // 长度上限与空文本行为断言。
+    use nekodrop_service::{stage_text_snippet, MAX_TEXT_SNIPPET_BYTES};
 
     #[test]
-    fn stages_text_as_readable_file() {
-        let base = std::env::temp_dir().join(format!("nekodrop-test-{}", std::process::id()));
-        let path = stage_text_snippet_at(&base, "你好，世界", 1_000_000_000).unwrap();
-        let content = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(content, "你好，世界");
-        assert!(path.to_string_lossy().ends_with(".txt"));
-        let _ = std::fs::remove_dir_all(&base);
-    }
-
-    #[test]
-    fn same_second_writes_do_not_collide() {
-        let base = std::env::temp_dir().join(format!("nekodrop-test-2-{}", std::process::id()));
-        let first = stage_text_snippet_at(&base, "one", 2_000_000_000).unwrap();
-        let second = stage_text_snippet_at(&base, "two", 2_000_000_000).unwrap();
-        assert_ne!(first, second);
-        assert_eq!(std::fs::read_to_string(&first).unwrap(), "one");
-        assert_eq!(std::fs::read_to_string(&second).unwrap(), "two");
+    fn snippet_limits_are_enforced() {
+        assert_eq!(MAX_TEXT_SNIPPET_BYTES, 2 * 1024 * 1024);
+        let base = std::env::temp_dir().join(format!("nekodrop-cmd-test-{}", std::process::id()));
+        let path = stage_text_snippet(&base, "桌面端直发", 1).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "桌面端直发");
         let _ = std::fs::remove_dir_all(&base);
     }
 }

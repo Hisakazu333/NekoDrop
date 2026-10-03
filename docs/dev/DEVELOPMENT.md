@@ -238,3 +238,16 @@ nekolink-protocol/src/lib.rs
 - tray/window behavior
 - platform-specific integration
 - service lifecycle
+
+## Sidecar CLI（`apps/sidecar`）
+
+不依赖桌面的命令行收发，适合脚本与远程机器：
+
+```bash
+cargo run -p nekodrop-sidecar -- plan <path> [path...]        # 预演：列出文件/大小/SHA-256
+cargo run -p nekodrop-sidecar -- receive 0.0.0.0:0 <目录>      # 监听并打印连接码，收一个传输
+cargo run -p nekodrop-sidecar -- send <host:port|连接码> <路径> # 发送文件/目录
+cargo run -p nekodrop-sidecar -- text <host:port|连接码> <文本> # 文本快送（暂存 .txt 后走加密通道）
+```
+
+`text` 与桌面端共用 `nekodrop-service::stage_text_snippet`（2 MB 上限、同秒防覆盖），发送完成后自动清理暂存文件。
