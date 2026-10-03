@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 
@@ -8,12 +8,10 @@ interface SidebarProps {
 }
 
 /**
- * 左侧文字导航栏（Codex 式：无底色、无图标栏，选中只是浅灰一行）
- * Text-only navigation sidebar.
+ * 侧栏（1:1 Notion 式）：主页芯片 + 图标行 + 设置进度卡 + 设备行 + 工具行 + 底部胶囊
+ * Notion-style sidebar: home chip, icon row, setup card, device rows, footer pill.
  */
 export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
-  const isMac =
-    typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac");
   const {
     mode,
     setMode,
@@ -22,38 +20,53 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
     transfers,
     selectedDeviceId,
     setSelectedDeviceId,
-    snapshot,
-    appearance,
-    setAppearance,
     setConnectionCodeOpen,
     setConnectionCode
   } = useAppContext();
 
-  const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
-  const deviceName = snapshot?.device_name ?? "本机";
-  const fingerprint = snapshot?.device_identity.public_key_fingerprint ?? "";
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filter, setFilter] = useState("");
 
-  const navItems: Array<{ id: "send" | "devices" | "transfers" | "settings"; icon:Parameters<typeof Icon>[0]["name"]; label: string; count?: number }> = [
-    { id: "send", icon: "send", label: "发送" },
-    { id: "devices", icon: "devices", label: "设备", count: nearbyDevices.length || undefined },
-    { id: "transfers", icon: "clock", label: "历史", count: transfers.length || undefined },
-    { id: "settings", icon: "settings", label: "设置" }
-  ];
+  const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
+
+  // 初始设置进度：装好即 25%，发现设备 / 完成配对 / 完成传输各 +25%
+  const setupPercent =
+    25 +
+    (nearbyDevices.length > 0 ? 25 : 0) +
+    (trustedDevices.length > 0 ? 25 : 0) +
+    (transfers.length > 0 ? 25 : 0);
+
+  const normalizedFilter = filter.trim().toLowerCase();
+  const matches = (name: string) =>
+    !filterOpen || normalizedFilter.length === 0 || name.toLowerCase().includes(normalizedFilter);
 
   const selectDevice = (deviceId: string) => {
-    if (selectedDeviceId === deviceId) return;
+    if (selectedDeviceId === deviceId) {
+      setMode("send");
+      return;
+    }
     setSelectedDeviceId(deviceId);
     setConnectionCodeOpen(false);
     setMode("send");
   };
 
+  const openConnectionCode = () => {
+    setConnectionCode("");
+    setConnectionCodeOpen(true);
+    setMode("send");
+  };
+
   return (
     <aside className="sidebar">
-      <div className={`sidebar-top${isMac ? " has-traffic" : ""}`}>
-        <span style={{ color: "var(--text)", fontSize: 16, display: "inline-flex" }}>
+      <div className="side-top">
+        <button
+          className={`home-chip ${mode === "send" ? "is-active" : ""}`}
+          onClick={() => setMode("send")}
+          type="button"
+        >
           <Icon name="paw" />
-        </span>
-        <strong className="sidebar-title">NekoDrop</strong>
+          <span>发送</span>
+        </button>
         <button
           aria-label="收件箱"
           className={`icon-btn ${inboxCount > 0 ? "has-badge" : ""}`}
@@ -64,93 +77,116 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
           <Icon name="inbox" />
           {inboxCount > 0 && <span className="dot-badge" />}
         </button>
+        <button aria-label="设备" className="icon-btn" onClick={() => setMode("devices")} title="设备" type="button">
+          <Icon name="devices" />
+        </button>
+        <button aria-label="历史" className="icon-btn" onClick={() => setMode("transfers")} title="历史" type="button">
+          <Icon name="clock" />
+        </button>
+        <span className="spacer" />
         <button
-          aria-label="切换主题"
-          className="icon-btn"
-          onClick={() => setAppearance(appearance === "dark" ? "light" : "dark")}
-          title={appearance === "dark" ? "切换至浅色" : "切换至深色"}
+          aria-label="搜索设备"
+          className={`icon-btn ${filterOpen ? "is-open" : ""}`}
+          onClick={() => {
+            setFilterOpen(!filterOpen);
+            setFilter("");
+          }}
+          title="搜索设备"
           type="button"
         >
-          <Icon name={appearance === "dark" ? "sun" : "moon"} />
+          <Icon name="search" />
         </button>
       </div>
 
-      <div className="sidebar-scroll">
-        <nav>
-          {navItems.map((item) => (
+      {filterOpen && (
+        <div className="side-filter">
+          <input
+            autoFocus
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="筛选设备…"
+            value={filter}
+          />
+        </div>
+      )}
+
+      <button className="setup-card" onClick={() => setMode("settings")} title="查看设置" type="button">
+        <span className="setup-title">完成初始设置</span>
+        <span className="setup-track">
+          <i style={{ width: `${setupPercent}%` }} />
+          <span className="setup-knob" style={{ left: `${setupPercent}%` }}>
+            <Icon name="paw" />
+          </span>
+        </span>
+      </button>
+
+      <div className="side-scroll">
+        <div className="side-label">设备</div>
+        {nearbyDevices.length === 0 && !filterOpen && (
+          <div className="side-empty">正在发现附近设备…</div>
+        )}
+        {filterOpen && nearbyDevices.length === 0 && trustedDevices.length === 0 && (
+          <div className="side-empty">没有设备可以筛选。</div>
+        )}
+        {nearbyDevices
+          .filter((device) => matches(device.name))
+          .map((device) => (
             <button
-              key={item.id}
-              className={`nav-item ${mode === item.id ? "is-active" : ""}`}
-              onClick={() => setMode(item.id)}
+              key={device.id}
+              className={`side-row ${selectedDeviceId === device.id ? "is-selected" : ""}`}
+              onClick={() => selectDevice(device.id)}
+              title={`${device.name} · ${device.host}`}
               type="button"
             >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-              {item.count != null && <span className="nav-count">{item.count}</span>}
+              <Icon name="laptop" />
+              <span className="row-name">{device.name}</span>
+              {trustedIds.has(device.id) && <span className="side-tag">已配对</span>}
             </button>
           ))}
-        </nav>
-
-        <div className="nav-section-label">设备</div>
-        {nearbyDevices.length === 0 && (
-          <div className="sidebar-empty">正在发现附近设备…</div>
-        )}
-        {nearbyDevices.map((device) => (
-          <button
-            key={device.id}
-            className={`device-row ${selectedDeviceId === device.id ? "is-selected" : ""}`}
-            onClick={() => selectDevice(device.id)}
-            title={`${device.name} · ${device.host}`}
-            type="button"
-          >
-            <span className={`status-dot is-online`} />
-            <span className="device-row-name">{device.name}</span>
-            <span className="device-row-tag">{trustedIds.has(device.id) ? "已配对" : ""}</span>
-          </button>
-        ))}
         {trustedDevices
-          .filter((device) => !nearbyDevices.some((nearby) => nearby.id === device.device_id))
+          .filter(
+            (device) =>
+              !nearbyDevices.some((nearby) => nearby.id === device.device_id) &&
+              matches(device.device_name)
+          )
           .map((device) => (
             <button
               key={device.device_id}
-              className="device-row is-offline"
+              className="side-row is-offline"
               onClick={() => selectDevice(device.device_id)}
               title={`${device.device_name}（离线）`}
               type="button"
             >
-              <span className="status-dot is-offline" />
-              <span className="device-row-name">{device.device_name}</span>
-              <span className="device-row-tag">已配对</span>
+              <Icon name="laptop" />
+              <span className="row-name">{device.device_name}</span>
+              <span className="side-tag">已配对</span>
             </button>
           ))}
+      </div>
 
-        <button
-          className="device-row"
-          onClick={() => {
-            setConnectionCode("");
-            setConnectionCodeOpen(true);
-            setMode("send");
-          }}
-          type="button"
-        >
+      <div className="side-utility">
+        <button className="side-row" onClick={openConnectionCode} type="button">
           <Icon name="link" />
-          <span className="device-row-name">通过连接码发送</span>
+          <span className="row-name">通过连接码发送</span>
+        </button>
+        <button className="side-row" onClick={() => setMode("transfers")} type="button">
+          <Icon name="clock" />
+          <span className="row-name">历史</span>
+        </button>
+        <button className="side-row" onClick={() => setMode("settings")} type="button">
+          <Icon name="settings" />
+          <span className="row-name">设置</span>
         </button>
       </div>
 
-      <div className="sidebar-footer">
-        <div className="footer-device">
-          <span className="footer-avatar">
-            <Icon name="paw" />
-          </span>
-          <div className="footer-device-info">
-            <strong title={deviceName}>{deviceName}</strong>
-            <span title={fingerprint}>{fingerprint.slice(0, 24)}…</span>
-          </div>
-          <button className="icon-btn" onClick={() => setMode("settings")} title="本机设置" type="button">
-            <Icon name="settings" />
-          </button>
-        </div>
+      <div className="side-foot">
+        <button className="new-chat-pill" onClick={() => setMode("send")} type="button">
+          <Icon name="sparkle" />
+          <span>新传输</span>
+          <kbd>⌘N</kbd>
+        </button>
+        <button aria-label="通过连接码发送" className="compose-circle" onClick={openConnectionCode} title="通过连接码发送" type="button">
+          <Icon name="link" />
+        </button>
       </div>
     </aside>
   );
