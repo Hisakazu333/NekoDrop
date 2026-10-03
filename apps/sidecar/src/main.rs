@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use nekodrop_network::Endpoint;
 use nekodrop_service::{
     accept_transfer, connection_code_for_endpoint, create_transfer_plan,
-    endpoint_from_connection_code, send_paths, stage_text_snippet,
+    endpoint_from_connection_code, send_paths_with_progress, stage_text_snippet, SendPacer,
 };
 
 fn main() {
@@ -99,14 +99,21 @@ fn run_receive(args: &[String]) -> Result<(), String> {
 }
 
 fn run_send(args: &[String]) -> Result<(), String> {
+    let (args, limit_kbps) = split_limit_flag(args);
     if args.len() < 2 {
         print_usage();
-        return Err("send requires <host:port> <path> [path...]".into());
+        return Err("send requires <host:port> <path> [path...] [--limit <KB/s>]".into());
     }
 
     let endpoint = parse_endpoint_or_connection_code(&args[0])?;
     let paths = args[1..].iter().map(PathBuf::from).collect::<Vec<_>>();
-    let report = send_paths(&endpoint, &paths).map_err(|error| error.to_string())?;
+    let mut pacer = stage_pacer(limit_kbps);
+    let report = send_paths_with_progress(&endpoint, &paths, |event| {
+        if let nekodrop_service::TransferProgressEvent::Sending(ref progress) = event {
+            pacer.observe(progress.bytes_transferred);
+        }
+    })
+    .map_err(|error| error.to_string())?;
     println!(
         "sent root={} files={} bytes={}",
         report.plan.manifest.root_name,
@@ -121,9 +128,10 @@ fn run_send(args: &[String]) -> Result<(), String> {
 }
 
 fn run_text(args: &[String]) -> Result<(), String> {
+    let (args, limit_kbps) = split_limit_flag(args);
     if args.len() < 2 {
         print_usage();
-        return Err("text requires <host:port|connection-code> <text...>".into());
+        return Err("text requires <host:port|connection-code> <text...> [--limit <KB/s>]".into());
     }
 
     let endpoint = parse_endpoint_or_connection_code(&args[0])?;
@@ -137,8 +145,13 @@ fn run_text(args: &[String]) -> Result<(), String> {
         .unwrap_or(0);
     let snippet = stage_text_snippet(&std::env::temp_dir(), &text, now_millis)
         .map_err(|error| error.to_string())?;
-    let report =
-        send_paths(&endpoint, std::slice::from_ref(&snippet)).map_err(|error| error.to_string());
+    let mut pacer = stage_pacer(limit_kbps);
+    let report = send_paths_with_progress(&endpoint, std::slice::from_ref(&snippet), |event| {
+        if let nekodrop_service::TransferProgressEvent::Sending(ref progress) = event {
+            pacer.observe(progress.bytes_transferred);
+        }
+    })
+    .map_err(|error| error.to_string());
     // 发送结束（成败皆然）清理暂存文件
     let _ = std::fs::remove_file(&snippet);
     let report = report?;
@@ -148,6 +161,27 @@ fn run_text(args: &[String]) -> Result<(), String> {
         report.plan.manifest.root_name
     );
     Ok(())
+}
+
+fn stage_pacer(limit_kbps: u32) -> SendPacer {
+    SendPacer::from_kbps(limit_kbps)
+}
+
+/// 从参数中提取 `--limit <KB/s>`（可出现在任意位置），返回 (剩余参数, 限速)。
+fn split_limit_flag(args: &[String]) -> (Vec<String>, u32) {
+    let mut rest = Vec::with_capacity(args.len());
+    let mut limit = 0_u32;
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        if arg == "--limit" {
+            if let Some(value) = iter.next() {
+                limit = value.parse().unwrap_or(0);
+            }
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (rest, limit)
 }
 
 fn parse_endpoint_or_connection_code(value: &str) -> Result<Endpoint, String> {
@@ -171,7 +205,7 @@ fn print_usage() {
          Commands:\n\
          nekodrop-sidecar plan <path> [path...]\n\
          nekodrop-sidecar receive <bind-host:port> <receive-dir>\n\
-         nekodrop-sidecar send <host:port|connection-code> <path> [path...]\n\
-         nekodrop-sidecar text <host:port|connection-code> <text...>"
+         nekodrop-sidecar send <host:port|connection-code> <path> [path...] [--limit <KB/s>]\n\
+         nekodrop-sidecar text <host:port|connection-code> <text...> [--limit <KB/s>]"
     );
 }

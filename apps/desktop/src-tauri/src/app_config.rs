@@ -17,6 +17,7 @@ struct PersistedAppConfig {
     tray_enabled: bool,
     discovery_enabled: bool,
     receive_policy: String,
+    send_limit_kbps: Option<u32>,
 }
 
 pub fn load_app_config(device_name: &str) -> Result<AppConfig, String> {
@@ -63,6 +64,7 @@ fn app_config_from_json(device_name: &str, content: &str) -> Result<AppConfig, S
     config.tray_enabled = persisted.tray_enabled;
     config.discovery_enabled = persisted.discovery_enabled;
     config.receive_policy = parse_receive_policy(&persisted.receive_policy);
+    config.send_limit_kbps = persisted.send_limit_kbps.unwrap_or(0).min(1_000_000);
 
     Ok(config)
 }
@@ -88,6 +90,7 @@ fn app_config_to_json(config: &AppConfig) -> Result<String, String> {
         tray_enabled: config.tray_enabled,
         discovery_enabled: config.discovery_enabled,
         receive_policy: receive_policy_label(config.receive_policy).to_string(),
+        send_limit_kbps: Some(config.send_limit_kbps),
     };
     serde_json::to_string_pretty(&persisted).map_err(|error| format!("无法序列化应用配置: {error}"))
 }

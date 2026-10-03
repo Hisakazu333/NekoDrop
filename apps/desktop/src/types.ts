@@ -5,6 +5,7 @@ export interface AppSnapshot {
   receive_dir: string;
   receive_port: number;
   receive_policy: string;
+  send_limit_kbps: number;
   discovery_enabled: boolean;
   tray_enabled: boolean;
   device_identity: DeviceIdentityDto;
