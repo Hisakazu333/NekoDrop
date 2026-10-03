@@ -162,10 +162,24 @@ jobs:
           sha256sum * > SHA256SUMS.txt
           cat SHA256SUMS.txt
 
+      - name: Checkout (for release notes file)
+        uses: actions/checkout@v4
+
+      - name: Pick release notes
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          if [ -f "docs/release-notes/v${TAG}.md" ]; then
+            cp "docs/release-notes/v${TAG}.md" RELEASE_NOTES.md
+            echo "using hand-written notes for v${TAG}"
+          else
+            printf '# NekoDrop %s\n\nNotes pending. See [commits](https://github.com/Hisakazu333/NekoDrop/commits/main) for details.' "${GITHUB_REF_NAME}" > RELEASE_NOTES.md
+            echo "no hand-written notes found for v${TAG}"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
           files: |
             dist/NekoDrop_*_aarch64.dmg
             dist/NekoDrop_*_x64.dmg
