@@ -29,7 +29,8 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
     clearQueue,
     clearSendQueue,
     appearance,
-    setAppearance
+    setAppearance,
+    dragActive
   } = useAppContext();
 
   const [filterOpen, setFilterOpen] = useState(false);
@@ -156,7 +157,7 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
       </button>
 
       <div className="side-scroll">
-        <div className="side-label">设备</div>
+        <div className="side-label">{dragActive ? "设备 · 松手即发" : "设备"}</div>
         {nearbyDevices.length === 0 && !filterOpen && (
           <div className="side-empty">正在发现附近设备…</div>
         )}
@@ -168,9 +169,10 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
           .map((device) => (
             <button
               key={device.id}
-              className={`side-row ${selectedDeviceId === device.id ? "is-selected" : ""}`}
+              className={`side-row ${selectedDeviceId === device.id ? "is-selected" : ""} ${dragActive ? "is-drop-hint" : ""}`}
+              data-device-drop-id={device.id}
               onClick={() => selectDevice(device.id)}
-              title={`${device.name} · ${device.host}`}
+              title={`${device.name} · ${device.host} · 拖文件到这行直接发送`}
               type="button"
             >
               <Icon name="laptop" />

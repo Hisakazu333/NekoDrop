@@ -16,6 +16,8 @@ pub struct AppConfig {
     pub receive_policy: ReceivePolicy,
     /// 发送限速（KB/s），0 = 不限
     pub send_limit_kbps: u32,
+    /// 接收后按发送设备名归档到子目录
+    pub organize_receive_by_device: bool,
 }
 
 impl Default for AppConfig {
@@ -29,6 +31,7 @@ impl Default for AppConfig {
             discovery_enabled: true,
             receive_policy: ReceivePolicy::AlwaysAsk,
             send_limit_kbps: 0,
+            organize_receive_by_device: false,
         }
     }
 }

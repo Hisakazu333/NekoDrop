@@ -4,6 +4,7 @@ import {
   portFromBindAddr, buildPathPayload, uniquePaths, keepIfEqual, resetTransferMetrics, APPEARANCE_STORAGE_KEY,
   lastPathSegment, isReceiveTransferActivePhase, isCancelMessage, copyTextToClipboard,
   readTextSnippetAutoCopy, writeTextSnippetAutoCopy,
+  deviceIdAtDropPosition,
   QueuedSend, QueuedSendKind, enqueueSend, dequeueSend, queuedSendLabel,
   resumeQueuedSend as resumeQueuedEntry
 } from "./helpers";
@@ -178,6 +179,7 @@ interface AppContextType {
   sendLimitInput: string;
   setSendLimitInput: (value: string) => void;
   saveSendLimit: () => Promise<void>;
+  updateOrganizeByDevice: (enabled: boolean) => Promise<void>;
   saveDeviceName: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   scanPaths: (paths?: string[], manual?: string) => Promise<void>;
@@ -185,6 +187,7 @@ interface AppContextType {
   stopReceive: () => Promise<void>;
   sendFilesToDevice: (device: DeviceDto) => Promise<void>;
   sendCurrentTransfer: (textSnippet?: string) => Promise<void>;
+  sendDroppedPathsTo: (device: DeviceDto, paths: string[]) => Promise<void>;
   sendQueue: QueuedSend[];
   pauseCurrentTransfer: () => Promise<void>;
   resumeQueuedSendById: (id: string) => void;
@@ -258,6 +261,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const queueSeq = useRef(0);
   // 正在发送的载荷快照：暂停时原样回队（协议断点续传，继续时接着传）
   const activeSendRef = useRef<{ kind: QueuedSendKind; target: string; pathsText: string } | null>(null);
+  const nearbyDevicesRef = useRef<DeviceDto[]>([]);
+  nearbyDevicesRef.current = nearbyDevices;
 
   const desktopRuntime = useMemo(() => isTauriRuntime(), []);
   const previousTransferStatus = useRef<TransferStatusDto | null>(null);
@@ -272,7 +277,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 const {
     snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
-    sendLimitInput, setSendLimitInput, saveSendLimit,
+    sendLimitInput, setSendLimitInput, saveSendLimit, updateOrganizeByDevice,
     setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
     refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort,
     updateReceivePolicy, saveDeviceName, openPath,
@@ -506,7 +511,17 @@ const {
 
     void bindWindowDragDrop({
       onActiveChange: setDragActive,
-      onDrop: (paths) => {
+      onDrop: (paths, position) => {
+        // 命中侧栏设备行 → 直接发往该设备；否则按普通拖放进队列
+        const ratio = window.devicePixelRatio || 1;
+        const deviceId = deviceIdAtDropPosition(position, ratio);
+        const device = deviceId ? nearbyDevicesRef.current.find((d) => d.id === deviceId) : null;
+        if (device) {
+          void sendDroppedPathsTo(device, paths).catch((nextError) =>
+            setError(errorMessage(nextError))
+          );
+          return;
+        }
         void applyPickedPathsRef.current(paths).catch((nextError) => setError(errorMessage(nextError)));
       },
       onError: (message) => {
@@ -760,15 +775,29 @@ const {
       return;
     }
 
-    // 忙线 → 入队；空闲 → 立即发送
+    await dispatchSend(kind, target, payload.join("\n"), successToast);
+  }
+
+  // 统一发送入口：空闲直发，忙线入队（拖拽直发与组合框共用）
+  async function dispatchSend(
+    kind: QueuedSendKind,
+    target: string,
+    pathsText: string,
+    successToast: string
+  ) {
+    if (pathsText.trim().length === 0) {
+      setMode("send");
+      setError("未选择文件");
+      return;
+    }
     if (busy !== null) {
       queueSeq.current += 1;
       const entry: QueuedSend = {
         id: `queue-${Date.now()}-${queueSeq.current}`,
         kind,
         target,
-        pathsText: payload.join("\n"),
-        label: queuedSendLabel(payload.join("\n")),
+        pathsText,
+        label: queuedSendLabel(pathsText),
         enqueuedAtMs: Date.now()
       };
       const next = enqueueSend(sendQueue, entry);
@@ -777,12 +806,20 @@ const {
         return;
       }
       setSendQueue(next);
-      clearQueue();
       setToast(`已加入队列（第 ${next.length} 位）：${entry.label}`);
       return;
     }
 
-    await runSend(kind, target, payload.join("\n"), successToast);
+    await runSend(kind, target, pathsText, successToast);
+  }
+
+  // 拖文件到侧栏设备行：跳过组合框状态，直接发往该设备
+  async function sendDroppedPathsTo(device: DeviceDto, paths: string[]) {
+    const payload = uniquePaths(paths);
+    if (payload.length === 0) return;
+    setSelectedDeviceId(device.id);
+    setConnectionCodeOpen(false);
+    await dispatchSend("device", device.id, payload.join("\n"), `已发送到 ${device.name}`);
   }
 
   // 空闲时自动出队发送（跳过暂停条目；失败不回队，报错继续下一条）
@@ -1109,6 +1146,7 @@ const {
     sendLimitInput,
     setSendLimitInput,
     saveSendLimit,
+    updateOrganizeByDevice,
     updateReceivePolicy,
     saveDeviceName,
     openPath,
@@ -1117,6 +1155,7 @@ const {
     stopReceive,
     sendFilesToDevice,
     sendCurrentTransfer,
+    sendDroppedPathsTo,
     sendQueue,
     pauseCurrentTransfer,
     resumeQueuedSendById,
