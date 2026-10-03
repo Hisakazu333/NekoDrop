@@ -41,6 +41,7 @@ export function SettingsView() {
     sendLimitInput,
     setSendLimitInput,
     saveSendLimit,
+    updateOrganizeByDevice,
     setMode,
     busy
   } = useAppContext();
@@ -88,6 +89,27 @@ export function SettingsView() {
             pattern="[0-9]*"
             value={bindPort}
           />
+        </div>
+        <div className="form-row">
+          <div className="form-label">
+            按设备归档<small>收到的文件放入「接收目录/设备名/」</small>
+          </div>
+          <div className="policy-segment">
+            <button
+              className={snapshot?.organize_receive_by_device ? "is-active" : ""}
+              onClick={() => void updateOrganizeByDevice(true)}
+              type="button"
+            >
+              归档
+            </button>
+            <button
+              className={!snapshot?.organize_receive_by_device ? "is-active" : ""}
+              onClick={() => void updateOrganizeByDevice(false)}
+              type="button"
+            >
+              平铺
+            </button>
+          </div>
         </div>
         <div className="form-row">
           <div className="form-label">

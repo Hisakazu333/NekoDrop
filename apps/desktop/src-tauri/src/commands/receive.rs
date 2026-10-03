@@ -376,9 +376,23 @@ pub fn start_receive_once(
                         .unwrap_or_else(|poisoned| poisoned.into_inner());
                     *pending = None;
                 }
-                if let Ok(report) = result {
-                    match report {
-                        IncomingSessionReport::Transfer(report) => {
+                if let Ok(mut result) = result {
+                    match result {
+                        IncomingSessionReport::Transfer(ref mut report) => {
+                            // 按发送方归档：文件移入 receive_dir/<设备名>/，历史路径同步改写
+                            let organize_enabled = config
+                                .lock()
+                                .map(|c| c.organize_receive_by_device)
+                                .unwrap_or(false);
+                            let organized_dir = if organize_enabled {
+                                organize_received_files_by_sender(
+                                    &mut report.files,
+                                    report.sender_device_name.as_deref().unwrap_or(""),
+                                    &receive_dir_for_thread,
+                                )
+                            } else {
+                                None
+                            };
                             let total_bytes =
                                 report.files.iter().map(|file| file.bytes_written).sum();
                             set_transfer_status_and_push_bridge_event(
@@ -402,7 +416,7 @@ pub fn start_receive_once(
                                 format!("receive-{}", now_ms()),
                                 "receive",
                                 "completed",
-                                received_root_name(&report),
+                                received_root_name(report),
                                 report.files.len(),
                                 total_bytes,
                                 total_bytes,
@@ -411,7 +425,12 @@ pub fn start_receive_once(
                             record.peer_device_id = report.sender_device_id.clone();
                             record.peer_name = report.sender_device_name.clone();
                             record.target_host = Some(peer_host.clone());
-                            record.receive_dir = Some(receive_dir_for_thread.display().to_string());
+                            record.receive_dir = Some(
+                                organized_dir
+                                    .unwrap_or_else(|| receive_dir_for_thread.clone())
+                                    .display()
+                                    .to_string(),
+                            );
                             record.security_mode = Some(
                                 transfer_security_mode_label(report.security_mode).to_string(),
                             );
@@ -422,7 +441,7 @@ pub fn start_receive_once(
                                 .collect();
                             refresh_trusted_device_contact_from_receive_report(
                                 &trusted_devices,
-                                &report,
+                                report,
                             );
                             if let Err(error) =
                                 push_transfer_history_record(&transfer_history, record)
@@ -441,7 +460,7 @@ pub fn start_receive_once(
                                 let mut last_report = last_receive_report
                                     .lock()
                                     .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                *last_report = Some(report);
+                                *last_report = Some(report.clone());
                             }
                         }
                         IncomingSessionReport::Pairing(decision) => {
@@ -1062,4 +1081,118 @@ pub(crate) fn is_receive_transfer_active(
             direction == "receive"
                 && matches!(phase.as_str(), "accepted" | "transferring" | "verifying")
         })
+}
+
+/// 接收按设备归档：把本次收到的文件移入 receive_dir/<净化后的设备名>/。
+/// 目标重名时追加 " (n)"；移动失败跳过该文件（保持原路径可用）。
+pub(crate) fn organize_received_files_by_sender(
+    files: &mut [nekodrop_storage::ReceivedFile],
+    sender_name: &str,
+    receive_dir: &Path,
+) -> Option<PathBuf> {
+    let folder = sanitize_device_folder_name(sender_name);
+    if folder.is_empty() || files.is_empty() {
+        return None;
+    }
+    let subdir = receive_dir.join(&folder);
+    if std::fs::create_dir_all(&subdir).is_err() {
+        return None;
+    }
+    for file in files.iter_mut() {
+        let name = file.path.file_name()?.to_owned();
+        let mut dest = subdir.join(&name);
+        let mut seq = 1;
+        while dest.exists() {
+            let stem = dest.file_stem()?.to_string_lossy().into_owned();
+            let ext = dest
+                .extension()
+                .map(|e| format!(".{}", e.to_string_lossy()))
+                .unwrap_or_default();
+            dest = subdir.join(format!("{stem} ({seq}){ext}"));
+            seq += 1;
+        }
+        if std::fs::rename(&file.path, &dest).is_ok() {
+            file.path = dest;
+        }
+    }
+    Some(subdir)
+}
+
+/// 设备名 → 子目录名：去路径分隔符/控制字符，限长 48 字符。
+pub(crate) fn sanitize_device_folder_name(name: &str) -> String {
+    let cleaned: String = name
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_control() || c == '/' || c == '\\' || c == ':' {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect::<String>()
+        .trim()
+        .chars()
+        .take(48)
+        .collect();
+    if cleaned == "." || cleaned == ".." {
+        String::new()
+    } else {
+        cleaned
+    }
+}
+
+#[cfg(test)]
+mod organize_tests {
+    use super::*;
+
+    #[test]
+    fn sanitize_keeps_cjk_and_blocks_separators() {
+        assert_eq!(sanitize_device_folder_name("书房 iMac"), "书房 iMac");
+        assert_eq!(sanitize_device_folder_name("a/b\\c:d"), "a_b_c_d");
+        assert_eq!(sanitize_device_folder_name("  ..  "), "");
+        assert_eq!(sanitize_device_folder_name(""), "");
+        let long = "长".repeat(80);
+        assert_eq!(sanitize_device_folder_name(&long).chars().count(), 48);
+    }
+
+    #[test]
+    fn organize_moves_files_into_sanitized_folder() {
+        let base = std::env::temp_dir().join(format!("nekodrop-org-{}", std::process::id()));
+        std::fs::create_dir_all(&base).unwrap();
+        let a = base.join("a.txt");
+        let b = base.join("b.txt");
+        std::fs::write(&a, "1").unwrap();
+        std::fs::write(&b, "2").unwrap();
+        let mut files = vec![
+            nekodrop_storage::ReceivedFile {
+                path: a,
+                manifest_path: "a.txt".into(),
+                bytes_written: 1,
+                sha256: String::new(),
+                verified: true,
+            },
+            nekodrop_storage::ReceivedFile {
+                path: b,
+                manifest_path: "b.txt".into(),
+                bytes_written: 1,
+                sha256: String::new(),
+                verified: true,
+            },
+        ];
+        let dir = organize_received_files_by_sender(&mut files, "书房/iMac", &base).unwrap();
+        assert_eq!(dir, base.join("书房_iMac"));
+        assert!(base.join("书房_iMac/a.txt").exists());
+        assert!(base.join("书房_iMac/b.txt").exists());
+        assert!(files
+            .iter()
+            .all(|f| f.path.starts_with(base.join("书房_iMac"))));
+        // 空名不归档
+        let mut none = files.clone();
+        assert_eq!(
+            organize_received_files_by_sender(&mut none, "  ", &base),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&base);
+    }
 }

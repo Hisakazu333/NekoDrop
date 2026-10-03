@@ -33,6 +33,7 @@ pub fn run() {
             commands::read_received_text,
             commands::set_trusted_device_alias,
             commands::set_send_limit,
+            commands::set_organize_receive_by_device,
             commands::send_paths_to_code,
             commands::send_paths_to_device,
             commands::resend_transfer,

@@ -112,6 +112,22 @@ export function useSettingsDomain(deps: SettingsDeps) {
     }
   }
 
+  async function updateOrganizeByDevice(enabled: boolean) {
+    setBusy("receive-policy");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_organize_receive_by_device", { enabled });
+      setSnapshot((current) =>
+        current ? { ...current, organize_receive_by_device: enabled } : current
+      );
+      setToast(enabled ? "接收将按设备归档到子目录" : "接收不再按设备归档");
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function updateReceivePolicy(nextPolicy: ReceivePolicyMode) {
     if (nextPolicy === receivePolicy) return;
     setBusy("receive-policy");
@@ -167,7 +183,7 @@ export function useSettingsDomain(deps: SettingsDeps) {
   return {
     snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
     setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
-    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort, sendLimitInput, setSendLimitInput, saveSendLimit,
+    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort, sendLimitInput, setSendLimitInput, saveSendLimit, updateOrganizeByDevice,
     updateReceivePolicy, saveDeviceName, openPath,
   };
 }
