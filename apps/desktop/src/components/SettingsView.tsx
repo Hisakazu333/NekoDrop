@@ -36,6 +36,8 @@ export function SettingsView() {
     localBridgeAuthorizations,
     revokeLocalBridgeAuthorization,
     pruneLocalBridgeAuthorizations,
+    autoCopyTextSnippets,
+    setTextSnippetAutoCopy,
     setMode,
     busy
   } = useAppContext();
@@ -139,6 +141,27 @@ export function SettingsView() {
               type="button"
             >
               深色
+            </button>
+          </div>
+        </div>
+        <div className="form-row">
+          <div className="form-label">
+            文本快送接收<small>收到文本片段时自动复制到剪贴板</small>
+          </div>
+          <div className="policy-segment">
+            <button
+              className={autoCopyTextSnippets ? "is-active" : ""}
+              onClick={() => setTextSnippetAutoCopy(true)}
+              type="button"
+            >
+              自动复制
+            </button>
+            <button
+              className={!autoCopyTextSnippets ? "is-active" : ""}
+              onClick={() => setTextSnippetAutoCopy(false)}
+              type="button"
+            >
+              手动复制
             </button>
           </div>
         </div>

@@ -18,6 +18,26 @@ export const EMPTY_TRANSFER_METRICS = Object.freeze<TransferMetrics>({
 });
 
 export const APPEARANCE_STORAGE_KEY = "nekodrop.appearance";
+export const TEXT_SNIPPET_AUTO_COPY_STORAGE_KEY = "nekodrop.textSnippetAutoCopy";
+
+/** 接收文本片段是否自动进剪贴板（默认开，可在设置关闭） */
+export function readTextSnippetAutoCopy(): boolean {
+  try {
+    const raw = localStorage.getItem(TEXT_SNIPPET_AUTO_COPY_STORAGE_KEY);
+    if (raw == null) return true;
+    return raw === "1";
+  } catch {
+    return true;
+  }
+}
+
+export function writeTextSnippetAutoCopy(enabled: boolean) {
+  try {
+    localStorage.setItem(TEXT_SNIPPET_AUTO_COPY_STORAGE_KEY, enabled ? "1" : "0");
+  } catch {
+    /* localStorage 不可用时静默降级为内存态 / ignore storage failures */
+  }
+}
 
 export function resetTransferMetrics(current: TransferMetrics): TransferMetrics {
   return keepIfEqual(current, EMPTY_TRANSFER_METRICS);

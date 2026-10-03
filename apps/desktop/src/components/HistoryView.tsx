@@ -37,6 +37,7 @@ export function HistoryView() {
     busy
   } = useAppContext();
   const [filter, setFilter] = useState<"all" | "send" | "receive">("all");
+  const [query, setQuery] = useState("");
   const [copyingId, setCopyingId] = useState<string | null>(null);
 
   // 单个 .txt 接收成功记录：一键读回剪贴板（文本快送的接收端闭环）
@@ -62,9 +63,16 @@ export function HistoryView() {
   const succeeded = transfers.filter((transfer) => transfer.status === "succeeded" || transfer.status === "done");
   const failed = transfers.filter((transfer) => transfer.status === "failed");
   const totalBytes = succeeded.reduce((sum, transfer) => sum + transfer.total_bytes, 0);
-  const visible = transfers.filter((transfer) =>
-    filter === "all" ? true : transfer.direction === filter
-  );
+  const visible = transfers.filter((transfer) => {
+    if (filter !== "all" && transfer.direction !== filter) return false;
+    const q = query.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      (transfer.root_name ?? "").toLowerCase().includes(q) ||
+      (transfer.peer_name ?? "").toLowerCase().includes(q) ||
+      statusLabel(transfer).text.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="page">
@@ -106,6 +114,15 @@ export function HistoryView() {
               {type === "all" ? "全部" : type === "send" ? "发送" : "接收"}
             </button>
           ))}
+          {transfers.length > 3 && (
+            <input
+              className="history-search"
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索名称 / 对方 / 状态…"
+              type="search"
+              value={query}
+            />
+          )}
           {transfers.length > 0 && (
             <button
               className="text-btn is-danger"
@@ -119,7 +136,9 @@ export function HistoryView() {
         </div>
         <div className="list">
           {visible.length === 0 ? (
-            <div className="inline-note">还没有传输记录。</div>
+            <div className="inline-note">
+              {query.trim() ? `没有匹配「${query.trim()}」的记录。` : "还没有传输记录。"}
+            </div>
           ) : (
             visible.map((transfer) => {
               const label = statusLabel(transfer);
