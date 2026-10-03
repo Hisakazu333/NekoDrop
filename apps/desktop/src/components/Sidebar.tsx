@@ -1,19 +1,21 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 
 interface SidebarProps {
+  collapsed?: boolean;
   inboxCount: number;
   onToggleInbox: () => void;
 }
 
 /**
- * 左侧文字导航栏（Codex 式：无底色、无图标栏，选中只是浅灰一行）
- * Text-only navigation sidebar.
+ * 侧栏：每个控件都有明确职能——
+ · 主页芯片 → 发送页；图标行只放应用级动作（收件箱 / 外观 / 筛选）
+ · 引导卡 → 按真实完成度推进（启动/发现/配对/首传），点击去设置补齐
+ · 设备区 → 选择发送目标；工具行只放不重复的动作（连接码 / 帮助）
+ · 底部胶囊 → 新传输 = 清空队列并复位输入（真动作，⌘N 同）
  */
-export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
-  const isMac =
-    typeof navigator !== "undefined" && navigator.userAgent.toLowerCase().includes("mac");
+export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: SidebarProps) {
   const {
     mode,
     setMode,
@@ -22,38 +24,74 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
     transfers,
     selectedDeviceId,
     setSelectedDeviceId,
-    snapshot,
-    appearance,
-    setAppearance,
     setConnectionCodeOpen,
-    setConnectionCode
+    setConnectionCode,
+    clearQueue,
+    appearance,
+    setAppearance
   } = useAppContext();
 
-  const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
-  const deviceName = snapshot?.device_name ?? "本机";
-  const fingerprint = snapshot?.device_identity.public_key_fingerprint ?? "";
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filter, setFilter] = useState("");
 
-  const navItems: Array<{ id: "send" | "devices" | "transfers" | "settings"; icon:Parameters<typeof Icon>[0]["name"]; label: string; count?: number }> = [
-    { id: "send", icon: "send", label: "发送" },
-    { id: "devices", icon: "devices", label: "设备", count: nearbyDevices.length || undefined },
-    { id: "transfers", icon: "clock", label: "历史", count: transfers.length || undefined },
-    { id: "settings", icon: "settings", label: "设置" }
+  const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
+
+  // 引导进度对应四件真事：启动 → 发现设备 → 配对 → 首次传输
+  const setupSteps = [
+    nearbyDevices.length > 0,
+    trustedDevices.length > 0,
+    transfers.length > 0
   ];
+  const setupDone = 1 + setupSteps.filter(Boolean).length;
+  const setupPercent = Math.round((setupDone / 4) * 100);
+
+  const normalizedFilter = filter.trim().toLowerCase();
+  const matches = (name: string) =>
+    !filterOpen || normalizedFilter.length === 0 || name.toLowerCase().includes(normalizedFilter);
 
   const selectDevice = (deviceId: string) => {
-    if (selectedDeviceId === deviceId) return;
+    if (selectedDeviceId === deviceId) {
+      setMode("send");
+      return;
+    }
     setSelectedDeviceId(deviceId);
     setConnectionCodeOpen(false);
     setMode("send");
   };
 
+  const openConnectionCode = () => {
+    setConnectionCode("");
+    setConnectionCodeOpen(true);
+    setMode("send");
+  };
+
+  // 新传输：清空队列、关掉连接码、回到发送页（目标保留，方便连发）
+  const newTransfer = () => {
+    clearQueue();
+    setConnectionCode("");
+    setConnectionCodeOpen(false);
+    setMode("send");
+  };
+
+  const openHelp = () => {
+    try {
+      window.open("https://github.com/Hisakazu333/NekoDrop/tree/main/docs", "_blank", "noopener");
+    } catch {
+      /* webview 拦截弹窗时静默忽略 / ignore when popups are blocked */
+    }
+  };
+
   return (
-    <aside className="sidebar">
-      <div className={`sidebar-top${isMac ? " has-traffic" : ""}`}>
-        <span style={{ color: "var(--text)", fontSize: 16, display: "inline-flex" }}>
-          <Icon name="paw" />
-        </span>
-        <strong className="sidebar-title">NekoDrop</strong>
+    <aside className={`sidebar ${collapsed ? "is-collapsed" : ""}`}>
+      <div className="side-top">
+        <button
+          className={`home-chip ${mode === "send" ? "is-active" : ""}`}
+          onClick={() => setMode("send")}
+          type="button"
+        >
+          <Icon name="home" />
+          <span>主页</span>
+        </button>
         <button
           aria-label="收件箱"
           className={`icon-btn ${inboxCount > 0 ? "has-badge" : ""}`}
@@ -73,84 +111,106 @@ export function Sidebar({ inboxCount, onToggleInbox }: SidebarProps) {
         >
           <Icon name={appearance === "dark" ? "sun" : "moon"} />
         </button>
-      </div>
-
-      <div className="sidebar-scroll">
-        <nav>
-          {navItems.map((item) => (
-            <button
-              key={item.id}
-              className={`nav-item ${mode === item.id ? "is-active" : ""}`}
-              onClick={() => setMode(item.id)}
-              type="button"
-            >
-              <Icon name={item.icon} />
-              <span>{item.label}</span>
-              {item.count != null && <span className="nav-count">{item.count}</span>}
-            </button>
-          ))}
-        </nav>
-
-        <div className="nav-section-label">设备</div>
-        {nearbyDevices.length === 0 && (
-          <div className="sidebar-empty">正在发现附近设备…</div>
-        )}
-        {nearbyDevices.map((device) => (
-          <button
-            key={device.id}
-            className={`device-row ${selectedDeviceId === device.id ? "is-selected" : ""}`}
-            onClick={() => selectDevice(device.id)}
-            title={`${device.name} · ${device.host}`}
-            type="button"
-          >
-            <span className={`status-dot is-online`} />
-            <span className="device-row-name">{device.name}</span>
-            <span className="device-row-tag">{trustedIds.has(device.id) ? "已配对" : ""}</span>
-          </button>
-        ))}
-        {trustedDevices
-          .filter((device) => !nearbyDevices.some((nearby) => nearby.id === device.device_id))
-          .map((device) => (
-            <button
-              key={device.device_id}
-              className="device-row is-offline"
-              onClick={() => selectDevice(device.device_id)}
-              title={`${device.device_name}（离线）`}
-              type="button"
-            >
-              <span className="status-dot is-offline" />
-              <span className="device-row-name">{device.device_name}</span>
-              <span className="device-row-tag">已配对</span>
-            </button>
-          ))}
-
+        <span className="spacer" />
         <button
-          className="device-row"
+          aria-label="筛选设备"
+          className={`icon-btn ${filterOpen ? "is-open" : ""}`}
           onClick={() => {
-            setConnectionCode("");
-            setConnectionCodeOpen(true);
-            setMode("send");
+            setFilterOpen(!filterOpen);
+            setFilter("");
           }}
+          title="筛选设备"
           type="button"
         >
-          <Icon name="link" />
-          <span className="device-row-name">通过连接码发送</span>
+          <Icon name="search" />
         </button>
       </div>
 
-      <div className="sidebar-footer">
-        <div className="footer-device">
-          <span className="footer-avatar">
+      {filterOpen && (
+        <div className="side-filter">
+          <input
+            autoFocus
+            onChange={(event) => setFilter(event.target.value)}
+            placeholder="筛选设备…"
+            value={filter}
+          />
+        </div>
+      )}
+
+      <button className="setup-card" onClick={() => setMode("settings")} type="button">
+        <span className="setup-title">完成初始设置（{setupDone}/4）</span>
+        <span className="setup-track">
+          <i style={{ width: `${setupPercent}%` }} />
+          <span className="setup-knob" style={{ left: `${setupPercent}%` }}>
             <Icon name="paw" />
           </span>
-          <div className="footer-device-info">
-            <strong title={deviceName}>{deviceName}</strong>
-            <span title={fingerprint}>{fingerprint.slice(0, 24)}…</span>
-          </div>
-          <button className="icon-btn" onClick={() => setMode("settings")} title="本机设置" type="button">
-            <Icon name="settings" />
-          </button>
-        </div>
+        </span>
+      </button>
+
+      <div className="side-scroll">
+        <div className="side-label">设备</div>
+        {nearbyDevices.length === 0 && !filterOpen && (
+          <div className="side-empty">正在发现附近设备…</div>
+        )}
+        {filterOpen && nearbyDevices.length === 0 && trustedDevices.length === 0 && (
+          <div className="side-empty">没有设备可以筛选。</div>
+        )}
+        {nearbyDevices
+          .filter((device) => matches(device.name))
+          .map((device) => (
+            <button
+              key={device.id}
+              className={`side-row ${selectedDeviceId === device.id ? "is-selected" : ""}`}
+              onClick={() => selectDevice(device.id)}
+              title={`${device.name} · ${device.host}`}
+              type="button"
+            >
+              <Icon name="laptop" />
+              <span className="row-name">{device.name}</span>
+              {trustedIds.has(device.id) && <span className="side-tag">已配对</span>}
+            </button>
+          ))}
+        {trustedDevices
+          .filter(
+            (device) =>
+              !nearbyDevices.some((nearby) => nearby.id === device.device_id) &&
+              matches(device.device_name)
+          )
+          .map((device) => (
+            <button
+              key={device.device_id}
+              className="side-row is-offline"
+              onClick={() => selectDevice(device.device_id)}
+              title={`${device.device_name}（离线，打开后可直接发）`}
+              type="button"
+            >
+              <Icon name="laptop" />
+              <span className="row-name">{device.device_name}</span>
+              <span className="side-tag">已配对</span>
+            </button>
+          ))}
+      </div>
+
+      <div className="side-utility">
+        <button className="side-row" onClick={openConnectionCode} type="button">
+          <Icon name="link" />
+          <span className="row-name">通过连接码发送</span>
+        </button>
+        <button className="side-row" onClick={openHelp} type="button">
+          <Icon name="help" />
+          <span className="row-name">帮助</span>
+        </button>
+      </div>
+
+      <div className="side-foot">
+        <button className="new-chat-pill" onClick={newTransfer} type="button">
+          <Icon name="sparkle" />
+          <span>新传输</span>
+          <kbd>⌘N</kbd>
+        </button>
+        <button aria-label="新传输" className="compose-circle" onClick={newTransfer} title="新传输" type="button">
+          <Icon name="compose" />
+        </button>
       </div>
     </aside>
   );

@@ -6,19 +6,27 @@ export type IconName =
   | "appearance"
   | "arrow-up"
   | "check"
+  | "chevron-left"
+  | "chevron-right"
+  | "compose"
   | "clock"
   | "copy"
   | "devices"
   | "file"
   | "folder"
+  | "help"
+  | "home"
   | "inbox"
   | "key"
   | "laptop"
   | "link"
   | "list"
+  | "mascot"
   | "moon"
   | "overview"
   | "package"
+  | "panel"
+  | "plus"
   | "paw"
   | "plug"
   | "refresh"
@@ -47,6 +55,14 @@ const ICONS: Record<IconName, React.ReactNode> = {
   ),
   "arrow-up": <path d="M12 19V5M5.5 11.5 12 5l6.5 6.5" />,
   check: <path d="M4.5 12.5 9.5 17.5 19.5 7" />,
+  "chevron-left": <path d="M14.5 5.5 8 12l6.5 6.5" />,
+  "chevron-right": <path d="M9.5 5.5 16 12l-6.5 6.5" />,
+  compose: (
+    <>
+      <path d="M4.5 19.5 6 15l10.8-10.8a1.8 1.8 0 0 1 2.5 0l.5.5a1.8 1.8 0 0 1 0 2.5L9 18l-4.5 1.5Z" />
+      <path d="M13.5 7.5l3 3" />
+    </>
+  ),
   clock: (
     <>
       <circle cx="12" cy="12" r="8.5" />
@@ -67,6 +83,14 @@ const ICONS: Record<IconName, React.ReactNode> = {
     </>
   ),
   file: <path d="M13.5 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8.5L13.5 3Zm0 0v5.5H19" />,
+  help: (
+    <>
+      <circle cx="12" cy="12" r="8.7" />
+      <path d="M9.6 9.3a2.5 2.5 0 0 1 4.9.7c0 1.7-2.5 2.1-2.5 3.6" />
+      <path d="M12 16.8v.01" />
+    </>
+  ),
+  home: <path d="M4.5 10.8 12 4.5l7.5 6.3V19a1.5 1.5 0 0 1-1.5 1.5h-3.6v-5.2h-4.8v5.2H6A1.5 1.5 0 0 1 4.5 19v-8.2Z" />,
   folder: (
     <path d="M3.5 7A2.5 2.5 0 0 1 6 4.5h3.2a2 2 0 0 1 1.6.8l1 1.7H18A2.5 2.5 0 0 1 20.5 9.5V17A2.5 2.5 0 0 1 18 19.5H6A2.5 2.5 0 0 1 3.5 17V7Z" />
   ),
@@ -89,6 +113,15 @@ const ICONS: Record<IconName, React.ReactNode> = {
     <path d="M9.8 13.2a4.2 4.2 0 0 0 5.94 0l2.86-2.86a4.2 4.2 0 0 0-5.94-5.94l-1.43 1.43M14.2 10.8a4.2 4.2 0 0 0-5.94 0l-2.86 2.86a4.2 4.2 0 0 0 5.94 5.94l1.43-1.43" />
   ),
   list: <path d="M8.5 6h12M8.5 12h12M8.5 18h12M3.8 6h.01M3.8 12h.01M3.8 18h.01" />,
+  mascot: (
+    <>
+      <path d="M12 5.4c1.5 0 2.3.8 3.1.7 1.3-.1 1.6 1.9 1.3 3.2M12 5.4c-1.5 0-2.3.8-3.1.7-1.3-.1-1.6 1.9-1.3 3.2" />
+      <circle cx="12" cy="13" r="6.4" />
+      <path d="M9.55 12.1v.01M14.45 12.1v.01" strokeWidth="2.4" />
+      <path d="M12 14.2c-.9.9-2.1.9-2.8.2M12 14.2c.9.9 2.1.9 2.8.2" />
+      <path d="M5.2 12.2H2.6M5.5 14.6l-2.4 1M18.8 12.2h2.6M18.5 14.6l2.4 1" />
+    </>
+  ),
   moon: <path d="M20.2 13.9A8.5 8.5 0 1 1 10.1 3.8a6.7 6.7 0 0 0 10.1 10.1Z" />,
   overview: (
     <>
@@ -100,6 +133,13 @@ const ICONS: Record<IconName, React.ReactNode> = {
   ),
   package: (
     <path d="M4 8l8-4.2L20 8v8.2L12 20.4 4 16.2V8Zm8 4.2L4 8m8 4.2L20 8m-8 4.2v8.2" />
+  ),
+  plus: <path d="M12 5v14M5 12h14" />,
+  panel: (
+    <>
+      <rect height="15" rx="2.2" width="16.5" x="3.8" y="4.5" />
+      <path d="M9.4 4.5v15" />
+    </>
   ),
   paw: (
     <>
