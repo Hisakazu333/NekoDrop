@@ -47,6 +47,8 @@ pub struct ActiveReceiveSession {
     pub bind_addr: String,
     pub receive_dir: String,
     pub connection_code: String,
+    /// 跨网（iroh）连接码；关闭跨网收件时为 None
+    pub iroh_connection_code: Option<String>,
     pub cancel: Arc<AtomicBool>,
 }
 

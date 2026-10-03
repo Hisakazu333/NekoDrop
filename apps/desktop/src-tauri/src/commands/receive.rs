@@ -99,10 +99,54 @@ pub fn start_receive_once(
         .map_err(|error| error.to_string())?;
     let bind_addr = local_addr.to_string();
     let cancel = Arc::new(AtomicBool::new(false));
+
+    // 跨网收件（iroh）：按设置起服务并生成第二张连接码；失败只降级不阻断 TCP 收件
+    let iroh_mode = state
+        .config
+        .lock()
+        .map(|config| config.iroh_receive_mode)
+        .unwrap_or(nekodrop_core::IrohReceiveMode::Off);
+    let iroh_session = match iroh_mode {
+        nekodrop_core::IrohReceiveMode::Off => None,
+        mode => {
+            let server = match mode {
+                nekodrop_core::IrohReceiveMode::Relay => {
+                    nekodrop_network::iroh_transport::IrohServer::bind_with_public_relays()
+                }
+                _ => nekodrop_network::iroh_transport::IrohServer::bind_direct_only(),
+            };
+            match server {
+                Ok(server) => {
+                    let endpoint = nekodrop_network::Endpoint {
+                        host: server.node_id_hex(),
+                        port: 0,
+                        transport: nekodrop_network::TransportKind::Iroh,
+                        relay_url: server.relay_url(),
+                        direct_addrs: server.direct_addrs(),
+                    };
+                    match ConnectionTicket::new(endpoint)
+                        .map(|ticket| ticket.with_device_identity(&identity))
+                        .and_then(|ticket| ticket.to_code())
+                    {
+                        Ok(code) => Some((code, server)),
+                        Err(error) => {
+                            eprintln!("nekodrop: iroh connection code failed: {error}");
+                            None
+                        }
+                    }
+                }
+                Err(error) => {
+                    eprintln!("nekodrop: iroh receive bind failed: {error}");
+                    None
+                }
+            }
+        }
+    };
     let session = ActiveReceiveSession {
         bind_addr: bind_addr.clone(),
         receive_dir: receive_dir_path.display().to_string(),
         connection_code,
+        iroh_connection_code: iroh_session.as_ref().map(|(code, _)| code.clone()),
         cancel: cancel.clone(),
     };
 
@@ -164,97 +208,102 @@ pub fn start_receive_once(
     let local_identity = state.device_identity.public_identity();
     let receive_dir_for_thread = receive_dir_path.clone();
     let bundle_staging_root_for_thread = bundle_staging_root.clone();
-    thread::spawn(move || loop {
-        if cancel.load(Ordering::SeqCst) {
-            {
-                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                let mut status = receive_status
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                *status = Some("收件已关闭".to_string());
-            }
-            {
-                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                let mut active_session = receive_session
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                *active_session = None;
-            }
-            set_transfer_status(
-                &transfer_status,
-                TransferStatusState {
-                    direction: "receive".to_string(),
-                    phase: "closed".to_string(),
-                    root_name: None,
-                    file_count: 0,
-                    file_index: 0,
-                    current_file: None,
-                    bytes_transferred: 0,
-                    total_bytes: 0,
-                    message: "收件已关闭".to_string(),
-                    updated_at_ms: now_ms(),
-                },
-            );
-            return;
-        }
+    let loop_ctx = Arc::new(ReceiveLoopCtx {
+        config,
+        transfer_status: transfer_status.clone(),
+        receive_status,
+        pending_receive_offer,
+        pending_pairing_request,
+        trusted_devices,
+        transfer_history,
+        active_receive_cancel,
+        last_receive_report,
+        local_bridge_runtime,
+        local_identity,
+        local_device_identity,
+        receive_dir_for_thread,
+        bundle_staging_root_for_thread,
+        cancel: cancel.clone(),
+    });
+    let tcp_ctx = loop_ctx.clone();
 
-        match listener.accept() {
-            Ok((mut stream, peer_addr)) => {
-                if let Err(error) = stream.set_nonblocking(false) {
-                    set_transfer_status(
-                        &transfer_status,
-                        TransferStatusState {
-                            direction: "receive".to_string(),
-                            phase: "failed".to_string(),
-                            root_name: None,
-                            file_count: 0,
-                            file_index: 0,
-                            current_file: None,
-                            bytes_transferred: 0,
-                            total_bytes: 0,
-                            message: format!("接收连接准备失败：{error}"),
-                            updated_at_ms: now_ms(),
-                        },
-                    );
-                    continue;
-                }
-                if let Err(error) = stream.set_io_timeout(TCP_IO_STALL_TIMEOUT) {
-                    eprintln!("nekodrop: failed to set receive socket timeout: {error}");
-                }
-                let peer_host = peer_addr.ip().to_string();
-                let receive_policy = config
-                    .lock()
-                    .map(|config| config.receive_policy)
-                    .unwrap_or(ReceivePolicy::AlwaysAsk);
-                let pending_for_decision = pending_receive_offer.clone();
-                let trusted_for_decision = trusted_devices.clone();
-                let trusted_for_session = trusted_devices.clone();
-                let receive_trust_context = Arc::new(Mutex::new(ReceiveTrustContext::Untrusted));
-                let receive_trust_for_session = receive_trust_context.clone();
-                let receive_trust_for_decision = receive_trust_context.clone();
-                let pending_for_pairing = pending_pairing_request.clone();
-                let status_for_decision = transfer_status.clone();
-                let status_for_progress = transfer_status.clone();
-                let runtime_for_progress = local_bridge_runtime.clone();
-                let receive_dir_for_decision = receive_dir_for_thread.clone();
-                let trusted_for_pairing = trusted_devices.clone();
-                let local_for_pairing = local_identity.clone();
-                let local_for_signing = local_device_identity.clone();
-                let peer_host_for_pairing = peer_host.clone();
-                let current_receive_cancel = Arc::new(AtomicBool::new(false));
-                {
-                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                    let mut active_cancel = active_receive_cancel
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *active_cancel = Some(current_receive_cancel.clone());
-                }
-                let result =
+    /// 收件循环的共享上下文：TCP 与 iroh 两条接受线程复用同一处理体。
+    pub(super) struct ReceiveLoopCtx {
+        pub config: Arc<Mutex<nekodrop_core::AppConfig>>,
+        pub transfer_status: Arc<Mutex<Option<TransferStatusState>>>,
+        pub receive_status: Arc<Mutex<Option<String>>>,
+        pub pending_receive_offer: Arc<Mutex<Option<PendingReceiveOffer>>>,
+        pub pending_pairing_request: Arc<Mutex<Option<PendingPairingRequest>>>,
+        pub trusted_devices: Arc<Mutex<Vec<TrustedDeviceRecord>>>,
+        pub transfer_history: Arc<Mutex<Vec<TransferHistoryRecord>>>,
+        pub active_receive_cancel: Arc<Mutex<Option<Arc<AtomicBool>>>>,
+        pub last_receive_report: Arc<Mutex<Option<TransferReceiveReport>>>,
+        pub local_bridge_runtime: Arc<LocalBridgeRuntimeState>,
+        pub local_identity: DeviceIdentity,
+        pub local_device_identity: crate::device_identity::LocalDeviceIdentity,
+        pub receive_dir_for_thread: PathBuf,
+        pub bundle_staging_root_for_thread: PathBuf,
+        pub cancel: Arc<AtomicBool>,
+    }
+
+    /// 单个入站连接的完整处理：决策/配对/传输/历史/桥事件（TCP 与 iroh 共用）。
+    #[allow(clippy::too_many_lines)]
+    fn handle_receive_connection(
+        stream: &mut std::net::TcpStream,
+        peer_host: &str,
+        ctx: &ReceiveLoopCtx,
+    ) {
+        let ReceiveLoopCtx {
+            config,
+            transfer_status,
+            receive_status,
+            pending_receive_offer,
+            pending_pairing_request,
+            trusted_devices,
+            transfer_history,
+            active_receive_cancel,
+            last_receive_report,
+            local_bridge_runtime,
+            local_identity,
+            local_device_identity,
+            receive_dir_for_thread,
+            bundle_staging_root_for_thread,
+            cancel,
+        } = ctx;
+        #[allow(clippy::needless_borrow)]
+        let receive_policy = config
+            .lock()
+            .map(|config| config.receive_policy)
+            .unwrap_or(ReceivePolicy::AlwaysAsk);
+        let pending_for_decision = pending_receive_offer.clone();
+        let trusted_for_decision = trusted_devices.clone();
+        let trusted_for_session = trusted_devices.clone();
+        let receive_trust_context = Arc::new(Mutex::new(ReceiveTrustContext::Untrusted));
+        let receive_trust_for_session = receive_trust_context.clone();
+        let receive_trust_for_decision = receive_trust_context.clone();
+        let pending_for_pairing = pending_pairing_request.clone();
+        let status_for_decision = transfer_status.clone();
+        let status_for_progress = transfer_status.clone();
+        let runtime_for_progress = local_bridge_runtime.clone();
+        let receive_dir_for_decision = receive_dir_for_thread.clone();
+        let trusted_for_pairing = trusted_devices.clone();
+        let local_for_pairing = local_identity.clone();
+        let local_for_signing = local_device_identity.clone();
+        let peer_host_for_pairing = peer_host;
+        let current_receive_cancel = Arc::new(AtomicBool::new(false));
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut active_cancel = active_receive_cancel
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *active_cancel = Some(current_receive_cancel.clone());
+        }
+        let result =
                     accept_incoming_stream_with_authenticated_control_bundle_staging_peer_verifier_and_cancel(
-                        &mut stream,
-                        &receive_dir_for_thread,
-                        &bundle_staging_root_for_thread,
-                        &local_identity,
+                        stream,
+                        receive_dir_for_thread,
+                        bundle_staging_root_for_thread,
+                        local_identity,
                         move |binding| {
                             local_for_signing
                                 .sign_session_identity_binding(binding)
@@ -297,7 +346,7 @@ pub fn start_receive_once(
                         move |request| {
                             wait_for_pairing_decision(
                                 request,
-                                &peer_host_for_pairing,
+                                peer_host_for_pairing,
                                 &pending_for_pairing,
                                 &trusted_for_pairing,
                                 &local_for_pairing,
@@ -324,225 +373,178 @@ pub fn start_receive_once(
                                 || current_receive_cancel.load(Ordering::SeqCst)
                         },
                     );
-                clear_active_receive_cancel(&active_receive_cancel, &current_receive_cancel);
-                {
-                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                    let mut status = receive_status
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *status = Some(match &result {
-                        Ok(IncomingSessionReport::Transfer(report)) => {
-                            format!("接收完成：{} 个文件", report.files.len())
-                        }
-                        Ok(IncomingSessionReport::Pairing(decision)) if decision.accepted => {
-                            "配对完成".to_string()
-                        }
-                        Ok(IncomingSessionReport::Pairing(_)) => "已拒绝配对".to_string(),
-                        Err(_)
-                            if is_receive_terminal_offer_status(&transfer_status, "declined") =>
-                        {
-                            "已拒绝这次传输".to_string()
-                        }
-                        Err(_) if is_receive_terminal_offer_status(&transfer_status, "expired") => {
-                            "等待确认超时，已自动拒绝".to_string()
-                        }
-                        Err(_) if is_receive_terminal_offer_status(&transfer_status, "closed") => {
-                            "收件已关闭".to_string()
-                        }
-                        Err(_) if is_receive_terminal_offer_status(&transfer_status, "blocked") => {
-                            "已阻止这次传输".to_string()
-                        }
-                        Err(_)
-                            if is_receive_terminal_offer_status(&transfer_status, "cancelled") =>
-                        {
-                            "接收已取消".to_string()
-                        }
-                        Err(error) => {
-                            format!("接收失败：{}", friendly_transfer_error(&error.to_string()))
-                        }
-                    });
+        clear_active_receive_cancel(active_receive_cancel, &current_receive_cancel);
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut status = receive_status
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *status = Some(match &result {
+                Ok(IncomingSessionReport::Transfer(report)) => {
+                    format!("接收完成：{} 个文件", report.files.len())
                 }
-                {
-                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                    let mut pending = pending_receive_offer
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *pending = None;
+                Ok(IncomingSessionReport::Pairing(decision)) if decision.accepted => {
+                    "配对完成".to_string()
                 }
-                {
-                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                    let mut pending = pending_pairing_request
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *pending = None;
+                Ok(IncomingSessionReport::Pairing(_)) => "已拒绝配对".to_string(),
+                Err(_) if is_receive_terminal_offer_status(transfer_status, "declined") => {
+                    "已拒绝这次传输".to_string()
                 }
-                if let Ok(mut result) = result {
-                    match result {
-                        IncomingSessionReport::Transfer(ref mut report) => {
-                            // 按发送方归档：文件移入 receive_dir/<设备名>/，历史路径同步改写
-                            let organize_enabled = config
-                                .lock()
-                                .map(|c| c.organize_receive_by_device)
-                                .unwrap_or(false);
-                            let organized_dir = if organize_enabled {
-                                organize_received_files_by_sender(
-                                    &mut report.files,
-                                    report.sender_device_name.as_deref().unwrap_or(""),
-                                    &receive_dir_for_thread,
-                                )
-                            } else {
-                                None
-                            };
-                            let total_bytes =
-                                report.files.iter().map(|file| file.bytes_written).sum();
-                            set_transfer_status_and_push_bridge_event(
-                                &transfer_status,
-                                &local_bridge_runtime,
-                                &report.transfer_id,
-                                TransferStatusState {
-                                    direction: "receive".to_string(),
-                                    phase: "completed".to_string(),
-                                    root_name: None,
-                                    file_count: report.files.len(),
-                                    file_index: report.files.len(),
-                                    current_file: None,
-                                    bytes_transferred: total_bytes,
-                                    total_bytes,
-                                    message: "接收完成，继续等待下一次连接".to_string(),
-                                    updated_at_ms: now_ms(),
-                                },
-                            );
-                            let mut record = new_transfer_history_record(
-                                format!("receive-{}", now_ms()),
-                                "receive",
-                                "completed",
-                                received_root_name(report),
-                                report.files.len(),
-                                total_bytes,
-                                total_bytes,
-                                now_ms(),
-                            );
-                            record.peer_device_id = report.sender_device_id.clone();
-                            record.peer_name = report.sender_device_name.clone();
-                            record.target_host = Some(peer_host.clone());
-                            record.receive_dir = Some(
-                                organized_dir
-                                    .unwrap_or_else(|| receive_dir_for_thread.clone())
-                                    .display()
-                                    .to_string(),
-                            );
-                            record.security_mode = Some(
-                                transfer_security_mode_label(report.security_mode).to_string(),
-                            );
-                            record.received_paths = report
-                                .files
-                                .iter()
-                                .map(|file| file.path.display().to_string())
-                                .collect();
-                            refresh_trusted_device_contact_from_receive_report(
-                                &trusted_devices,
-                                report,
-                            );
-                            if let Err(error) =
-                                push_transfer_history_record(&transfer_history, record)
-                            {
-                                eprintln!("nekodrop: failed to persist transfer history: {error}");
-                            }
-                            if let Some(bundle) = report.bundle.as_ref() {
-                                let _ = push_local_bridge_bundle_received_event(
-                                    &local_bridge_runtime,
-                                    &report.transfer_id,
-                                    bundle,
-                                );
-                            }
-                            {
-                                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                                let mut last_report = last_receive_report
-                                    .lock()
-                                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                                *last_report = Some(report.clone());
-                            }
-                        }
-                        IncomingSessionReport::Pairing(decision) => {
-                            set_transfer_status(
-                                &transfer_status,
-                                TransferStatusState {
-                                    direction: "receive".to_string(),
-                                    phase: if decision.accepted {
-                                        "completed"
-                                    } else {
-                                        "declined"
-                                    }
-                                    .to_string(),
-                                    root_name: None,
-                                    file_count: 0,
-                                    file_index: 0,
-                                    current_file: None,
-                                    bytes_transferred: 0,
-                                    total_bytes: 0,
-                                    message: if decision.accepted {
-                                        "配对完成，继续等待下一次连接"
-                                    } else {
-                                        "已拒绝配对"
-                                    }
-                                    .to_string(),
-                                    updated_at_ms: now_ms(),
-                                },
-                            );
-                        }
+                Err(_) if is_receive_terminal_offer_status(transfer_status, "expired") => {
+                    "等待确认超时，已自动拒绝".to_string()
+                }
+                Err(_) if is_receive_terminal_offer_status(transfer_status, "closed") => {
+                    "收件已关闭".to_string()
+                }
+                Err(_) if is_receive_terminal_offer_status(transfer_status, "blocked") => {
+                    "已阻止这次传输".to_string()
+                }
+                Err(_) if is_receive_terminal_offer_status(transfer_status, "cancelled") => {
+                    "接收已取消".to_string()
+                }
+                Err(error) => {
+                    format!("接收失败：{}", friendly_transfer_error(&error.to_string()))
+                }
+            });
+        }
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut pending = pending_receive_offer
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *pending = None;
+        }
+        {
+            // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+            let mut pending = pending_pairing_request
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            *pending = None;
+        }
+        if let Ok(mut result) = result {
+            match result {
+                IncomingSessionReport::Transfer(ref mut report) => {
+                    // 按发送方归档：文件移入 receive_dir/<设备名>/，历史路径同步改写
+                    let organize_enabled = config
+                        .lock()
+                        .map(|c| c.organize_receive_by_device)
+                        .unwrap_or(false);
+                    let organized_dir = if organize_enabled {
+                        organize_received_files_by_sender(
+                            &mut report.files,
+                            report.sender_device_name.as_deref().unwrap_or(""),
+                            receive_dir_for_thread,
+                        )
+                    } else {
+                        None
+                    };
+                    let total_bytes = report.files.iter().map(|file| file.bytes_written).sum();
+                    set_transfer_status_and_push_bridge_event(
+                        transfer_status,
+                        local_bridge_runtime,
+                        &report.transfer_id,
+                        TransferStatusState {
+                            direction: "receive".to_string(),
+                            phase: "completed".to_string(),
+                            root_name: None,
+                            file_count: report.files.len(),
+                            file_index: report.files.len(),
+                            current_file: None,
+                            bytes_transferred: total_bytes,
+                            total_bytes,
+                            message: "接收完成，继续等待下一次连接".to_string(),
+                            updated_at_ms: now_ms(),
+                        },
+                    );
+                    let mut record = new_transfer_history_record(
+                        format!("receive-{}", now_ms()),
+                        "receive",
+                        "completed",
+                        received_root_name(report),
+                        report.files.len(),
+                        total_bytes,
+                        total_bytes,
+                        now_ms(),
+                    );
+                    record.peer_device_id = report.sender_device_id.clone();
+                    record.peer_name = report.sender_device_name.clone();
+                    record.target_host = Some(peer_host.to_string());
+                    record.receive_dir = Some(
+                        organized_dir
+                            .unwrap_or_else(|| receive_dir_for_thread.clone())
+                            .display()
+                            .to_string(),
+                    );
+                    record.security_mode =
+                        Some(transfer_security_mode_label(report.security_mode).to_string());
+                    record.received_paths = report
+                        .files
+                        .iter()
+                        .map(|file| file.path.display().to_string())
+                        .collect();
+                    refresh_trusted_device_contact_from_receive_report(trusted_devices, report);
+                    if let Err(error) = push_transfer_history_record(transfer_history, record) {
+                        eprintln!("nekodrop: failed to persist transfer history: {error}");
                     }
-                } else if !is_receive_terminal_offer_status(&transfer_status, "declined")
-                    && !is_receive_terminal_offer_status(&transfer_status, "expired")
-                    && !is_receive_terminal_offer_status(&transfer_status, "closed")
-                    && !is_receive_terminal_offer_status(&transfer_status, "blocked")
-                    && !is_receive_terminal_offer_status(&transfer_status, "cancelled")
-                {
+                    if let Some(bundle) = report.bundle.as_ref() {
+                        let _ = push_local_bridge_bundle_received_event(
+                            local_bridge_runtime,
+                            &report.transfer_id,
+                            bundle,
+                        );
+                    }
                     {
                         // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                        let status = receive_status
+                        let mut last_report = last_receive_report
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner());
-                        let failure_message = status
-                            .clone()
-                            .unwrap_or_else(|| "接收失败，继续等待下一次连接".to_string());
-                        set_transfer_status(
-                            &transfer_status,
-                            TransferStatusState {
-                                direction: "receive".to_string(),
-                                phase: "failed".to_string(),
-                                root_name: None,
-                                file_count: 0,
-                                file_index: 0,
-                                current_file: None,
-                                bytes_transferred: 0,
-                                total_bytes: 0,
-                                message: failure_message.clone(),
-                                updated_at_ms: now_ms(),
-                            },
-                        );
-                        push_receive_failure_history(
-                            &transfer_history,
-                            &transfer_status,
-                            &peer_host,
-                            &receive_dir_for_thread,
-                            failure_message,
-                        );
+                        *last_report = Some(report.clone());
                     }
                 }
-            }
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(120));
-            }
-            Err(error) => {
-                {
-                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
-                    let mut status = receive_status
-                        .lock()
-                        .unwrap_or_else(|poisoned| poisoned.into_inner());
-                    *status = Some(format!("接收监听异常：{error}"));
+                IncomingSessionReport::Pairing(decision) => {
+                    set_transfer_status(
+                        transfer_status,
+                        TransferStatusState {
+                            direction: "receive".to_string(),
+                            phase: if decision.accepted {
+                                "completed"
+                            } else {
+                                "declined"
+                            }
+                            .to_string(),
+                            root_name: None,
+                            file_count: 0,
+                            file_index: 0,
+                            current_file: None,
+                            bytes_transferred: 0,
+                            total_bytes: 0,
+                            message: if decision.accepted {
+                                "配对完成，继续等待下一次连接"
+                            } else {
+                                "已拒绝配对"
+                            }
+                            .to_string(),
+                            updated_at_ms: now_ms(),
+                        },
+                    );
                 }
+            }
+        } else if !is_receive_terminal_offer_status(transfer_status, "declined")
+            && !is_receive_terminal_offer_status(transfer_status, "expired")
+            && !is_receive_terminal_offer_status(transfer_status, "closed")
+            && !is_receive_terminal_offer_status(transfer_status, "blocked")
+            && !is_receive_terminal_offer_status(transfer_status, "cancelled")
+        {
+            {
+                // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                let status = receive_status
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                let failure_message = status
+                    .clone()
+                    .unwrap_or_else(|| "接收失败，继续等待下一次连接".to_string());
                 set_transfer_status(
-                    &transfer_status,
+                    transfer_status,
                     TransferStatusState {
                         direction: "receive".to_string(),
                         phase: "failed".to_string(),
@@ -552,14 +554,141 @@ pub fn start_receive_once(
                         current_file: None,
                         bytes_transferred: 0,
                         total_bytes: 0,
-                        message: format!("接收监听异常：{error}"),
+                        message: failure_message.clone(),
                         updated_at_ms: now_ms(),
                     },
                 );
-                thread::sleep(Duration::from_millis(500));
+                push_receive_failure_history(
+                    transfer_history,
+                    transfer_status,
+                    peer_host,
+                    receive_dir_for_thread,
+                    failure_message,
+                );
+            }
+        }
+    }
+
+    thread::spawn(move || {
+        let ctx = &*tcp_ctx;
+        loop {
+            if ctx.cancel.load(Ordering::SeqCst) {
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut status = ctx
+                        .receive_status
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *status = Some("收件已关闭".to_string());
+                }
+                {
+                    // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                    let mut active_session = receive_session
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                    *active_session = None;
+                }
+                set_transfer_status(
+                    &ctx.transfer_status,
+                    TransferStatusState {
+                        direction: "receive".to_string(),
+                        phase: "closed".to_string(),
+                        root_name: None,
+                        file_count: 0,
+                        file_index: 0,
+                        current_file: None,
+                        bytes_transferred: 0,
+                        total_bytes: 0,
+                        message: "收件已关闭".to_string(),
+                        updated_at_ms: now_ms(),
+                    },
+                );
+                return;
+            }
+
+            match listener.accept() {
+                Ok((mut stream, peer_addr)) => {
+                    if let Err(error) = stream.set_nonblocking(false) {
+                        set_transfer_status(
+                            &ctx.transfer_status,
+                            TransferStatusState {
+                                direction: "receive".to_string(),
+                                phase: "failed".to_string(),
+                                root_name: None,
+                                file_count: 0,
+                                file_index: 0,
+                                current_file: None,
+                                bytes_transferred: 0,
+                                total_bytes: 0,
+                                message: format!("接收连接准备失败：{error}"),
+                                updated_at_ms: now_ms(),
+                            },
+                        );
+                        continue;
+                    }
+                    if let Err(error) = stream.set_io_timeout(TCP_IO_STALL_TIMEOUT) {
+                        eprintln!("nekodrop: failed to set receive socket timeout: {error}");
+                    }
+                    let peer_host = peer_addr.ip().to_string();
+                    handle_receive_connection(&mut stream, &peer_host, &tcp_ctx);
+                }
+                Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                    thread::sleep(Duration::from_millis(120));
+                }
+                Err(error) => {
+                    {
+                        // 锁中毒时恢复数据继续执行，而非静默跳过（跳过会让状态永久卡住）
+                        let mut status = ctx
+                            .receive_status
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner());
+                        *status = Some(format!("接收监听异常：{error}"));
+                    }
+                    set_transfer_status(
+                        &ctx.transfer_status,
+                        TransferStatusState {
+                            direction: "receive".to_string(),
+                            phase: "failed".to_string(),
+                            root_name: None,
+                            file_count: 0,
+                            file_index: 0,
+                            current_file: None,
+                            bytes_transferred: 0,
+                            total_bytes: 0,
+                            message: format!("接收监听异常：{error}"),
+                            updated_at_ms: now_ms(),
+                        },
+                    );
+                    thread::sleep(Duration::from_millis(500));
+                }
             }
         }
     });
+
+    if let Some((_, iroh_server)) = iroh_session {
+        let iroh_ctx = loop_ctx.clone();
+        thread::spawn(move || {
+            let ctx = &*iroh_ctx;
+            loop {
+                if ctx.cancel.load(Ordering::SeqCst) {
+                    return;
+                }
+                match iroh_server.accept_transfer_stream_with_deadline(Duration::from_millis(500)) {
+                    Ok(Some(mut stream)) => {
+                        if let Err(error) = stream.set_io_timeout(TCP_IO_STALL_TIMEOUT) {
+                            eprintln!("nekodrop: iroh receive timeout setup failed: {error}");
+                        }
+                        handle_receive_connection(&mut stream, "iroh 跨网", ctx);
+                    }
+                    Ok(None) => continue,
+                    Err(error) => {
+                        eprintln!("nekodrop: iroh accept loop ended: {error}");
+                        return;
+                    }
+                }
+            }
+        });
+    }
 
     Ok(receive_session_to_dto(&session))
 }

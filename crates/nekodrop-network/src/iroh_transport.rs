@@ -106,6 +106,31 @@ impl IrohServer {
         )
     }
 
+    /// 带轮询的接受：每 poll 窗口检查一次外部取消，None 表示本轮无连接。
+    /// 桌面收件线程用它实现干净的停机（阻塞 accept 无法响应取消标志）。
+    pub fn accept_transfer_stream_with_deadline(
+        &self,
+        poll: Duration,
+    ) -> NekoDropResult<Option<TcpStream>> {
+        let endpoint = self.endpoint.clone();
+        runtime().block_on(async move {
+            match tokio::time::timeout(poll, endpoint.accept()).await {
+                Err(_) => Ok(None),
+                Ok(None) => Err(network_error("endpoint closed")),
+                Ok(Some(incoming)) => {
+                    let connection = incoming
+                        .accept()
+                        .map_err(network_error)?
+                        .await
+                        .map_err(network_error)?;
+                    let (send_stream, recv_stream) =
+                        connection.accept_bi().await.map_err(network_error)?;
+                    Ok(Some(bridge_to_sync_stream(send_stream, recv_stream).await?))
+                }
+            }
+        })
+    }
+
     /// 阻塞等待一个 iroh 连接，桥接为同步 TcpStream。
     pub fn accept_transfer_stream(&self) -> NekoDropResult<TcpStream> {
         let endpoint = self.endpoint.clone();

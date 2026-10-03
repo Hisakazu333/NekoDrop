@@ -7,6 +7,7 @@ pub(super) fn receive_session_to_dto(session: &ActiveReceiveSession) -> ReceiveS
         bind_addr: session.bind_addr.clone(),
         receive_dir: session.receive_dir.clone(),
         connection_code: session.connection_code.clone(),
+        iroh_connection_code: session.iroh_connection_code.clone(),
     }
 }
 
@@ -107,6 +108,7 @@ mod tests {
             bind_addr: "0.0.0.0:45821".to_string(),
             receive_dir: "/tmp/nekodrop".to_string(),
             connection_code: "ticket".to_string(),
+            iroh_connection_code: None,
             cancel: Arc::new(AtomicBool::new(false)),
         };
 
@@ -132,6 +134,7 @@ mod tests {
             bind_addr: "0.0.0.0:45821".to_string(),
             receive_dir: "/tmp/nekodrop".to_string(),
             connection_code: "ticket".to_string(),
+            iroh_connection_code: None,
             cancel: Arc::new(AtomicBool::new(false)),
         };
 

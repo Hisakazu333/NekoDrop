@@ -1,6 +1,7 @@
 import React from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
+import { copyTextToClipboard } from "../context/helpers";
 
 const RECEIVE_POLICY_OPTIONS = [
   { value: "always_ask", label: "每次询问" },
@@ -42,6 +43,10 @@ export function SettingsView() {
     setSendLimitInput,
     saveSendLimit,
     updateOrganizeByDevice,
+    updateIrohReceiveMode,
+    receiveSession,
+    setToast,
+    setError,
     setMode,
     busy
   } = useAppContext();
@@ -55,6 +60,80 @@ export function SettingsView() {
 
       <div className="page-section">
         <div className="page-section-title">接收</div>
+        {receiveSession && (
+          <>
+            <div className="form-row">
+              <div className="form-label">
+                局域网连接码<small>同网设备输入此码发送</small>
+              </div>
+              <span className="form-value" title={receiveSession.connection_code}>
+                {receiveSession.connection_code}
+              </span>
+              <button
+                className="btn-mini"
+                onClick={() =>
+                  void copyTextToClipboard(receiveSession.connection_code)
+                    .then(() => setToast?.("连接码已复制"))
+                    .catch(() => setError?.("剪贴板不可用"))
+                }
+                type="button"
+              >
+                复制
+              </button>
+            </div>
+            {receiveSession.irohConnectionCode && (
+              <div className="form-row">
+                <div className="form-label">
+                  跨网连接码<small>不同网络也能发到这（iroh）</small>
+                </div>
+                <span className="form-value" title={receiveSession.irohConnectionCode}>
+                  {receiveSession.irohConnectionCode}
+                </span>
+                <button
+                  className="btn-mini"
+                  onClick={() =>
+                    void copyTextToClipboard(receiveSession.irohConnectionCode ?? "")
+                      .then(() => setToast?.("跨网连接码已复制"))
+                      .catch(() => setError?.("剪贴板不可用"))
+                  }
+                  type="button"
+                >
+                  复制
+                </button>
+              </div>
+            )}
+          </>
+        )}
+        <div className="form-row">
+          <div className="form-label">
+            跨网收件<small>中继模式经 n0 公共中继转发密文，元数据对中继可见</small>
+          </div>
+          <div className="policy-segment">
+            <button
+              className={snapshot?.iroh_receive_mode !== "direct" && snapshot?.iroh_receive_mode !== "relay" ? "is-active" : ""}
+              onClick={() => void updateIrohReceiveMode("off")}
+              type="button"
+            >
+              关闭
+            </button>
+            <button
+              className={snapshot?.iroh_receive_mode === "direct" ? "is-active" : ""}
+              onClick={() => void updateIrohReceiveMode("direct")}
+              title="纯打洞直连，不经任何第三方"
+              type="button"
+            >
+              直连
+            </button>
+            <button
+              className={snapshot?.iroh_receive_mode === "relay" ? "is-active" : ""}
+              onClick={() => void updateIrohReceiveMode("relay")}
+              title="打洞失败时经 n0 公共中继（仅密文）"
+              type="button"
+            >
+              中继
+            </button>
+          </div>
+        </div>
         <div className="form-row">
           <div className="form-label">
             接收目录<small>收到的文件落在这里</small>

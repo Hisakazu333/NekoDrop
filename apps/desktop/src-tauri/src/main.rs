@@ -34,6 +34,7 @@ pub fn run() {
             commands::set_trusted_device_alias,
             commands::set_send_limit,
             commands::set_organize_receive_by_device,
+            commands::set_iroh_receive_mode,
             commands::send_paths_to_code,
             commands::send_paths_to_device,
             commands::resend_transfer,
