@@ -101,7 +101,17 @@ function TabStrip({ collapsed, onToggleCollapse, onBack, onForward, canBack, can
  * App shell: tab strip, two panes, transfer banner and inbox drawer.
  */
 function AppContent() {
-  const { error, toast, mode, setMode, localBridgePendingActions, stagedBundles } = useAppContext();
+  const {
+    error,
+    toast,
+    mode,
+    setMode,
+    localBridgePendingActions,
+    stagedBundles,
+    clearQueue,
+    setConnectionCode,
+    setConnectionCodeOpen
+  } = useAppContext();
   const [inboxOpen, setInboxOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
@@ -133,17 +143,20 @@ function AppContent() {
   const inboxCount =
     localBridgePendingActions.length + stagedBundles.filter(isPendingInboxBundle).length;
 
-  // ⌘N / Ctrl+N：开一个新传输
+  // ⌘N / Ctrl+N：新传输 = 清空队列、复位连接码、回到发送页
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "n") {
         event.preventDefault();
+        clearQueue();
+        setConnectionCode("");
+        setConnectionCodeOpen(false);
         setMode("send");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [setMode]);
+  }, [clearQueue, setConnectionCode, setConnectionCodeOpen, setMode]);
 
   const renderMain = () => {
     switch (mode) {

@@ -31,6 +31,7 @@ export function SendView() {
     nearbyDevices,
     trustedDevices,
     setSelectedDeviceId,
+    setMode,
     connectionCode,
     setConnectionCode,
     connectionCodeOpen,
@@ -56,11 +57,29 @@ export function SendView() {
   const codeReady = connectionCode.trim().length > 0;
   const canSend = selectedPaths.length > 0 && !busy && (Boolean(selectedDevice) || codeReady);
 
+  // 橙色目标动作：已选设备显示去向；点按跳设备页换目标（连接码模式则先收起）
   const targetLabel = connectionCodeOpen
-    ? "使用连接码发送"
+    ? "改用设备直发"
     : selectedDevice
-      ? `发送至 ${selectedDevice.name}`
+      ? `发送至 ${selectedDevice.name} · 更换`
       : "选择发送目标";
+  const onTargetClick = () => {
+    if (connectionCodeOpen) {
+      setConnectionCodeOpen(false);
+      return;
+    }
+    setMode("devices");
+  };
+
+  // 状态位只说真话：队列条目 / 接收中 / 待选择文件
+  const noteText =
+    plan && selectedPaths.length > 0
+      ? `${selectedPaths.length} 项 · ${formatBytes(plan.total_bytes)}`
+      : receiveSession
+        ? "收件开启"
+        : selectedDevice
+          ? `待发往 ${selectedDevice.name}`
+          : "待选择文件";
 
   const stripDevices = [
     ...nearbyDevices.map((device) => ({ id: device.id, name: device.name, online: true })),
@@ -187,18 +206,17 @@ export function SendView() {
             </button>
             <button
               className="bar-target"
-              onClick={() => setConnectionCodeOpen(!connectionCodeOpen)}
-              title={selectedDevice ? `发送至 ${selectedDevice.name}` : "选择发送目标"}
+              onClick={onTargetClick}
+              title={connectionCodeOpen ? "收起连接码，改选设备" : "去设备页选择或配对目标"}
               type="button"
             >
               {targetLabel}
             </button>
-            <span className="bar-note" title={receiveSession ? receiveStatus ?? "等待接收中" : undefined}>
-              {plan && selectedPaths.length > 0
-                ? `${selectedPaths.length} 项 · ${formatBytes(plan.total_bytes)}`
-                : receiveSession
-                  ? "收件开启"
-                  : "自动"}
+            <span
+              className="bar-note"
+              title={receiveSession ? receiveStatus ?? "等待接收中" : undefined}
+            >
+              {noteText}
             </span>
             <button
               aria-label="发送"
@@ -218,18 +236,29 @@ export function SendView() {
             <span className="strip-label">点设备直接发送</span>
             <div className="strip-dots">
               {stripDevices.length === 0 && <span className="strip-none">等待发现设备…</span>}
-              {stripDevices.slice(0, 8).map((device) => (
-                <button
-                  className={`strip-dot ${device.online ? "" : "is-offline"}`}
-                  key={device.id}
-                  onClick={() => pickStripDevice(device.id)}
-                  style={{ backgroundColor: `hsl(${hueFor(device.name)} 48% 52%)` }}
-                  title={device.name}
-                  type="button"
-                >
-                  {device.name.slice(0, 1).toUpperCase()}
-                </button>
-              ))}
+              {stripDevices.slice(0, 8).map((device) =>
+                device.online ? (
+                  <button
+                    className="strip-dot"
+                    key={device.id}
+                    onClick={() => pickStripDevice(device.id)}
+                    style={{ backgroundColor: `hsl(${hueFor(device.name)} 48% 52%)` }}
+                    title={`${device.name} · 点按设为发送目标`}
+                    type="button"
+                  >
+                    {device.name.slice(0, 1).toUpperCase()}
+                  </button>
+                ) : (
+                  <span
+                    className="strip-dot is-offline"
+                    key={device.id}
+                    style={{ backgroundColor: `hsl(${hueFor(device.name)} 48% 52%)` }}
+                    title={`${device.name}（离线）`}
+                  >
+                    {device.name.slice(0, 1).toUpperCase()}
+                  </span>
+                )
+              )}
             </div>
             <button
               aria-label="收起"
@@ -255,14 +284,14 @@ export function SendView() {
             onClick={() => setBundleFormOpen(!bundleFormOpen)}
             type="button"
           >
-            <Icon name="package" /> 资料包
+            <Icon name="package" /> {bundleFormOpen ? "收起资料包" : "资料包"}
           </button>
           <button
             className={connectionCodeOpen ? "is-emphasis" : ""}
             onClick={() => setConnectionCodeOpen(!connectionCodeOpen)}
             type="button"
           >
-            <Icon name="link" /> 连接码
+            <Icon name="link" /> {connectionCodeOpen ? "收起连接码" : "连接码"}
           </button>
         </div>
       </div>
