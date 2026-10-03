@@ -17,6 +17,8 @@ pub struct TrustedDeviceRecord {
     pub schema_version: u16,
     pub device_id: String,
     pub device_name: String,
+    /// 用户给设备起的备注名（显示优先于 device_name）
+    pub alias: Option<String>,
     pub platform: String,
     pub host: String,
     pub port: u16,
@@ -32,6 +34,7 @@ struct TrustedDeviceRecordRaw {
     pub schema_version: Option<u16>,
     pub device_id: Option<String>,
     pub device_name: Option<String>,
+    pub alias: Option<String>,
     pub platform: Option<String>,
     pub host: Option<String>,
     pub port: Option<u16>,
@@ -81,6 +84,7 @@ pub fn trust_device_record(
         schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
         device_id: device.id.as_str().to_string(),
         device_name: device.name.clone(),
+        alias: None,
         platform: platform_to_string(device.platform).to_string(),
         host: device.host.clone(),
         port: device.port,
@@ -122,6 +126,7 @@ pub fn trusted_device_record_from_remote(
     let now = now_ms();
     Ok(TrustedDeviceRecord {
         schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
+        alias: None,
         pairing_code: pairing_code_for_values(
             &local_identity.device_id,
             &local_identity.public_key_fingerprint,
@@ -138,6 +143,25 @@ pub fn trusted_device_record_from_remote(
         paired_at_ms: now,
         last_seen_at_ms: now,
     })
+}
+
+/// 设置备注名：去空白、截断 32 字符、空值清除；返回更新后的记录。
+pub fn set_alias_on_trusted_device(
+    records: &mut [TrustedDeviceRecord],
+    device_id: &str,
+    alias: &str,
+) -> Option<TrustedDeviceRecord> {
+    let trimmed = alias.trim();
+    let next_alias = if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.chars().take(32).collect::<String>())
+    };
+    let record = records
+        .iter_mut()
+        .find(|record| record.device_id == device_id)?;
+    record.alias = next_alias;
+    Some(record.clone())
 }
 
 pub fn upsert_trusted_device(
@@ -218,6 +242,7 @@ fn trusted_device_record_from_raw(raw: TrustedDeviceRecordRaw) -> Option<Trusted
         schema_version: raw.schema_version?,
         device_id: raw.device_id?,
         device_name: raw.device_name?,
+        alias: raw.alias,
         platform: raw.platform?,
         host: raw.host?,
         port: raw.port?,
@@ -476,6 +501,7 @@ mod tests {
         TrustedDeviceRecord {
             schema_version: TRUSTED_DEVICES_SCHEMA_VERSION,
             device_name: device_name.into(),
+            alias: None,
             platform: "macos".to_string(),
             host: "192.168.1.20".to_string(),
             port: 45821,
@@ -494,5 +520,30 @@ mod tests {
             seed[index % seed.len()] ^= *byte;
         }
         nekolink_protocol::DeviceIdentitySigningKey::from_seed(seed).public_key()
+    }
+
+    #[test]
+    fn alias_roundtrip_set_clear_and_persist() {
+        let mut records = vec![trusted_record("device-a", "MacBook Pro", 1)];
+        // 设置：截断 32 字符
+        let updated =
+            set_alias_on_trusted_device(&mut records, "device-a", "  我的小黑  ").unwrap();
+        assert_eq!(updated.alias.as_deref(), Some("我的小黑"));
+        let long = "x".repeat(50);
+        let updated = set_alias_on_trusted_device(&mut records, "device-a", &long).unwrap();
+        assert_eq!(
+            updated.alias.as_deref().map(|a| a.chars().count()),
+            Some(32)
+        );
+        // 清除：空白即清除
+        set_alias_on_trusted_device(&mut records, "device-a", "   ").unwrap();
+        assert_eq!(records[0].alias, None);
+        // 未知设备
+        assert!(set_alias_on_trusted_device(&mut records, "device-b", "x").is_none());
+        // 序列化往返保留 alias
+        records[0].alias = Some("书房 iMac".to_string());
+        let json = serde_json::to_string(&records).unwrap();
+        let reloaded = parse_trusted_devices(&json, "test").unwrap();
+        assert_eq!(reloaded[0].alias.as_deref(), Some("书房 iMac"));
     }
 }

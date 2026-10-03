@@ -14,6 +14,8 @@ type CommandName =
   | "create_transfer_plan_from_text"
   | "send_paths_to_code"
   | "stage_text_snippet"
+  | "read_received_text"
+  | "set_trusted_device_alias"
   | "send_paths_to_device"
   | "resend_transfer"
   | "open_transfer_location"

@@ -33,6 +33,7 @@ export interface DeviceDto {
 export interface TrustedDeviceDto {
   device_id: string;
   device_name: string;
+  alias?: string | null;
   platform: string;
   host: string;
   port: number;

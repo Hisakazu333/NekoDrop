@@ -162,6 +162,24 @@ pub fn request_device_pairing(
 }
 
 #[tauri::command(async)]
+pub fn set_trusted_device_alias(
+    state: State<'_, AppState>,
+    device_id: String,
+    alias: String,
+) -> Result<TrustedDeviceDto, String> {
+    let mut trusted_devices = state
+        .trusted_devices
+        .lock()
+        .map_err(|error| error.to_string())?;
+    let mut next_trusted_devices = trusted_devices.clone();
+    let record = set_alias_on_trusted_device(&mut next_trusted_devices, &device_id, &alias)
+        .ok_or_else(|| "没有这台已配对设备".to_string())?;
+    save_trusted_devices(&next_trusted_devices)?;
+    *trusted_devices = next_trusted_devices;
+    Ok(trusted_device_to_dto(&record))
+}
+
+#[tauri::command(async)]
 pub fn forget_trusted_device(state: State<'_, AppState>, device_id: String) -> Result<(), String> {
     {
         let mut trusted_devices = state

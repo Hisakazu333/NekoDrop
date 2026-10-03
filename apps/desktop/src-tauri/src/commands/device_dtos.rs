@@ -60,6 +60,7 @@ pub(super) fn trusted_device_to_dto(device: &TrustedDeviceRecord) -> TrustedDevi
     TrustedDeviceDto {
         device_id: device.device_id.clone(),
         device_name: device.device_name.clone(),
+        alias: device.alias.clone(),
         platform: device.platform.clone(),
         host: device.host.clone(),
         port: device.port,

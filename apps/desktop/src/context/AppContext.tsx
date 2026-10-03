@@ -3,7 +3,8 @@ import {
   ReceivePolicyMode, errorMessage, normalizeReceivePolicy, readInitialAppearance,
   portFromBindAddr, buildPathPayload, uniquePaths, keepIfEqual, resetTransferMetrics, APPEARANCE_STORAGE_KEY,
   lastPathSegment, isReceiveTransferActivePhase, isCancelMessage, copyTextToClipboard,
-  QueuedSend, QueuedSendKind, enqueueSend, dequeueSend, queuedSendLabel
+  QueuedSend, QueuedSendKind, enqueueSend, dequeueSend, queuedSendLabel,
+  resumeQueuedSend as resumeQueuedEntry
 } from "./helpers";
 import { useSettingsDomain } from "./settings";
 import { useComposerDomain } from "./composer";
@@ -181,6 +182,8 @@ interface AppContextType {
   sendFilesToDevice: (device: DeviceDto) => Promise<void>;
   sendCurrentTransfer: (textSnippet?: string) => Promise<void>;
   sendQueue: QueuedSend[];
+  pauseCurrentTransfer: () => Promise<void>;
+  resumeQueuedSendById: (id: string) => void;
   cancelQueuedSend: (id: string) => void;
   clearSendQueue: () => void;
   cancelCurrentTransfer: () => Promise<void>;
@@ -191,6 +194,7 @@ interface AppContextType {
   requestPairing: (device: DeviceDto) => Promise<void>;
   respondPairingRequest: (accept: boolean) => Promise<void>;
   forgetTrustedDevice: (device: TrustedDeviceDto) => Promise<void>;
+  setTrustedDeviceAlias: (deviceId: string, alias: string) => Promise<void>;
   respondReceiveOffer: (accept: boolean) => Promise<void>;
   copyConnectionCode: () => Promise<void>;
 
@@ -242,6 +246,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [sendQueue, setSendQueue] = useState<QueuedSend[]>([]);
   const queueFlushInFlight = useRef(false);
   const queueSeq = useRef(0);
+  // 正在发送的载荷快照：暂停时原样回队（协议断点续传，继续时接着传）
+  const activeSendRef = useRef<{ kind: QueuedSendKind; target: string; pathsText: string } | null>(null);
 
   const desktopRuntime = useMemo(() => isTauriRuntime(), []);
   const previousTransferStatus = useRef<TransferStatusDto | null>(null);
@@ -620,6 +626,7 @@ const {
 
   // 共享发送内核：设备或连接码，直接发送与队列出队共用
   async function runSend(kind: QueuedSendKind, target: string, pathsText: string, successToast: string) {
+    activeSendRef.current = { kind, target, pathsText };
     setBusy("send");
     setError(null);
     setSendReport(null);
@@ -731,7 +738,7 @@ const {
     await runSend(kind, target, payload.join("\n"), successToast);
   }
 
-  // 空闲时自动出队发送（失败不回队，直接报错继续下一条）
+  // 空闲时自动出队发送（跳过暂停条目；失败不回队，报错继续下一条）
   useEffect(() => {
     if (busy !== null || queueFlushInFlight.current) return;
     const { head, rest } = dequeueSend(sendQueue);
@@ -743,6 +750,29 @@ const {
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy, sendQueue]);
+
+  // 暂停：取消当前发送（协议断点续传），原载荷标记为已暂停回队
+  async function pauseCurrentTransfer() {
+    const snapshot = activeSendRef.current;
+    if (!snapshot) return;
+    queueSeq.current += 1;
+    const entry: QueuedSend = {
+      id: `queue-${Date.now()}-${queueSeq.current}`,
+      kind: snapshot.kind,
+      target: snapshot.target,
+      pathsText: snapshot.pathsText,
+      label: queuedSendLabel(snapshot.pathsText),
+      enqueuedAtMs: Date.now(),
+      paused: true
+    };
+    setSendQueue((current) => enqueueSend(current, entry));
+    setToast(`已暂停：${entry.label}（继续时接着传）`);
+    await cancelCurrentTransfer();
+  }
+
+  function resumeQueuedSendById(id: string) {
+    setSendQueue((current) => resumeQueuedEntry(current, id));
+  }
 
   function cancelQueuedSend(id: string) {
     setSendQueue((current) => current.filter((entry) => entry.id !== id));
@@ -892,6 +922,20 @@ const {
     }
   }
 
+  async function setTrustedDeviceAlias(deviceId: string, alias: string) {
+    setBusy("forget");
+    setError(null);
+    try {
+      await invokeCommand<TrustedDeviceDto>("set_trusted_device_alias", { deviceId, alias });
+      setToast(alias.trim() ? `备注已更新：${alias.trim()}` : "备注已清除");
+      await refreshReceiveState({ includeDirectoryState: true });
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function respondReceiveOffer(accept: boolean) {
     setBusy("receive");
     setError(null);
@@ -1024,6 +1068,8 @@ const {
     sendFilesToDevice,
     sendCurrentTransfer,
     sendQueue,
+    pauseCurrentTransfer,
+    resumeQueuedSendById,
     cancelQueuedSend,
     clearSendQueue,
     cancelCurrentTransfer,
@@ -1034,6 +1080,7 @@ const {
     requestPairing,
     respondPairingRequest,
     forgetTrustedDevice,
+    setTrustedDeviceAlias,
     respondReceiveOffer,
     copyConnectionCode,
 

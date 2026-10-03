@@ -1059,6 +1059,46 @@ html[data-theme="dark"] .quick-row button {
   padding: 0 6px;
   font-variant-numeric: tabular-nums;
 }
+/* 队列清单（横幅内）/ queue list inside banner */
+.banner-queue-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: 6px;
+}
+.banner-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+}
+.banner-queue-item .queue-state {
+  flex-shrink: 0;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  width: 38px;
+}
+.banner-queue-item .queue-state.is-paused {
+  color: var(--warn);
+}
+.banner-queue-item .queue-item-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.banner-queue-item .text-btn {
+  padding: 2px 8px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.banner-queue-item.is-more {
+  color: var(--text-3);
+  font-size: 12px;
+}
 .pair-code {
   font-family: var(--font-mono);
   font-size: 15px;
@@ -1190,6 +1230,31 @@ html[data-theme="dark"] .quick-row button {
   color: var(--text-3);
   padding: 12px 8px;
   line-height: 1.65;
+}
+
+/* 行内重命名 / inline rename */
+.rename-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rename-inline input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--input-border);
+  border-radius: var(--radius-hover);
+  background: var(--input-bg);
+  padding: 5px 10px;
+  font-size: 13px;
+}
+.rename-inline input:focus {
+  border-color: var(--live);
+  box-shadow: 0 0 0 2px var(--live-soft);
+}
+.row-title .row-origin {
+  color: var(--text-3);
+  font-weight: 400;
+  font-size: 12.5px;
 }
 
 /* 历史页统计 / stats */
