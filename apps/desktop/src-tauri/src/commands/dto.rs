@@ -38,6 +38,8 @@ pub struct DeviceDto {
 pub struct TrustedDeviceDto {
     pub device_id: String,
     pub device_name: String,
+    #[serde(rename = "alias", skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
     pub platform: String,
     pub host: String,
     pub port: u16,

@@ -24,6 +24,7 @@ export function TransferBanner() {
     respondReceiveOffer,
     respondPairingRequest,
     cancelCurrentTransfer,
+    pauseCurrentTransfer,
     sendQueue,
     cancelQueuedSend,
     busy
@@ -131,6 +132,17 @@ export function TransferBanner() {
           {sendQueue.length > 0 && (
             <span className="queue-count">队列 {sendQueue.length}</span>
           )}
+          {isSend && (
+            <button
+              className="text-btn"
+              disabled={busy === "cancel-transfer"}
+              onClick={() => void pauseCurrentTransfer()}
+              title="暂停传输，继续时从断点接着传"
+              type="button"
+            >
+              暂停
+            </button>
+          )}
           <button className="text-btn is-danger" onClick={cancelCurrentTransfer} type="button">
             取消
           </button>
@@ -140,30 +152,50 @@ export function TransferBanner() {
   );
 }
 
-// 没有进行中的传输但队列有货（出队间隙）：提示队列等待
+// 没有进行中的传输但队列有货（出队间隙/已暂停）：逐条展示，可继续或移除
 function QueueOnlyBanner() {
-  const { sendQueue, cancelQueuedSend } = useAppContext();
+  const { sendQueue, cancelQueuedSend, resumeQueuedSendById, clearSendQueue } = useAppContext();
   if (sendQueue.length === 0) return null;
   return (
     <div className="transfer-banner">
       <Icon name="clock" className="banner-icon" />
       <div className="banner-body">
-        <div className="banner-title">队列待发 · {sendQueue.length} 项</div>
-        <div className="banner-sub">{sendQueue.map((entry) => entry.label).join(" · ")}</div>
+        <div className="banner-title">
+          队列待发 · {sendQueue.length} 项
+          {sendQueue.some((entry) => entry.paused) && `（含已暂停 ${sendQueue.filter((e) => e.paused).length}）`}
+        </div>
+        <div className="banner-queue-list">
+          {sendQueue.slice(0, 4).map((entry) => (
+            <div className="banner-queue-item" key={entry.id}>
+              <span className={`queue-state ${entry.paused ? "is-paused" : ""}`}>
+                {entry.paused ? "已暂停" : "等待"}
+              </span>
+              <span className="queue-item-label" title={entry.pathsText}>{entry.label}</span>
+              {entry.paused ? (
+                <button
+                  className="text-btn is-primary"
+                  onClick={() => resumeQueuedSendById(entry.id)}
+                  title="从断点继续传输"
+                  type="button"
+                >
+                  继续
+                </button>
+              ) : (
+                <button
+                  className="text-btn"
+                  onClick={() => cancelQueuedSend(entry.id)}
+                  type="button"
+                >
+                  移除
+                </button>
+              )}
+            </div>
+          ))}
+          {sendQueue.length > 4 && <div className="banner-queue-item is-more">…还有 {sendQueue.length - 4} 项</div>}
+        </div>
       </div>
       <div className="banner-ops">
-        <button
-          className="text-btn is-danger"
-          onClick={() => cancelQueuedSend(sendQueue[0].id)}
-          type="button"
-        >
-          移除首项
-        </button>
-        <button
-          className="text-btn"
-          onClick={() => sendQueue.forEach((entry) => cancelQueuedSend(entry.id))}
-          type="button"
-        >
+        <button className="text-btn is-danger" onClick={clearSendQueue} type="button">
           清空
         </button>
       </div>

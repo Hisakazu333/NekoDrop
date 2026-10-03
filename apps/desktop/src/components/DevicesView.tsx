@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import type { DeviceDto, TrustedDeviceDto } from "../types";
@@ -20,12 +20,15 @@ export function DevicesView() {
     snapshot,
     requestPairing,
     forgetTrustedDevice,
+    setTrustedDeviceAlias,
     setSelectedDeviceId,
     setConnectionCodeOpen,
     setMode,
     sendFilesToDevice,
     busy
   } = useAppContext();
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [aliasDraft, setAliasDraft] = useState("");
 
   const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
 
@@ -43,7 +46,9 @@ export function DevicesView() {
           <Icon name="laptop" />
         </span>
         <div className="row-main">
-          <div className="row-title">{device.name}</div>
+          <div className="row-title">
+            {(trusted && trustedDevices.find((d) => d.device_id === device.id)?.alias) || device.name}
+          </div>
           <div className="row-sub">
             <span className="mono">{device.host}</span> · {device.platform}
             {device.public_key_fingerprint ? <> · <span className="mono">{device.public_key_fingerprint.slice(0, 16)}…</span></> : null}
@@ -77,27 +82,84 @@ export function DevicesView() {
     );
   };
 
-  const trustedRow = (device: TrustedDeviceDto) => (
-    <div className="list-row" key={device.device_id}>
-      <span className="row-icon">
-        <Icon name="shield" />
-      </span>
-      <div className="row-main">
-        <div className="row-title">{device.device_name}</div>
-        <div className="row-sub">
-          已配对 · 最近见到 {formatTime(device.last_seen_at_ms)} · <span className="mono">{device.public_key_fingerprint.slice(0, 16)}…</span>
+  const trustedRow = (device: TrustedDeviceDto) => {
+    const renaming = renamingId === device.device_id;
+    const displayName = device.alias ?? device.device_name;
+    return (
+      <div className="list-row" key={device.device_id}>
+        <span className="row-icon">
+          <Icon name="shield" />
+        </span>
+        <div className="row-main">
+          {renaming ? (
+            <div className="rename-inline">
+              <input
+                autoFocus
+                maxLength={32}
+                onChange={(event) => setAliasDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    void setTrustedDeviceAlias(device.device_id, aliasDraft).then(() =>
+                      setRenamingId(null)
+                    );
+                  }
+                  if (event.key === "Escape") setRenamingId(null);
+                }}
+                placeholder={device.device_name}
+                value={aliasDraft}
+              />
+              <button
+                className="text-btn is-primary"
+                onClick={() =>
+                  void setTrustedDeviceAlias(device.device_id, aliasDraft).then(() =>
+                    setRenamingId(null)
+                  )
+                }
+                type="button"
+              >
+                保存
+              </button>
+              <button className="text-btn" onClick={() => setRenamingId(null)} type="button">
+                取消
+              </button>
+            </div>
+          ) : (
+            <>
+              <div className="row-title">
+                {displayName}
+                {device.alias && <span className="row-origin">（{device.device_name}）</span>}
+              </div>
+              <div className="row-sub">
+                已配对 · 最近见到 {formatTime(device.last_seen_at_ms)} · <span className="mono">{device.public_key_fingerprint.slice(0, 16)}…</span>
+              </div>
+            </>
+          )}
+        </div>
+        <div className="row-ops" style={{ opacity: renaming ? 1 : undefined }}>
+          {!renaming && (
+            <>
+              <button className="text-btn" onClick={() => aim(device.device_id)} type="button">
+                选择
+              </button>
+              <button
+                className="text-btn"
+                onClick={() => {
+                  setRenamingId(device.device_id);
+                  setAliasDraft(device.alias ?? "");
+                }}
+                type="button"
+              >
+                备注
+              </button>
+              <button className="text-btn is-danger" onClick={() => forgetTrustedDevice(device)} type="button">
+                忘记
+              </button>
+            </>
+          )}
         </div>
       </div>
-      <div className="row-ops">
-        <button className="text-btn" onClick={() => aim(device.device_id)} type="button">
-          选择
-        </button>
-        <button className="text-btn is-danger" onClick={() => forgetTrustedDevice(device)} type="button">
-          忘记
-        </button>
-      </div>
-    </div>
-  );
+    );
+  };
 
   return (
     <div className="page">

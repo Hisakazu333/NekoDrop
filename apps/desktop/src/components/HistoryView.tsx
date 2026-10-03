@@ -2,6 +2,8 @@ import React, { useState } from "react";
 import { useAppContext } from "../context/AppContext";
 import { Icon } from "./Icon";
 import { formatBytes } from "../transferProgress";
+import { copyTextToClipboard } from "../context/helpers";
+import { invokeCommand } from "../tauri";
 import type { TransferDto } from "../types";
 
 function statusLabel(transfer: TransferDto) {
@@ -24,9 +26,38 @@ function formatTime(ms: number | null | undefined) {
  * History page: inline stats + plain rows.
  */
 export function HistoryView() {
-  const { transfers, resendTransfer, openTransferLocation, deleteTransfer, clearTransferHistory } =
-    useAppContext();
+  const {
+    transfers,
+    resendTransfer,
+    openTransferLocation,
+    deleteTransfer,
+    clearTransferHistory,
+    setToast,
+    setError,
+    busy
+  } = useAppContext();
   const [filter, setFilter] = useState<"all" | "send" | "receive">("all");
+  const [copyingId, setCopyingId] = useState<string | null>(null);
+
+  // 单个 .txt 接收成功记录：一键读回剪贴板（文本快送的接收端闭环）
+  const isTextSnippet = (transfer: TransferDto) =>
+    transfer.direction === "receive" &&
+    (transfer.status === "succeeded" || transfer.status === "done") &&
+    transfer.file_count === 1 &&
+    (transfer.root_name ?? "").toLowerCase().endsWith(".txt");
+
+  const copyReceivedText = async (transfer: TransferDto) => {
+    setCopyingId(transfer.id);
+    try {
+      const text = await invokeCommand<string>("read_received_text", { transferId: transfer.id });
+      await copyTextToClipboard(text);
+      setToast?.("文本已复制到剪贴板");
+    } catch (error) {
+      setError?.(error instanceof Error ? error.message : String(error));
+    } finally {
+      setCopyingId(null);
+    }
+  };
 
   const succeeded = transfers.filter((transfer) => transfer.status === "succeeded" || transfer.status === "done");
   const failed = transfers.filter((transfer) => transfer.status === "failed");
@@ -109,6 +140,17 @@ export function HistoryView() {
                   </div>
                   <span className={`state-tag ${label.cls}`}>{label.text}</span>
                   <div className="row-ops">
+                    {isTextSnippet(transfer) && (
+                      <button
+                        className="icon-btn"
+                        disabled={busy === "open" || copyingId === transfer.id}
+                        onClick={() => void copyReceivedText(transfer)}
+                        title="复制文本到剪贴板"
+                        type="button"
+                      >
+                        <Icon name={copyingId === transfer.id ? "check" : "copy"} />
+                      </button>
+                    )}
                     <button
                       className="icon-btn"
                       onClick={() => openTransferLocation(transfer)}

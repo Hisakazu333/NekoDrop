@@ -36,6 +36,12 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
   const [filter, setFilter] = useState("");
 
   const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
+  // 备注名优先显示：id → alias 映射（附近设备也套用）
+  const aliasById = new Map(
+    trustedDevices
+      .filter((device) => device.alias)
+      .map((device) => [device.device_id, device.alias as string])
+  );
 
   // 引导进度对应四件真事：启动 → 发现设备 → 配对 → 首次传输
   const setupSteps = [
@@ -168,7 +174,7 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
               type="button"
             >
               <Icon name="laptop" />
-              <span className="row-name">{device.name}</span>
+              <span className="row-name">{aliasById.get(device.id) ?? device.name}</span>
               {trustedIds.has(device.id) && <span className="side-tag">已配对</span>}
             </button>
           ))}
@@ -187,7 +193,7 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
               type="button"
             >
               <Icon name="laptop" />
-              <span className="row-name">{device.device_name}</span>
+              <span className="row-name">{device.alias ?? device.device_name}</span>
               <span className="side-tag">已配对</span>
             </button>
           ))}
