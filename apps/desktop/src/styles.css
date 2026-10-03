@@ -516,25 +516,6 @@ html[data-theme="dark"] .setup-card:hover {
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
-/* 帮助行的图标 + 蓝点（参考图 Notion 侧栏）/ help row icon with blue dot */
-.side-row .row-icon-wrap {
-  position: relative;
-  display: inline-flex;
-  width: 16px;
-  justify-content: center;
-  flex-shrink: 0;
-  color: var(--text-2);
-  font-size: 16px;
-}
-.side-row .row-icon-wrap .dot {
-  position: absolute;
-  top: -2px;
-  right: -4px;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--live);
-}
 
 .side-empty {
   font-size: 12.5px;
@@ -912,6 +893,8 @@ html[data-theme="dark"] .send-button:disabled {
 }
 .strip-dot.is-offline {
   opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
 }
 .strip-none {
   font-size: 12px;

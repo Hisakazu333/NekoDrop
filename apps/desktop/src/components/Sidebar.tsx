@@ -9,8 +9,11 @@ interface SidebarProps {
 }
 
 /**
- * 侧栏（1:1 Notion 式）：主页芯片 + 图标行 + 设置进度卡 + 设备行 + 工具行 + 底部胶囊
- * Notion-style sidebar: home chip, icon row, setup card, device rows, footer pill.
+ * 侧栏：每个控件都有明确职能——
+ · 主页芯片 → 发送页；图标行只放应用级动作（收件箱 / 外观 / 筛选）
+ · 引导卡 → 按真实完成度推进（启动/发现/配对/首传），点击去设置补齐
+ · 设备区 → 选择发送目标；工具行只放不重复的动作（连接码 / 帮助）
+ · 底部胶囊 → 新传输 = 清空队列并复位输入（真动作，⌘N 同）
  */
 export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: SidebarProps) {
   const {
@@ -23,6 +26,7 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
     setSelectedDeviceId,
     setConnectionCodeOpen,
     setConnectionCode,
+    clearQueue,
     appearance,
     setAppearance
   } = useAppContext();
@@ -32,12 +36,14 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
 
   const trustedIds = new Set(trustedDevices.map((device) => device.device_id));
 
-  // 初始设置进度：装好即 25%，发现设备 / 完成配对 / 完成传输各 +25%
-  const setupPercent =
-    25 +
-    (nearbyDevices.length > 0 ? 25 : 0) +
-    (trustedDevices.length > 0 ? 25 : 0) +
-    (transfers.length > 0 ? 25 : 0);
+  // 引导进度对应四件真事：启动 → 发现设备 → 配对 → 首次传输
+  const setupSteps = [
+    nearbyDevices.length > 0,
+    trustedDevices.length > 0,
+    transfers.length > 0
+  ];
+  const setupDone = 1 + setupSteps.filter(Boolean).length;
+  const setupPercent = Math.round((setupDone / 4) * 100);
 
   const normalizedFilter = filter.trim().toLowerCase();
   const matches = (name: string) =>
@@ -59,11 +65,19 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
     setMode("send");
   };
 
+  // 新传输：清空队列、关掉连接码、回到发送页（目标保留，方便连发）
+  const newTransfer = () => {
+    clearQueue();
+    setConnectionCode("");
+    setConnectionCodeOpen(false);
+    setMode("send");
+  };
+
   const openHelp = () => {
     try {
       window.open("https://github.com/Hisakazu333/NekoDrop/tree/main/docs", "_blank", "noopener");
     } catch {
-      /* 桌面端无默认浏览器句柄时静默忽略 / ignore when webview blocks popups */
+      /* webview 拦截弹窗时静默忽略 / ignore when popups are blocked */
     }
   };
 
@@ -88,12 +102,6 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
           <Icon name="inbox" />
           {inboxCount > 0 && <span className="dot-badge" />}
         </button>
-        <button aria-label="设备" className="icon-btn" onClick={() => setMode("devices")} title="设备" type="button">
-          <Icon name="devices" />
-        </button>
-        <button aria-label="历史" className="icon-btn" onClick={() => setMode("transfers")} title="历史" type="button">
-          <Icon name="clock" />
-        </button>
         <button
           aria-label="切换主题"
           className="icon-btn"
@@ -105,13 +113,13 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
         </button>
         <span className="spacer" />
         <button
-          aria-label="搜索设备"
+          aria-label="筛选设备"
           className={`icon-btn ${filterOpen ? "is-open" : ""}`}
           onClick={() => {
             setFilterOpen(!filterOpen);
             setFilter("");
           }}
-          title="搜索设备"
+          title="筛选设备"
           type="button"
         >
           <Icon name="search" />
@@ -129,8 +137,8 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
         </div>
       )}
 
-      <button className="setup-card" onClick={() => setMode("settings")} title="查看设置" type="button">
-        <span className="setup-title">设置你的工作空间</span>
+      <button className="setup-card" onClick={() => setMode("settings")} type="button">
+        <span className="setup-title">完成初始设置（{setupDone}/4）</span>
         <span className="setup-track">
           <i style={{ width: `${setupPercent}%` }} />
           <span className="setup-knob" style={{ left: `${setupPercent}%` }}>
@@ -173,7 +181,7 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
               key={device.device_id}
               className="side-row is-offline"
               onClick={() => selectDevice(device.device_id)}
-              title={`${device.device_name}（离线）`}
+              title={`${device.device_name}（离线，打开后可直接发）`}
               type="button"
             >
               <Icon name="laptop" />
@@ -188,30 +196,19 @@ export function Sidebar({ collapsed = false, inboxCount, onToggleInbox }: Sideba
           <Icon name="link" />
           <span className="row-name">通过连接码发送</span>
         </button>
-        <button className="side-row" onClick={() => setMode("transfers")} type="button">
-          <Icon name="clock" />
-          <span className="row-name">历史</span>
-        </button>
         <button className="side-row" onClick={openHelp} type="button">
-          <span className="row-icon-wrap">
-            <Icon name="help" />
-            <span className="dot" />
-          </span>
+          <Icon name="help" />
           <span className="row-name">帮助</span>
-        </button>
-        <button className="side-row" onClick={() => setMode("settings")} type="button">
-          <Icon name="settings" />
-          <span className="row-name">设置</span>
         </button>
       </div>
 
       <div className="side-foot">
-        <button className="new-chat-pill" onClick={() => setMode("send")} type="button">
+        <button className="new-chat-pill" onClick={newTransfer} type="button">
           <Icon name="sparkle" />
           <span>新传输</span>
           <kbd>⌘N</kbd>
         </button>
-        <button aria-label="通过连接码发送" className="compose-circle" onClick={openConnectionCode} title="通过连接码发送" type="button">
+        <button aria-label="新传输" className="compose-circle" onClick={newTransfer} title="新传输" type="button">
           <Icon name="compose" />
         </button>
       </div>
