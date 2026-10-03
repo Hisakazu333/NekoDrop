@@ -4,9 +4,9 @@ import { test } from "node:test";
 
 const contextSource = readFileSync(new URL("../src/context/AppContext.tsx", import.meta.url), "utf8");
 const inboxSource = readFileSync(new URL("../src/components/InboxDrawer.tsx", import.meta.url), "utf8");
-const sidebarSource = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
+const sidebarSource = readFileSync(new URL("../src/components/Rail.tsx", import.meta.url), "utf8");
 const settingsSource = readFileSync(new URL("../src/components/SettingsView.tsx", import.meta.url), "utf8");
-const sendSource = readFileSync(new URL("../src/components/SendView.tsx", import.meta.url), "utf8");
+const sendSource = readFileSync(new URL("../src/components/HomeView.tsx", import.meta.url), "utf8");
 const composerSource = readFileSync(new URL("../src/context/composer.ts", import.meta.url), "utf8");
 const bridgeSource = readFileSync(new URL("../src/context/bridge.ts", import.meta.url), "utf8");
 const stylesSource = readFileSync(new URL("../src/styles.css", import.meta.url), "utf8");

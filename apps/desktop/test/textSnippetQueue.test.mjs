@@ -4,8 +4,8 @@ import { test } from "node:test";
 
 const helpersSource = readFileSync(new URL("../src/context/helpers.ts", import.meta.url), "utf8");
 const contextSource = readFileSync(new URL("../src/context/AppContext.tsx", import.meta.url), "utf8");
-const sendSource = readFileSync(new URL("../src/components/SendView.tsx", import.meta.url), "utf8");
-const bannerSource = readFileSync(new URL("../src/components/TransferBanner.tsx", import.meta.url), "utf8");
+const sendSource = readFileSync(new URL("../src/components/HomeView.tsx", import.meta.url), "utf8");
+const bannerSource = readFileSync(new URL("../src/components/TransferPanel.tsx", import.meta.url), "utf8");
 const tauriSource = readFileSync(new URL("../src/tauri.ts", import.meta.url), "utf8");
 const mainSource = readFileSync(new URL("../src-tauri/src/main.rs", import.meta.url), "utf8");
 const sendCommandsSource = readFileSync(new URL("../src-tauri/src/commands/send.rs", import.meta.url), "utf8");
@@ -63,20 +63,21 @@ test("context wires queue lifecycle", () => {
 
 test("send view composer is a real text input", () => {
   // textarea 可编辑：有 value/onChange，不再是 readOnly 占位
-  assert.match(sendSource, /value=\{composerText\}/);
-  assert.match(sendSource, /setComposerText\(event\.target\.value\)/);
+  assert.match(sendSource, /value=\{text\}/);
+  assert.match(sendSource, /setText\(event\.target\.value\)/);
   assert.doesNotMatch(sendSource, /readOnly\s*\n\s*rows=\{1\}/);
   // ⌘↩ 发送 与 ⌘V 粘贴
   assert.match(sendSource, /event\.key === "Enter" && \(event\.metaKey \|\| event\.ctrlKey\)/);
   assert.match(sendSource, /addEventListener\("paste", onPaste\)/);
-  // 忙线时按钮仍可点（入队语义）
-  assert.match(sendSource, /busySend \? "排队发送" : "发送"|aria-label=\{busySend \? "排队发送" : "发送"\}/);
+  // 文本条发送键：有目标+有文本即可发（忙线自动入队）
+  assert.match(sendSource, /home-composer-send/);
+  assert.match(sendSource, /disabled=\{text\.trim\(\)\.length === 0 \|\| !target\}/);
 });
 
 test("banner surfaces queue state", () => {
   assert.match(bannerSource, /sendQueue\.length > 0/);
   assert.match(bannerSource, /cancelQueuedSend/);
-  assert.match(bannerSource, /QueueOnlyBanner/);
+  assert.match(bannerSource, /tp-queue/);
 });
 
 test("rust side registers text snippet staging", () => {
