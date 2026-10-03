@@ -8,6 +8,7 @@ pub struct AppSnapshot {
     pub receive_policy: String,
     pub send_limit_kbps: u32,
     pub organize_receive_by_device: bool,
+    pub iroh_receive_mode: String,
     pub discovery_enabled: bool,
     pub tray_enabled: bool,
     pub device_identity: DeviceIdentityDto,
@@ -114,6 +115,8 @@ pub struct ReceiveSessionDto {
     pub bind_addr: String,
     pub receive_dir: String,
     pub connection_code: String,
+    #[serde(rename = "irohConnectionCode", skip_serializing_if = "Option::is_none")]
+    pub iroh_connection_code: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]

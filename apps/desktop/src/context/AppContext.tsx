@@ -180,6 +180,7 @@ interface AppContextType {
   setSendLimitInput: (value: string) => void;
   saveSendLimit: () => Promise<void>;
   updateOrganizeByDevice: (enabled: boolean) => Promise<void>;
+  updateIrohReceiveMode: (mode: "off" | "direct" | "relay") => Promise<void>;
   saveDeviceName: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   scanPaths: (paths?: string[], manual?: string) => Promise<void>;
@@ -277,7 +278,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
 const {
     snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
-    sendLimitInput, setSendLimitInput, saveSendLimit, updateOrganizeByDevice,
+    sendLimitInput, setSendLimitInput, saveSendLimit, updateOrganizeByDevice, updateIrohReceiveMode,
     setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
     refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort,
     updateReceivePolicy, saveDeviceName, openPath,
@@ -1146,7 +1147,7 @@ const {
     sendLimitInput,
     setSendLimitInput,
     saveSendLimit,
-    updateOrganizeByDevice,
+    updateOrganizeByDevice, updateIrohReceiveMode,
     updateReceivePolicy,
     saveDeviceName,
     openPath,

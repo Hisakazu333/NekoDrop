@@ -19,6 +19,7 @@ struct PersistedAppConfig {
     receive_policy: String,
     send_limit_kbps: Option<u32>,
     organize_receive_by_device: Option<bool>,
+    iroh_receive_mode: Option<String>,
 }
 
 pub fn load_app_config(device_name: &str) -> Result<AppConfig, String> {
@@ -67,6 +68,11 @@ fn app_config_from_json(device_name: &str, content: &str) -> Result<AppConfig, S
     config.receive_policy = parse_receive_policy(&persisted.receive_policy);
     config.send_limit_kbps = persisted.send_limit_kbps.unwrap_or(0).min(1_000_000);
     config.organize_receive_by_device = persisted.organize_receive_by_device.unwrap_or(false);
+    config.iroh_receive_mode = persisted
+        .iroh_receive_mode
+        .as_deref()
+        .and_then(nekodrop_core::IrohReceiveMode::parse)
+        .unwrap_or(nekodrop_core::IrohReceiveMode::Off);
 
     Ok(config)
 }
@@ -94,6 +100,7 @@ fn app_config_to_json(config: &AppConfig) -> Result<String, String> {
         receive_policy: receive_policy_label(config.receive_policy).to_string(),
         send_limit_kbps: Some(config.send_limit_kbps),
         organize_receive_by_device: Some(config.organize_receive_by_device),
+        iroh_receive_mode: Some(config.iroh_receive_mode.as_str().to_string()),
     };
     serde_json::to_string_pretty(&persisted).map_err(|error| format!("无法序列化应用配置: {error}"))
 }
@@ -194,5 +201,28 @@ mod tests {
         let config = app_config_from_json("MacBook", json).unwrap();
 
         assert_eq!(config.receive_port, 45821);
+    }
+
+    #[test]
+    fn iroh_receive_mode_roundtrip() {
+        // 经真实序列化路径往返：relay 持久化 → 读取仍是 relay
+        let config = AppConfig {
+            iroh_receive_mode: nekodrop_core::IrohReceiveMode::Relay,
+            ..AppConfig::default()
+        };
+        let persisted = app_config_to_json(&config).unwrap();
+        assert!(persisted.contains("\"relay\""));
+        let restored = app_config_from_json("这台电脑", &persisted).unwrap();
+        assert_eq!(
+            restored.iroh_receive_mode,
+            nekodrop_core::IrohReceiveMode::Relay
+        );
+        // 未知值回落 off（防手改配置文件崩坏）
+        let bad = persisted.replace("\"relay\"", "\"nonsense\"");
+        let restored = app_config_from_json("这台电脑", &bad).unwrap();
+        assert_eq!(
+            restored.iroh_receive_mode,
+            nekodrop_core::IrohReceiveMode::Off
+        );
     }
 }

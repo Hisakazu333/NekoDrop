@@ -7,6 +7,7 @@ export interface AppSnapshot {
   receive_policy: string;
   send_limit_kbps: number;
   organize_receive_by_device: boolean;
+  iroh_receive_mode: string;
   discovery_enabled: boolean;
   tray_enabled: boolean;
   device_identity: DeviceIdentityDto;
@@ -248,6 +249,7 @@ export interface TransferScanProgressDto {
 }
 
 export interface ReceiveSessionDto {
+  irohConnectionCode?: string;
   bind_addr: string;
   receive_dir: string;
   connection_code: string;

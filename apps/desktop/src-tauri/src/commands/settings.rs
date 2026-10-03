@@ -65,6 +65,21 @@ pub fn set_organize_receive_by_device(
 }
 
 #[tauri::command(async)]
+pub fn set_iroh_receive_mode(state: State<'_, AppState>, mode: String) -> Result<(), String> {
+    let mode = nekodrop_core::IrohReceiveMode::parse(mode.trim())
+        .ok_or_else(|| "未知跨网收件模式（off/direct/relay）".to_string())?;
+    let mut config = state.config.lock().map_err(|error| error.to_string())?;
+    if config.iroh_receive_mode == mode {
+        return Ok(());
+    }
+    let mut next_config = config.clone();
+    next_config.iroh_receive_mode = mode;
+    save_app_config(&next_config)?;
+    *config = next_config;
+    Ok(())
+}
+
+#[tauri::command(async)]
 pub fn set_send_limit(state: State<'_, AppState>, send_limit_kbps: u32) -> Result<(), String> {
     let send_limit_kbps = send_limit_kbps.min(1_000_000);
     let mut config = state.config.lock().map_err(|error| error.to_string())?;
