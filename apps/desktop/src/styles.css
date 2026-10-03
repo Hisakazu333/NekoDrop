@@ -15,7 +15,8 @@
    ========================================================================== */
 
 :root {
-  --bg: #ffffff;
+  --bg: #fbfaf9;                            /* 主区：暖白纸面（参考图底色） */
+  --card: #ffffff;                          /* 浮起白卡（输入卡/头像底板） */
   --bg-panel: #f7f6f4;
   --bg-solid: #ffffff;
   --bg-sub: #efefed;
@@ -54,6 +55,7 @@
 
 html[data-theme="dark"] {
   --bg: #191919;
+  --card: #252525;
   --bg-panel: #202020;
   --bg-solid: #191919;
   --bg-sub: rgba(255, 255, 255, 0.055);
@@ -174,12 +176,51 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
   align-items: stretch;
   flex-shrink: 0;
   padding-left: 84px; /* macOS 红绿灯区（x 18..76） */
-  background: var(--bg);
-  border-bottom: 1px solid var(--sep);
+  background: var(--bg-panel);
   -webkit-app-region: drag;
 }
 .tabstrip button {
   -webkit-app-region: no-drag;
+}
+
+/* 工作区页签（左端，永不激活态）/ workspace tab */
+.tab-workspace {
+  align-self: center;
+  height: 28px;
+  border-radius: 7px;
+  margin: 0 2px 0 6px;
+}
+
+/* 侧栏开合 + 前后导航 / collapse toggle + back/forward */
+.tabstrip-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 8px 0 4px;
+}
+.strip-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  background: transparent;
+  border-radius: 6px;
+  color: var(--text-3);
+  font-size: 14px;
+  transition: background-color 0.12s var(--ease), color 0.12s var(--ease);
+}
+.strip-icon:hover:not(:disabled) {
+  background: var(--bg-sub);
+  color: var(--text);
+}
+.strip-icon:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.strip-icon.is-active {
+  color: var(--text);
 }
 
 .tabstrip-tabs {
@@ -195,7 +236,7 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
   border: none;
   background: transparent;
   border-radius: 9px 9px 0 0;
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 400;
   color: var(--text-2);
   transition: background-color 0.12s var(--ease), color 0.12s var(--ease);
@@ -208,12 +249,9 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
   background: var(--bg-sub);
 }
 .tab.is-active {
-  background: var(--bg-panel);
+  background: var(--bg);
   color: var(--text);
   font-weight: 500;
-}
-html[data-theme="dark"] .tab.is-active {
-  background: var(--bg-sub);
 }
 
 .tab-new {
@@ -265,6 +303,14 @@ html[data-theme="dark"] .tab.is-active {
   flex-shrink: 0;
   background: var(--bg-panel);
   overflow: hidden;
+  transition: width 0.2s var(--ease);
+}
+.sidebar.is-collapsed {
+  width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  border: none;
+  pointer-events: none;
 }
 
 /* 顶行：主页芯片 + 图标按钮 + 搜索 */
@@ -363,7 +409,7 @@ html[data-theme="dark"] .home-chip.is-active {
   padding: 13px 14px 15px;
   border: 1px solid var(--input-border);
   border-radius: var(--radius-box);
-  background: var(--bg);
+  background: var(--card);
   box-shadow: var(--shadow-card);
   text-align: left;
   flex-shrink: 0;
@@ -470,6 +516,25 @@ html[data-theme="dark"] .setup-card:hover {
   font-family: var(--font-mono);
   flex-shrink: 0;
 }
+/* 帮助行的图标 + 蓝点（参考图 Notion 侧栏）/ help row icon with blue dot */
+.side-row .row-icon-wrap {
+  position: relative;
+  display: inline-flex;
+  width: 16px;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--text-2);
+  font-size: 16px;
+}
+.side-row .row-icon-wrap .dot {
+  position: absolute;
+  top: -2px;
+  right: -4px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--live);
+}
 
 .side-empty {
   font-size: 12.5px;
@@ -564,42 +629,43 @@ html[data-theme="dark"] .compose-circle:hover {
   background: var(--bg);
 }
 
-/* 发送页：居中头像 + 大标题 + 底部白卡（1:1 Notion AI 首页） */
+/* 发送页（1:1 参考图）：内容整体偏上聚集，非居中、非贴底 */
 .send-view {
   flex: 1;
   display: flex;
   flex-direction: column;
-  justify-content: flex-end;
+  justify-content: flex-start;
   min-height: 0;
-  padding: 0 48px 40px;
+  padding: 76px 48px 40px;
   overflow-y: auto;
 }
 
 .send-hero {
-  flex: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 20px;
-  padding: 32px 0 48px;
+  gap: 22px;
+  padding: 0 0 46px;
   pointer-events: none;
 }
 .hero-avatar {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 88px;
-  height: 88px;
-  border-radius: 50%;
-  background: var(--bg);
+  width: 96px;
+  height: 96px;
+  border-radius: 32px;
+  background: var(--card);
   border: 1px solid var(--sep-strong);
   box-shadow: 0 1px 3px rgba(15, 15, 15, 0.05);
   color: var(--text);
-  font-size: 36px;
+  font-size: 52px;
+}
+.hero-avatar .icon {
+  stroke-width: 1.4;
 }
 .send-hero h2 {
-  font-size: clamp(28px, 2.8vw, 38px);
+  font-size: 28px;
   font-weight: 700;
   letter-spacing: -0.01em;
   color: var(--text);
@@ -609,12 +675,12 @@ html[data-theme="dark"] .compose-circle:hover {
 .composer-zone {
   display: flex;
   flex-direction: column;
-  width: min(660px, 100%);
+  width: min(560px, 100%);
   margin: 0 auto;
 }
 
 .composer {
-  background: var(--bg);
+  background: var(--card);
   border: 1px solid var(--input-border);
   border-radius: 12px;
   padding: 14px 16px 10px;
@@ -635,7 +701,7 @@ html[data-theme="dark"] .compose-circle:hover {
   border: none;
   background: transparent;
   resize: none;
-  font-size: 15px;
+  font-size: 14.5px;
   color: var(--text);
   line-height: 1.55;
   min-height: 24px;
@@ -745,13 +811,13 @@ html[data-theme="dark"] .compose-circle:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 30px;
-  height: 30px;
+  width: 32px;
+  height: 32px;
   border: none;
   border-radius: 50%;
   background: var(--bg-sub);
   color: #ffffff;
-  font-size: 14px;
+  font-size: 15px;
   transition: background-color 0.15s var(--ease), transform 0.1s var(--ease);
 }
 .send-button:not(:disabled) {
@@ -764,9 +830,13 @@ html[data-theme="dark"] .compose-circle:hover {
   transform: scale(0.92);
 }
 .send-button:disabled {
-  background: var(--bg-active);
-  color: var(--bg);
+  background: #f1f1ef;
+  color: rgba(255, 255, 255, 0.95);
+  box-shadow: none;
   cursor: not-allowed;
+}
+html[data-theme="dark"] .send-button:disabled {
+  background: rgba(255, 255, 255, 0.09);
 }
 
 /* 资料包小表单 / manual bundle mini form */
@@ -799,13 +869,13 @@ html[data-theme="dark"] .compose-circle:hover {
   flex-shrink: 0;
 }
 
-/* 卡下挂浅灰托盘 / attached tray — 比白卡更宽，四角圆（参考图样式） */
+/* 卡下挂浅灰托盘 / attached tray — 紧贴白卡下方，与卡同宽（参考图样式） */
 .composer-strip {
   display: flex;
   align-items: center;
   gap: 12px;
-  width: calc(100% + 16px);
-  margin: 5px -8px 0;
+  width: 100%;
+  margin: 4px 0 0;
   background: var(--bg-panel);
   border: 1px solid var(--sep);
   border-radius: 12px;
@@ -871,8 +941,8 @@ html[data-theme="dark"] .compose-circle:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 20px;
-  padding-top: 16px;
+  gap: 10px;
+  padding-top: 12px;
 }
 .quick-row button {
   display: flex;
