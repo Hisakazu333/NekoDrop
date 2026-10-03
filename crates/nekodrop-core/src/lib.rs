@@ -5,7 +5,7 @@ pub mod manifest;
 pub mod pairing;
 pub mod transfer;
 
-pub use config::{AppConfig, ReceivePolicy};
+pub use config::{AppConfig, IrohReceiveMode, ReceivePolicy};
 pub use device::{Device, DeviceId, DevicePlatform, DeviceTrustState, TrustedDevice};
 pub use errors::{NekoDropError, NekoDropResult};
 pub use manifest::{FileManifest, ManifestItem, ManifestItemKind};

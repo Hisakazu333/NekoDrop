@@ -112,6 +112,26 @@ export function useSettingsDomain(deps: SettingsDeps) {
     }
   }
 
+  async function updateIrohReceiveMode(mode: "off" | "direct" | "relay") {
+    setBusy("receive-policy");
+    setError(null);
+    try {
+      await invokeCommand<void>("set_iroh_receive_mode", { mode });
+      setSnapshot((current) => (current ? { ...current, iroh_receive_mode: mode } : current));
+      setToast(
+        mode === "off"
+          ? "跨网收件已关闭"
+          : mode === "direct"
+            ? "跨网收件：直连打洞（不经第三方）"
+            : "跨网收件：中继模式（经 n0 公共中继，仅密文）"
+      );
+    } catch (nextError) {
+      setError(errorMessage(nextError));
+    } finally {
+      setBusy(null);
+    }
+  }
+
   async function updateOrganizeByDevice(enabled: boolean) {
     setBusy("receive-policy");
     setError(null);
@@ -183,7 +203,7 @@ export function useSettingsDomain(deps: SettingsDeps) {
   return {
     snapshot, receiveDir, bindPort, receivePolicy, deviceNameInput,
     setReceiveDir, setBindPort, setReceivePolicy, setDeviceNameInput,
-    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort, sendLimitInput, setSendLimitInput, saveSendLimit, updateOrganizeByDevice,
+    refreshSnapshot, chooseReceiveDir, saveReceiveDir, saveReceivePort, sendLimitInput, setSendLimitInput, saveSendLimit, updateOrganizeByDevice, updateIrohReceiveMode,
     updateReceivePolicy, saveDeviceName, openPath,
   };
 }
