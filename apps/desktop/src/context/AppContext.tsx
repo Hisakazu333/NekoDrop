@@ -15,6 +15,7 @@ import { useBridgeDomain } from "./bridge";
 import React, { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { bindWindowDragDrop } from "../dragDrop";
+import { checkForUpdate, type UpdateInfo } from "../updateCheck";
 import { invokeCommand, isTauriRuntime } from "../tauri";
 import {
   bundleImportStrategyLabel,
@@ -181,6 +182,7 @@ interface AppContextType {
   saveSendLimit: () => Promise<void>;
   updateOrganizeByDevice: (enabled: boolean) => Promise<void>;
   updateIrohReceiveMode: (mode: "off" | "direct" | "relay") => Promise<void>;
+  updateInfo: UpdateInfo | null;
   saveDeviceName: () => Promise<void>;
   openPath: (path: string) => Promise<void>;
   scanPaths: (paths?: string[], manual?: string) => Promise<void>;
@@ -258,6 +260,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<string | null>(null);
   const [transferMetrics, setTransferMetrics] = useState<TransferMetrics>(EMPTY_TRANSFER_METRICS);
   const [sendQueue, setSendQueue] = useState<QueuedSend[]>([]);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const queueFlushInFlight = useRef(false);
   const queueSeq = useRef(0);
   // 正在发送的载荷快照：暂停时原样回队（协议断点续传，继续时接着传）
@@ -1070,6 +1073,7 @@ const {
 
   const value: AppContextType = {
     snapshot,
+    updateInfo,
     selectedPaths,
     manualPaths,
     manualBundleType,
