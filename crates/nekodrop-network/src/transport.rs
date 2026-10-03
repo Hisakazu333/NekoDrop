@@ -48,6 +48,10 @@ pub struct Endpoint {
     pub host: String,
     pub port: u16,
     pub transport: TransportKind,
+    /// iroh：中继地址（https://…），缺省则纯直连
+    pub relay_url: Option<String>,
+    /// iroh：可直连的 ip:port 列表
+    pub direct_addrs: Vec<String>,
 }
 
 impl Endpoint {
@@ -56,6 +60,8 @@ impl Endpoint {
             host: host.into(),
             port,
             transport: TransportKind::Tcp,
+            relay_url: None,
+            direct_addrs: Vec::new(),
         }
     }
 }
@@ -93,7 +99,7 @@ pub trait NekoLinkTransport {
 pub fn connect_endpoint(endpoint: &Endpoint) -> NekoDropResult<Box<dyn TransportStream>> {
     match endpoint.transport {
         TransportKind::Tcp => Ok(Box::new(TcpTransport.connect(endpoint)?)),
-        TransportKind::Iroh => Err(transport_not_available_error(TransportKind::Iroh)),
+        TransportKind::Iroh => Ok(Box::new(crate::iroh_transport::iroh_connect(endpoint)?)),
         TransportKind::Quic => Err(transport_not_available_error(TransportKind::Quic)),
         TransportKind::Relay => Err(transport_not_available_error(TransportKind::Relay)),
     }
@@ -203,6 +209,8 @@ mod tests {
             host: "127.0.0.1".to_string(),
             port: 45821,
             transport: TransportKind::Iroh,
+            relay_url: None,
+            direct_addrs: Vec::new(),
         };
         let error = transport.connect(&endpoint).unwrap_err();
 
@@ -210,17 +218,17 @@ mod tests {
     }
 
     #[test]
-    fn connect_endpoint_routes_unsupported_transport_to_clear_error() {
+    fn connect_endpoint_rejects_invalid_iroh_node_id() {
         let endpoint = Endpoint {
-            host: "127.0.0.1".to_string(),
-            port: 45821,
+            host: "not-a-node-id".to_string(),
+            port: 0,
             transport: TransportKind::Iroh,
+            relay_url: None,
+            direct_addrs: Vec::new(),
         };
         let error = connect_endpoint(&endpoint).err().unwrap();
 
-        assert!(error
-            .to_string()
-            .contains("iroh transport is not available"));
+        assert!(error.to_string().contains("invalid iroh node id"));
     }
 
     #[test]

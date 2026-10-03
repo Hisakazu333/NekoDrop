@@ -3203,4 +3203,60 @@ mod tests {
             "throttled transfer finished too fast: {elapsed:?}"
         );
     }
+
+    #[test]
+    fn full_transfer_over_iroh_direct_loopback() {
+        // iroh 直连（禁中继）全链路：连接码 → 发送 → 接收落盘 + SHA-256 校验
+        let server = nekodrop_network::iroh_transport::IrohServer::bind_direct_only().unwrap();
+        let endpoint = nekodrop_network::Endpoint {
+            host: server.node_id_hex(),
+            port: 0,
+            transport: nekodrop_network::TransportKind::Iroh,
+            relay_url: server.relay_url(),
+            direct_addrs: server.direct_addrs(),
+        };
+        let code = nekodrop_network::ConnectionTicket::new(endpoint)
+            .unwrap()
+            .to_code()
+            .unwrap();
+        assert!(code.starts_with("nekodrop-v1;transport=iroh;"));
+
+        let dir = std::env::temp_dir().join(format!("nekodrop-iroh-e2e-{}", std::process::id()));
+        let src_dir = dir.join("src");
+        let recv_dir = dir.join("recv");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        std::fs::create_dir_all(&recv_dir).unwrap();
+        let payload = src_dir.join("猫掌印.txt");
+        std::fs::write(&payload, "iroh service e2e 🐾").unwrap();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut stream = server.accept_transfer_stream().unwrap();
+                let report = accept_incoming_stream(
+                    &mut stream,
+                    &recv_dir,
+                    |_| true,
+                    |_| nekolink_protocol::PairingDecisionPayload::reject("no pairing in test"),
+                    |_| {},
+                )
+                .unwrap();
+                match report {
+                    IncomingSessionReport::Transfer(report) => {
+                        assert_eq!(report.files.len(), 1);
+                        assert!(report.files[0].verified);
+                        assert_eq!(
+                            std::fs::read_to_string(&report.files[0].path).unwrap(),
+                            "iroh service e2e 🐾"
+                        );
+                    }
+                    IncomingSessionReport::Pairing(_) => panic!("unexpected pairing"),
+                }
+            });
+
+            let target = endpoint_from_connection_code(&code).unwrap();
+            let report = send_paths(&target, &[payload]).unwrap();
+            assert_eq!(report.sent_files.len(), 1);
+        });
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

@@ -19,7 +19,7 @@ pub struct ConnectionTicket {
 
 impl ConnectionTicket {
     pub fn new(endpoint: Endpoint) -> NekoDropResult<Self> {
-        validate_tcp_endpoint(&endpoint)?;
+        validate_endpoint(&endpoint)?;
         Ok(Self {
             endpoint,
             device_id: None,
@@ -74,14 +74,39 @@ impl ConnectionTicket {
     }
 
     pub fn to_code(&self) -> NekoDropResult<String> {
-        validate_tcp_endpoint(&self.endpoint)?;
+        validate_endpoint(&self.endpoint)?;
 
-        let mut parts = vec![
-            PREFIX.to_string(),
-            "transport=tcp".to_string(),
-            format!("host={}", encode_field(&self.endpoint.host)),
-            format!("port={}", self.endpoint.port),
-        ];
+        let mut parts = match self.endpoint.transport {
+            TransportKind::Tcp => vec![
+                PREFIX.to_string(),
+                "transport=tcp".to_string(),
+                format!("host={}", encode_field(&self.endpoint.host)),
+                format!("port={}", self.endpoint.port),
+            ],
+            TransportKind::Iroh => {
+                let mut parts = vec![
+                    PREFIX.to_string(),
+                    "transport=iroh".to_string(),
+                    format!("node={}", encode_field(&self.endpoint.host)),
+                ];
+                if let Some(relay) = &self.endpoint.relay_url {
+                    parts.push(format!("relay={}", encode_field(relay)));
+                }
+                if !self.endpoint.direct_addrs.is_empty() {
+                    parts.push(format!(
+                        "addrs={}",
+                        encode_field(&self.endpoint.direct_addrs.join(","))
+                    ));
+                }
+                parts
+            }
+            other => {
+                return Err(NekoDropError::Network(format!(
+                    "connection ticket does not support transport {}",
+                    other.as_str()
+                )));
+            }
+        };
 
         if let Some(device_id) = &self.device_id {
             parts.push(format!("device_id={}", encode_field(device_id)));
@@ -131,25 +156,55 @@ impl ConnectionTicket {
         let transport = TransportKind::parse(transport).ok_or_else(|| {
             NekoDropError::Network(format!("unsupported connection transport: {transport}"))
         })?;
-        if transport != TransportKind::Tcp {
-            return Err(NekoDropError::Network(format!(
-                "connection ticket only supports TCP, got {}",
-                transport.as_str()
-            )));
-        }
 
-        let host = fields
-            .get("host")
-            .ok_or_else(|| NekoDropError::Network("connection code missing host".into()))?
-            .to_string();
-        let port = fields
-            .get("port")
-            .ok_or_else(|| NekoDropError::Network("connection code missing port".into()))?
-            .parse::<u16>()
-            .map_err(|error| NekoDropError::Network(format!("invalid connection port: {error}")))?;
+        let endpoint = match transport {
+            TransportKind::Tcp => {
+                let host = fields
+                    .get("host")
+                    .ok_or_else(|| NekoDropError::Network("connection code missing host".into()))?
+                    .to_string();
+                let port = fields
+                    .get("port")
+                    .ok_or_else(|| NekoDropError::Network("connection code missing port".into()))?
+                    .parse::<u16>()
+                    .map_err(|error| {
+                        NekoDropError::Network(format!("invalid connection port: {error}"))
+                    })?;
+                Endpoint::tcp(host, port)
+            }
+            TransportKind::Iroh => {
+                let node = fields
+                    .get("node")
+                    .ok_or_else(|| {
+                        NekoDropError::InvalidConnectionCode(
+                            "iroh connection code missing node".into(),
+                        )
+                    })?
+                    .clone();
+                let relay = fields.get("relay").cloned();
+                let direct_addrs = fields
+                    .get("addrs")
+                    .map(|value| {
+                        value
+                            .split(',')
+                            .map(str::trim)
+                            .filter(|s| !s.is_empty())
+                            .map(str::to_string)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                crate::iroh_transport::endpoint_from_iroh_fields(&node, relay, direct_addrs)?
+            }
+            other => {
+                return Err(NekoDropError::Network(format!(
+                    "connection ticket does not support transport {}",
+                    other.as_str()
+                )));
+            }
+        };
 
         let ticket = Self {
-            endpoint: Endpoint::tcp(host, port),
+            endpoint,
             device_id: fields.get("device_id").cloned(),
             device_name: fields.get("name").cloned(),
             device_kind: fields
@@ -160,27 +215,38 @@ impl ConnectionTicket {
                 .map(|value| PlatformKind::parse(value.as_str())),
             fingerprint: fields.get("fingerprint").cloned(),
         };
-        validate_tcp_endpoint(&ticket.endpoint)?;
+        validate_endpoint(&ticket.endpoint)?;
         Ok(ticket)
     }
 }
 
-fn validate_tcp_endpoint(endpoint: &Endpoint) -> NekoDropResult<()> {
-    if endpoint.transport != TransportKind::Tcp {
-        return Err(NekoDropError::Network(format!(
-            "connection ticket only supports TCP, got {:?}",
-            endpoint.transport
-        )));
-    }
-    if endpoint.host.trim().is_empty() {
-        return Err(NekoDropError::Network(
-            "connection ticket host cannot be empty".into(),
-        ));
-    }
-    if endpoint.port == 0 {
-        return Err(NekoDropError::Network(
-            "connection ticket port cannot be 0".into(),
-        ));
+fn validate_endpoint(endpoint: &Endpoint) -> NekoDropResult<()> {
+    match endpoint.transport {
+        TransportKind::Tcp => {
+            if endpoint.host.trim().is_empty() {
+                return Err(NekoDropError::Network(
+                    "connection ticket host cannot be empty".into(),
+                ));
+            }
+            if endpoint.port == 0 {
+                return Err(NekoDropError::Network(
+                    "connection ticket port cannot be 0".into(),
+                ));
+            }
+        }
+        TransportKind::Iroh => {
+            if endpoint.host.trim().is_empty() {
+                return Err(NekoDropError::InvalidConnectionCode(
+                    "iroh connection code missing node id".into(),
+                ));
+            }
+        }
+        other => {
+            return Err(NekoDropError::Network(format!(
+                "connection ticket does not support transport {}",
+                other.as_str()
+            )));
+        }
     }
     Ok(())
 }
