@@ -44,6 +44,7 @@ export function SettingsView() {
     saveSendLimit,
     updateOrganizeByDevice,
     updateIrohReceiveMode,
+    updateInfo,
     receiveSession,
     setToast,
     setError,
@@ -228,6 +229,29 @@ export function SettingsView() {
       </div>
 
       <div className="page-section">
+        <div className="page-section-title">关于</div>
+        <div className="form-row">
+          <div className="form-label">
+            版本<small>Apache-2.0 开源 · Rust + Tauri</small>
+          </div>
+          {updateInfo ? (
+            <>
+              <span className="form-value" style={{ color: "var(--ok)", fontWeight: 600 }}>
+                有新版本 {updateInfo.tagName}
+              </span>
+              <a
+                className="btn-mini is-primary"
+                href={updateInfo.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                前往下载
+              </a>
+            </>
+          ) : (
+            <span className="form-value">0.1.1 · 已是最新</span>
+          )}
+        </div>
         <div className="page-section-title">本机</div>
         <div className="form-row">
           <div className="form-label">设备名称</div>
