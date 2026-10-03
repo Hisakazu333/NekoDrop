@@ -72,7 +72,9 @@ html[data-theme="dark"] {
   --live: #529cca;
   --ok: #4dab9a;
   --warn: #ffa344;
+  --warn-soft: rgba(255, 163, 68, 0.16);
   --danger: #eb5757;
+  --danger-soft: rgba(235, 87, 87, 0.16);
 }
 
 *,
@@ -442,11 +444,11 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
   line-height: 1.6;
 }
 
-/* 面板收起后的悬浮按钮 */
+/* 面板收起后的悬浮按钮：bottom 抬到 72px，避开主页底部发送条（约 68px 高） */
 .panel-fab {
   position: fixed;
   right: 16px;
-  bottom: 16px;
+  bottom: 72px;
   width: 40px;
   height: 40px;
   border-radius: 50%;
@@ -459,6 +461,23 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
 }
 .panel-fab:hover {
   background: var(--bg-sub);
+}
+/* FAB 状态角标：右上有待决策（warn）、左上有传输进行中（live） */
+.panel-fab .panel-fab-dot {
+  position: absolute;
+  top: -2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg-solid);
+}
+.panel-fab .panel-fab-dot.is-warn {
+  right: -2px;
+  background: var(--warn);
+}
+.panel-fab .panel-fab-dot.is-live {
+  left: -2px;
+  background: var(--live);
 }
 
 /* ---------- 主页 / Home view ---------- */
@@ -560,6 +579,36 @@ html[data-theme="dark"] ::-webkit-scrollbar-thumb {
 }
 .receive-off > div {
   flex: 1;
+}
+
+/* 无设备时的引导空状态：可操作的下一步，而不是灰字提示 */
+.home-empty {
+  border: 1px dashed var(--sep-strong);
+  border-radius: 10px;
+  padding: 22px 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.home-empty-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+}
+.home-empty p {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--text-2);
+  max-width: 420px;
+}
+.home-empty-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
 }
 
 /* 设备行拖拽高亮复用 .list-row.is-drop-hint */

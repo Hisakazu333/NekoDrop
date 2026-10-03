@@ -7,7 +7,7 @@ NekoDrop 是 NekoLink 的第一个桌面落地项目。
 
 NekoLink 想解决的问题不是“再做一个传文件按钮”，而是让多台本地设备之间有一套稳定的通信底座：设备身份、可信配对、加密会话、可校验资料包、本机应用接入和 transport 边界。NekoDrop 先用 macOS / Windows 桌面传输把这套底座跑起来。
 
-当前 beta 能直接使用的是桌面传输：两台电脑在同一个网络里打开 NekoDrop，选择文件、文件夹或资料包目录，对方确认后开始传输。自动发现失败时，可以用连接码或 `IP:端口` 发送。
+当前 beta 能直接使用的是桌面传输：两台电脑打开 NekoDrop，选择文件、文件夹或资料包目录，对方确认后开始传输。同一局域网自动发现；不同网络时，接收端可以在设置页打开跨网收件（iroh），把生成的跨网连接码发给对方。自动发现失败时，也可以用连接码或 `IP:端口` 发送。
 
 后续的 session、skill、workspace、agent profile、应用配置迁移，应该走 NekoLink 的 bundle 和 local bridge，而不是把协议写死到某一个第三方应用里。具体应用只做适配层；底层协议保持应用无关。
 
@@ -28,6 +28,14 @@ NekoDrop 当前先把桌面端可确认、可校验、可恢复的传输做好�
 - 发送单文件、多文件和文件夹
 - 附近设备自动发现
 - 连接码和 `IP:端口` 兜底
+- 跨网收件（iroh）：设置页可选 `off` / `direct` / `relay`。`direct` 纯打洞直连，零第三方参与；`relay` 走 n0 公共中继，仅转发密文，连接元数据对中继可见
+- 发送队列：设备忙线时自动排队，队列重启不丢，失败自动重排一次
+- 发送暂停 / 继续：暂停后从断点续传，不从头重传
+- 发送限速：设置里可按 KB/s 封顶，0 为不限
+- 文本快送：输入框打字后 ⌘↩（Windows `Ctrl+↩`）直发，接收端自动进剪贴板（可在设置关闭）
+- 拖拽直发：把文件拖到主页设备列表的设备行上松手即发
+- 按设备归档：开启后收到的文件自动放入「接收目录/设备名/」
+- 应用内更新检查：有新版本时在设置页提示（不自动下载）
 - 接收端确认后再写入本地
 - 可信设备配对和设备管理
 - 可信设备自动接收只在已认证加密 session 且长期公钥匹配时生效
@@ -36,9 +44,10 @@ NekoDrop 当前先把桌面端可确认、可校验、可恢复的传输做好�
 - SHA-256 完整性校验
 - 发送和接收取消
 - 失败历史、重试和继续发送
-- partial/resume 基础
+- 断点续传：接收端基于 `.nekodrop-part` 只补传剩余字节
 - 手动资料包创建、发送和收到后暂存查看
-- macOS DMG、Windows NSIS / MSI 打包脚本
+- sidecar CLI：`plan` / `receive` / `receive-iroh` / `send` / `text`，无 UI 环境也能收发
+- macOS DMG（Apple Silicon / Intel）和 Windows NSIS 安装包发布流水线
 
 完整状态看 [docs/STATUS.md](docs/product/STATUS.md)。README 只写能从当前代码和文档里验证的能力。
 
@@ -59,10 +68,10 @@ NekoDrop 当前先把桌面端可确认、可校验、可恢复的传输做好�
 | 自动导出 session / skill / workspace | 未接入 |
 | 本机接入 local bridge | 已有协议模型、localhost runtime、权限 scope、只读 handler、设置页自测、授权码确认、限时授权持久化、授权列表、撤销、待执行动作和最近结果状态 |
 | local bridge 真实发送 / 导入执行 | 部分接入；bundle.send 可进入桌面发送主线，bundle.import 可导入本机导入区；动作状态可通过 `events.poll` 和 `actions.results` 观察 |
-| iroh / relay / P2P | 只有 transport 预留和明确错误，还没有真实运行时 |
+| iroh transport | 已接入：基于 iroh 1.3.0（QUIC + NAT 穿透 + n0 中继），桌面收件可选直连打洞或 n0 公共中继两种模式，iroh 双向流桥接为同步 TcpStream，复用既有加密 session / file frame 栈；TCP 仍是局域网默认主线 |
 | 手机端和 Agent 指令通道 | 未接入 |
 
-这几个边界很重要：现在可以说 NekoLink 的桌面基础在成形，但不能说已经支持跨公网、手机互通或远程 Agent 调用。
+这几个边界很重要：桌面传输和可选的 iroh 跨网收件已经可用，但还不能说已经支持手机互通、远程 Agent 调用或自建中继网络。中继模式下连接元数据对中继可见；CLI 的 iroh 接收不处理配对，只建议在受控环境使用。
 
 ## 适合的场景
 
@@ -76,7 +85,6 @@ NekoDrop 当前先把桌面端可确认、可校验、可恢复的传输做好�
 
 - 云盘同步
 - 远程桌面
-- 跨公网 P2P
 - 游戏联机隧道
 - 手机端互传
 - 自动同步全部配置、token、密钥或隐私目录
@@ -85,26 +93,34 @@ NekoDrop 当前先把桌面端可确认、可校验、可恢复的传输做好�
 
 ## 下载
 
-发布包放在 [GitHub Releases](https://github.com/Hisakazu333/NekoDrop/releases)。
+发布包放在 [GitHub Releases](https://github.com/Hisakazu333/NekoDrop/releases)。当前版本 v0.1.1 提供三个安装包（macOS 两种架构 + Windows）：
 
-下载后建议核对 SHA256：
+| 文件 | 适用 |
+| --- | --- |
+| `NekoDrop_0.1.1_aarch64.dmg` | MacBook（Apple Silicon） |
+| `NekoDrop_0.1.1_x64.dmg` | Intel Mac |
+| `NekoDrop_0.1.1_x64-setup.exe` | Windows 10 / 11（x64） |
+
+安装包未签名：macOS 首次打开请右键 →「打开」；Windows SmartScreen 提示时选「仍要运行」。自动更新未启用，应用内只做新版本提示。
+
+下载后建议核对 SHA256（Release 附带 `SHA256SUMS.txt`）：
 
 ```bash
-shasum -a 256 NekoDrop_0.1.0_aarch64.dmg
+shasum -a 256 NekoDrop_0.1.1_aarch64.dmg
 ```
 
 Windows 用 PowerShell：
 
 ```powershell
-Get-FileHash .\NekoDrop_0.1.0_x64-setup.exe -Algorithm SHA256
+Get-FileHash .\NekoDrop_0.1.1_x64-setup.exe -Algorithm SHA256
 ```
 
 ## 使用
 
 1. 在两台电脑上打开 NekoDrop
-2. 确认两台电脑在同一个局域网
+2. 同一局域网会自动发现附近设备；不同网络时，接收端在设置页打开跨网收件（iroh）并复制跨网连接码
 3. 在发送页选择文件或文件夹
-4. 选择附近设备，或粘贴接收端连接码
+4. 选择附近设备，或粘贴接收端连接码（含跨网连接码）
 5. 接收端确认
 6. 等待传输完成和校验通过
 
@@ -133,15 +149,19 @@ NekoDrop 已经把 Windows 文件选择脚本改成 UTF-8 输出。遇到乱码�
 
 ### 大文件能不能传
 
-可以传大文件和文件夹。当前已有扫描状态、进度、速度、历史记录、取消和 partial/resume 基础。
+可以传大文件和文件夹。当前已有扫描状态、进度、速度、历史记录、取消、暂停 / 继续断点续传和发送限速。
 
 后续还会继续打磨失败恢复，例如更清楚的重试、继续发送和备用码路径。
 
 ### 现在能不能跨网络
 
-不能。当前可用主线是同局域网 TCP。
+可以，但有边界。接收端在设置页打开「跨网收件」后会生成一张 iroh 连接码，不同网络的设备凭这张码也能发进来：
 
-iroh / relay / P2P 会作为 NekoLink transport 接入，但不会直接替换当前桌面传输主线。transport 可以换，上层的身份、session、bundle 和 local bridge 语义不能跟着变。
+- `direct`：QUIC 打洞直连，零第三方参与；部分严格 NAT 下打洞可能失败
+- `relay`：经 n0 公共中继转发，只转发密文，但连接元数据（谁在连谁）对中继可见
+- 默认 `off`；同局域网自动发现和发送仍然走 mDNS + TCP 主线
+
+跨网入口是可选的第二 transport，不替换局域网主线。transport 可以换，上层的身份、session、bundle 和 local bridge 语义不跟着变。
 
 ## 本地开发
 
@@ -204,7 +224,7 @@ release/desktop/<timestamp>/
 ```text
 apps/
   desktop/              Tauri 桌面端和 React UI
-  sidecar/              无 UI 的 CLI 接收端
+  sidecar/              无 UI 的 CLI 收发端（含 iroh 跨网接收）
 
 crates/
   nekolink-protocol/    NekoLink 协议类型、session、bundle、local bridge 模型
@@ -238,7 +258,7 @@ Adapter 边界写在 [adapter 规范](docs/dev/ADAPTER_SPEC.md)。
 
 中长期方向：
 
-- iroh / relay / P2P transport
+- 跨网 transport 深化：自建 relay 服务器、更多 NAT 场景覆盖（iroh 已作为第二 transport 接入，当前使用 n0 公共中继）
 - Android、iOS、OpenHarmony 和 Linux 客户端
 - 跨设备 Agent 节点协作
 - 应用状态和工作区在多设备之间迁移
@@ -258,7 +278,7 @@ Adapter 边界写在 [adapter 规范](docs/dev/ADAPTER_SPEC.md)。
 - 修打包脚本
 - 给已有 bug 写复现测试
 
-大功能先开 issue 或草案。特别是 bundle 导入策略、上层 adapter、local bridge 事件流、iroh / relay / P2P、手机端和 Agent 指令通道。
+大功能先开 issue 或草案。特别是 bundle 导入策略、上层 adapter、local bridge 事件流、跨网 transport 深化、手机端和 Agent 指令通道。
 
 合并前常用检查：
 

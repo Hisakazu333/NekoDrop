@@ -359,6 +359,21 @@ const {
     return () => window.clearTimeout(slowRefreshTimer);
   }, []);
 
+  // 应用内更新检查：启动后读 GitHub Releases 最新 tag，有新版本才写 updateInfo
+  // （设置页提示，不自动下载）；检查失败静默，保持「已是最新」显示。
+  useEffect(() => {
+    if (!desktopRuntime) return;
+    let active = true;
+    checkForUpdate()
+      .then((info) => {
+        if (active) setUpdateInfo(info);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [desktopRuntime]);
+
   const hasActiveTransfer = Boolean(transferStatus && shouldShowActiveTransferBar(transferStatus));
 
   useEffect(() => {
