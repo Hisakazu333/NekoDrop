@@ -4,10 +4,10 @@ import { test } from "node:test";
 
 const helpersSource = readFileSync(new URL("../src/context/helpers.ts", import.meta.url), "utf8");
 const contextSource = readFileSync(new URL("../src/context/AppContext.tsx", import.meta.url), "utf8");
-const bannerSource = readFileSync(new URL("../src/components/TransferBanner.tsx", import.meta.url), "utf8");
+const bannerSource = readFileSync(new URL("../src/components/TransferPanel.tsx", import.meta.url), "utf8");
 const historySource = readFileSync(new URL("../src/components/HistoryView.tsx", import.meta.url), "utf8");
 const devicesSource = readFileSync(new URL("../src/components/DevicesView.tsx", import.meta.url), "utf8");
-const sidebarSource = readFileSync(new URL("../src/components/Sidebar.tsx", import.meta.url), "utf8");
+const sidebarSource = readFileSync(new URL("../src/components/HomeView.tsx", import.meta.url), "utf8");
 const rustHistory = readFileSync(new URL("../src-tauri/src/commands/history.rs", import.meta.url), "utf8");
 const rustDevices = readFileSync(new URL("../src-tauri/src/commands/devices.rs", import.meta.url), "utf8");
 const rustStore = readFileSync(new URL("../src-tauri/src/trusted_devices.rs", import.meta.url), "utf8");

@@ -3,7 +3,7 @@ export type BusyMode =
   | "stop-receive" | "receive-policy" | "device-name" | "cancel-transfer" | "pair"
   | "forget" | "history" | "resend" | "bundle-import" | "open";
 
-export type ComposerMode = "overview" | "send" | "receive" | "devices" | "transfers" | "settings";
+export type ComposerMode = "overview" | "home" | "send" | "receive" | "devices" | "transfers" | "settings";
 export type AppearanceMode = "light" | "dark";
 export type ReceivePolicyMode = "always_ask" | "block_all";
 
