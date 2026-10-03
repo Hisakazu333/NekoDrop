@@ -22,8 +22,10 @@ struct PersistedAppConfig {
 pub fn load_app_config(device_name: &str) -> Result<AppConfig, String> {
     let path = app_config_file_path()?;
     if !path.exists() {
-        let mut config = AppConfig::default();
-        config.device_name = device_name.to_string();
+        let config = AppConfig {
+            device_name: device_name.to_string(),
+            ..AppConfig::default()
+        };
         return Ok(config);
     }
 
@@ -43,11 +45,16 @@ fn app_config_from_json(device_name: &str, content: &str) -> Result<AppConfig, S
         ));
     }
 
-    let mut config = AppConfig::default();
-    config.device_name = device_name.to_string();
-    if !persisted.receive_dir.trim().is_empty() {
-        config.receive_dir = persisted.receive_dir;
-    }
+    let default_config = AppConfig::default();
+    let mut config = AppConfig {
+        device_name: device_name.to_string(),
+        receive_dir: if persisted.receive_dir.trim().is_empty() {
+            default_config.receive_dir
+        } else {
+            persisted.receive_dir
+        },
+        ..default_config
+    };
     config.receive_port = persisted
         .receive_port
         .filter(|port| *port > 0)

@@ -1,7 +1,7 @@
+use nekodrop_core::now_ms;
 use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use nekodrop_core::{Device, DevicePlatform};
 use nekolink_protocol::{DeviceIdentity, DeviceIdentityPublicKey};
@@ -107,6 +107,7 @@ pub fn pairing_code_for_device(local_identity: &DeviceIdentity, device: &Device)
     ))
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn trusted_device_record_from_remote(
     local_identity: &DeviceIdentity,
     device_id: String,
@@ -317,13 +318,6 @@ fn platform_to_string(platform: DevicePlatform) -> &'static str {
         DevicePlatform::Linux => "linux",
         DevicePlatform::Unknown => "unknown",
     }
-}
-
-fn now_ms() -> u128 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

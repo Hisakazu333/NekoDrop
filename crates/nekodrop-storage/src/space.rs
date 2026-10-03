@@ -59,7 +59,7 @@ fn available_space(path: &Path) -> NekoDropResult<u64> {
         )));
     }
     let stats = unsafe { stats.assume_init() };
-    Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize as u64))
+    Ok((stats.f_bavail as u64).saturating_mul(stats.f_frsize))
 }
 
 #[cfg(windows)]

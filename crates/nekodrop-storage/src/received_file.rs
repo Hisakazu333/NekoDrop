@@ -82,6 +82,7 @@ where
     )
 }
 
+#[allow(clippy::too_many_arguments)] // _at 参数化测试辅助的既有签名风格
 pub fn write_received_file_with_resume_and_cancel<R, F, C>(
     receive_dir: &Path,
     manifest_path: &str,
@@ -179,7 +180,7 @@ where
         if should_cancel() {
             // Keep the partial on disk so a later attempt can resume from it,
             // matching the early-EOF behavior below.
-            return Err(NekoDropError::Storage("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
 
         let max_read = remaining.min(buffer.len() as u64) as usize;
@@ -204,7 +205,7 @@ where
         on_progress(bytes_written);
 
         if should_cancel() {
-            return Err(NekoDropError::Storage("transfer cancelled".into()));
+            return Err(NekoDropError::TransferCancelled);
         }
     }
 

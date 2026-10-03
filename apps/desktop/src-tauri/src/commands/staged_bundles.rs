@@ -116,6 +116,7 @@ pub(super) fn delete_staged_bundle_at(
     delete_staged_bundle_storage(staging_root, bundle_id).map_err(|error| error.to_string())
 }
 
+#[cfg(test)]
 pub(super) fn import_staged_bundle_at(
     staging_root: &Path,
     import_root: &Path,

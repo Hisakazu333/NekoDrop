@@ -348,7 +348,7 @@ mod tests {
         fs::write(root.join("hello.txt"), b"hello nekodrop").unwrap();
         fs::write(root.join("nested").join("data.bin"), b"abc").unwrap();
 
-        let manifest = create_manifest_from_paths(&[root.clone()]).unwrap();
+        let manifest = create_manifest_from_paths(std::slice::from_ref(&root)).unwrap();
 
         assert_eq!(manifest.root_name, "drop");
         assert_eq!(manifest.file_count(), 2);

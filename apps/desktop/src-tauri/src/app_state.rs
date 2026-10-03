@@ -1,3 +1,4 @@
+use nekodrop_core::now_ms;
 use std::collections::HashMap;
 use std::sync::{atomic::AtomicBool, Arc, Condvar, Mutex};
 use std::time::Instant;
@@ -289,11 +290,4 @@ impl Default for AppState {
     fn default() -> Self {
         Self::new().expect("failed to initialize NekoDrop app state")
     }
-}
-
-fn now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|duration| duration.as_millis())
-        .unwrap_or_default()
 }
