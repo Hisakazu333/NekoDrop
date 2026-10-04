@@ -2341,6 +2341,48 @@ mod tests {
         );
     }
 
+    // 修正 auto-round-1 提交信息里的静态论断：finish() 的总长校验（本文件
+    // `encrypted file payload size mismatch` 分支）并非"在公开接收路径上不可达"。
+    // next_frame_offset 以外层 FileFrameHeader.offset 初始化且 read_header 不校验
+    // offset <= size：对端发 offset > size 的外层头时，drain 循环立即退出
+    // （load_next_plaintext_chunk 直接返回 false，read 返回 0），finish() 的
+    // 总长校验随即触发。该分支由恶意/损坏外层头经公开接收路径可达，此测试钉住它。
+    #[test]
+    fn encrypted_file_frames_reject_outer_header_offset_over_declared_size() {
+        let keys = SessionKeyMaterial {
+            send_key: [65_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [65_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut stream = Cursor::new(Vec::new());
+        stream.write_all(&1_u32.to_be_bytes()).unwrap();
+        write_header(
+            &mut stream,
+            &FileFrameHeader {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 8,
+                sha256: "sha256-placeholder".to_string(),
+                offset: 9,
+            },
+        )
+        .unwrap();
+        stream.set_position(0);
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            read_encrypted_payload_to_vec,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("encrypted file payload size mismatch"),
+            "outer header with offset > size must fail finish() on the public receive path: {error}"
+        );
+    }
+
     fn seal_encrypted_chunk(
         keys: &SessionKeyMaterial,
         counters: &mut nekolink_protocol::SessionTrafficCounters,

@@ -62,10 +62,10 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - 接收端改成 streaming 解密，不再为单文件完整 payload 分配内存。
 - storage 按普通 reader 写入文件，network 层按需读取和解密 encrypted file frames。
 - encrypted frame 的 path、offset、AAD 篡改仍会失败。
+- encrypted file frame 已补齐接收路径的乱序、重放、截断和超长 chunk 测试。
 
 后续范围：
 
-- 给 encrypted file frame 增加更完整的乱序、截断和重放测试。
 - 明确 legacy plain file stream 的兼容策略和迁移策略。
 - checksum 继续作为落盘后的完整性校验。
 
@@ -80,12 +80,12 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 - 桌面端持久化 Ed25519 signing seed。
 - `session.ready` 后交换 signed `session.identity`。
 - 验签失败或可信设备 public key 不匹配会拒绝 session。
+- device_identity 跨版本迁移和异常路径测试已覆盖。
 
 后续范围：
 
 - key rotation 和撤销策略。
 - macOS Keychain / Windows Credential Manager 或 DPAPI。
-- 更多跨版本迁移和异常路径测试。
 - legacy plain 兼容路径继续收窄。
 
 完成标准：
