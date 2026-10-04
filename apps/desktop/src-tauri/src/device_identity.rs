@@ -410,6 +410,109 @@ mod tests {
     }
 
     #[test]
+    fn migration_passes_current_schema_through_untouched() {
+        let identity = new_device_identity().unwrap();
+        let seed_before = identity.signing_seed_hex.clone();
+        let fingerprint_before = identity.public_key_fingerprint.clone();
+
+        let migrated = migrate_persisted_identity(identity).unwrap();
+
+        assert_eq!(migrated.signing_seed_hex, seed_before);
+        assert_eq!(migrated.public_key_fingerprint, fingerprint_before);
+    }
+
+    #[test]
+    fn migration_rejects_unsupported_future_schema_version() {
+        let mut future = new_device_identity().unwrap();
+        future.schema_version = IDENTITY_SCHEMA_VERSION + 1;
+
+        let error = migrate_persisted_identity(future).unwrap_err();
+
+        assert!(error.contains("不支持的设备身份版本"));
+    }
+
+    #[test]
+    fn migration_rotates_signing_key_but_keeps_device_id_stable() {
+        let mut legacy = new_device_identity().unwrap();
+        legacy.schema_version = LEGACY_IDENTITY_SCHEMA_VERSION;
+        legacy.signing_seed_hex = String::new();
+        let device_id = legacy.device_id.clone();
+        let fingerprint_before = legacy.public_key_fingerprint.clone();
+
+        let migrated = migrate_persisted_identity(legacy).unwrap();
+
+        assert_eq!(migrated.device_id, device_id);
+        assert_ne!(
+            migrated.public_key_fingerprint, fingerprint_before,
+            "v1→v2 migration must pair the rotated seed with a fresh fingerprint"
+        );
+    }
+
+    #[test]
+    fn validation_rejects_fingerprint_that_does_not_match_signing_seed() {
+        let mut tampered = new_device_identity().unwrap();
+        let other = new_device_identity().unwrap();
+        tampered.public_key_fingerprint = other.public_key_fingerprint;
+
+        let error = validate_persisted_identity(&tampered).unwrap_err();
+
+        assert!(error.contains("设备身份签名密钥与 fingerprint 不匹配"));
+    }
+
+    #[test]
+    fn validation_rejects_invalid_signing_seed_material() {
+        // 64 字符先通过长度检查，才能触达 hex 解码分支。
+        let mut non_hex = new_device_identity().unwrap();
+        non_hex.signing_seed_hex = "z".repeat(64);
+        assert!(validate_persisted_identity(&non_hex)
+            .unwrap_err()
+            .contains("不是 hex"));
+
+        let mut wrong_length = new_device_identity().unwrap();
+        wrong_length.signing_seed_hex = "aabb".to_string();
+        assert!(validate_persisted_identity(&wrong_length)
+            .unwrap_err()
+            .contains("长度无效"));
+    }
+
+    #[test]
+    fn validation_rejects_missing_required_fields() {
+        let mut missing_id = new_device_identity().unwrap();
+        missing_id.device_id = "  ".to_string();
+        assert!(validate_persisted_identity(&missing_id)
+            .unwrap_err()
+            .contains("缺少 device_id"));
+
+        let mut missing_name = new_device_identity().unwrap();
+        missing_name.device_name = String::new();
+        assert!(validate_persisted_identity(&missing_name)
+            .unwrap_err()
+            .contains("缺少 device_name"));
+
+        let mut missing_fingerprint = new_device_identity().unwrap();
+        missing_fingerprint.public_key_fingerprint = String::new();
+        assert!(validate_persisted_identity(&missing_fingerprint)
+            .unwrap_err()
+            .contains("缺少 public_key_fingerprint"));
+
+        let mut bad_secret_seed = new_device_identity().unwrap();
+        bad_secret_seed.secret_seed_hex = "aabb".to_string();
+        assert!(validate_persisted_identity(&bad_secret_seed)
+            .unwrap_err()
+            .contains("密钥种子长度无效"));
+    }
+
+    #[test]
+    fn validation_rejects_schema_versions_other_than_current() {
+        let mut legacy = new_device_identity().unwrap();
+        legacy.schema_version = LEGACY_IDENTITY_SCHEMA_VERSION;
+
+        let error = validate_persisted_identity(&legacy).unwrap_err();
+
+        assert!(error.contains("不支持的设备身份版本"));
+    }
+
+    #[test]
     fn desktop_identity_advertises_implemented_desktop_capabilities() {
         let capabilities = desktop_capabilities();
 

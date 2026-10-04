@@ -167,7 +167,7 @@ fn run_receive_iroh(args: &[String]) -> Result<(), String> {
 }
 
 fn run_send(args: &[String]) -> Result<(), String> {
-    let (args, limit_kbps) = split_limit_flag(args);
+    let (args, limit_kbps) = split_limit_flag(args)?;
     if args.len() < 2 {
         print_usage();
         return Err("send requires <host:port> <path> [path...] [--limit <KB/s>]".into());
@@ -196,7 +196,7 @@ fn run_send(args: &[String]) -> Result<(), String> {
 }
 
 fn run_text(args: &[String]) -> Result<(), String> {
-    let (args, limit_kbps) = split_limit_flag(args);
+    let (args, limit_kbps) = split_limit_flag(args)?;
     if args.len() < 2 {
         print_usage();
         return Err("text requires <host:port|connection-code> <text...> [--limit <KB/s>]".into());
@@ -236,20 +236,24 @@ fn stage_pacer(limit_kbps: u32) -> SendPacer {
 }
 
 /// 从参数中提取 `--limit <KB/s>`（可出现在任意位置），返回 (剩余参数, 限速)。
-fn split_limit_flag(args: &[String]) -> (Vec<String>, u32) {
+/// `--limit` 缺值或值不是非负整数时显式报错，避免把显式限速静默降级为不限速。
+fn split_limit_flag(args: &[String]) -> Result<(Vec<String>, u32), String> {
     let mut rest = Vec::with_capacity(args.len());
     let mut limit = 0_u32;
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {
         if arg == "--limit" {
-            if let Some(value) = iter.next() {
-                limit = value.parse().unwrap_or(0);
-            }
+            let Some(value) = iter.next() else {
+                return Err("--limit requires a KB/s value, e.g. --limit 1024".into());
+            };
+            limit = value.parse().map_err(|_| {
+                format!("--limit expects a non-negative integer KB/s value, got: {value}")
+            })?;
         } else {
             rest.push(arg.clone());
         }
     }
-    (rest, limit)
+    Ok((rest, limit))
 }
 
 fn parse_endpoint_or_connection_code(value: &str) -> Result<Endpoint, String> {
@@ -277,4 +281,89 @@ fn print_usage() {
          nekodrop-sidecar send <host:port|connection-code> <path> [path...] [--limit <KB/s>]\n\
          nekodrop-sidecar text <host:port|connection-code> <text...> [--limit <KB/s>]"
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nekodrop_network::ConnectionTicket;
+
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| value.to_string()).collect()
+    }
+
+    #[test]
+    fn split_limit_flag_keeps_position_independent_limit() {
+        let (rest, limit) = split_limit_flag(&args(&["--limit", "2048", "host:1", "a"])).unwrap();
+        assert_eq!(limit, 2048);
+        assert_eq!(rest, args(&["host:1", "a"]));
+
+        let (rest, limit) = split_limit_flag(&args(&["host:1", "--limit", "8", "a"])).unwrap();
+        assert_eq!(limit, 8);
+        assert_eq!(rest, args(&["host:1", "a"]));
+    }
+
+    #[test]
+    fn split_limit_flag_defaults_to_unlimited_without_flag() {
+        let (rest, limit) = split_limit_flag(&args(&["host:1", "a"])).unwrap();
+        assert_eq!(limit, 0);
+        assert_eq!(rest, args(&["host:1", "a"]));
+    }
+
+    #[test]
+    fn split_limit_flag_keeps_explicit_zero_as_unlimited() {
+        let (rest, limit) = split_limit_flag(&args(&["--limit", "0", "host:1"])).unwrap();
+        assert_eq!(limit, 0);
+        assert_eq!(rest, args(&["host:1"]));
+    }
+
+    #[test]
+    fn split_limit_flag_uses_last_value_when_repeated() {
+        let (rest, limit) =
+            split_limit_flag(&args(&["--limit", "8", "--limit", "16", "host:1"])).unwrap();
+        assert_eq!(limit, 16);
+        assert_eq!(rest, args(&["host:1"]));
+    }
+
+    #[test]
+    fn split_limit_flag_rejects_missing_value_instead_of_silently_unlimiting() {
+        let error = split_limit_flag(&args(&["host:1", "--limit"])).unwrap_err();
+        assert!(error.contains("--limit requires a KB/s value"));
+    }
+
+    #[test]
+    fn split_limit_flag_rejects_non_numeric_value_instead_of_silently_unlimiting() {
+        let error = split_limit_flag(&args(&["host:1", "--limit", "fast"])).unwrap_err();
+        assert!(error.contains("--limit expects a non-negative integer"));
+
+        let error = split_limit_flag(&args(&["host:1", "--limit", "-5"])).unwrap_err();
+        assert!(error.contains("--limit expects a non-negative integer"));
+    }
+
+    #[test]
+    fn parse_endpoint_accepts_host_port() {
+        let endpoint = parse_endpoint_or_connection_code("192.168.1.9:48123").unwrap();
+        assert_eq!(endpoint, Endpoint::tcp("192.168.1.9", 48123));
+    }
+
+    #[test]
+    fn parse_endpoint_rejects_missing_or_invalid_port() {
+        assert!(parse_endpoint_or_connection_code("192.168.1.9")
+            .unwrap_err()
+            .contains("endpoint must be <host:port>"));
+        assert!(parse_endpoint_or_connection_code("192.168.1.9:notaport")
+            .unwrap_err()
+            .contains("invalid endpoint port"));
+    }
+
+    #[test]
+    fn parse_endpoint_routes_connection_code_prefix_to_ticket_parser() {
+        let endpoint = Endpoint::tcp("127.0.0.1", 48123);
+        let code = ConnectionTicket::new(endpoint.clone())
+            .unwrap()
+            .to_code()
+            .unwrap();
+        let parsed = parse_endpoint_or_connection_code(&code).unwrap();
+        assert_eq!(parsed, endpoint);
+    }
 }

@@ -1632,7 +1632,7 @@ fn protocol_error_to_network(error: ProtocolError) -> NekoDropError {
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::io::{Cursor, Read};
+    use std::io::{Cursor, Read, Write};
     use std::net::{TcpListener, TcpStream};
     use std::path::PathBuf;
     use std::thread;
@@ -2176,6 +2176,267 @@ mod tests {
         assert_eq!(first_read_len, vec![16]);
 
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn encrypted_file_frames_reject_out_of_order_chunk() {
+        let keys = SessionKeyMaterial {
+            send_key: [61_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [61_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut counters = nekolink_protocol::SessionTrafficCounters::default();
+        let first = seal_encrypted_chunk(
+            &keys,
+            &mut counters,
+            "transfer-order",
+            "drop/sample.txt",
+            0,
+            b"one ",
+        );
+        let second = seal_encrypted_chunk(
+            &keys,
+            &mut counters,
+            "transfer-order",
+            "drop/sample.txt",
+            4,
+            b"two!",
+        );
+        let mut stream = Cursor::new(Vec::new());
+        write_single_file_stream(&mut stream, "drop/sample.txt", 8, &[second, first]);
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            read_encrypted_payload_to_vec,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("encrypted file frame offset mismatch"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn encrypted_file_frames_reject_replayed_chunk() {
+        let keys = SessionKeyMaterial {
+            send_key: [62_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [62_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut counters = nekolink_protocol::SessionTrafficCounters::default();
+        let first = seal_encrypted_chunk(
+            &keys,
+            &mut counters,
+            "transfer-replay",
+            "drop/sample.txt",
+            0,
+            b"one ",
+        );
+        let second = seal_encrypted_chunk(
+            &keys,
+            &mut counters,
+            "transfer-replay",
+            "drop/sample.txt",
+            4,
+            b"two!",
+        );
+        let mut stream = Cursor::new(Vec::new());
+        write_single_file_stream(
+            &mut stream,
+            "drop/sample.txt",
+            8,
+            &[first.clone(), first, second],
+        );
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            read_encrypted_payload_to_vec,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("encrypted file frame offset mismatch"),
+            "replayed frame must be rejected by offset sequencing: {error}"
+        );
+    }
+
+    #[test]
+    fn encrypted_file_frames_reject_truncated_payload() {
+        let keys = SessionKeyMaterial {
+            send_key: [63_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [63_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut counters = nekolink_protocol::SessionTrafficCounters::default();
+        let first = seal_encrypted_chunk(
+            &keys,
+            &mut counters,
+            "transfer-truncated",
+            "drop/sample.txt",
+            0,
+            b"one ",
+        );
+        let mut stream = Cursor::new(Vec::new());
+        write_single_file_stream(&mut stream, "drop/sample.txt", 8, &[first]);
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            |_, reader| {
+                let mut chunk = [0_u8; 4];
+                reader.read_exact(&mut chunk).map_err(|error| {
+                    NekoDropError::Network(format!("failed to read chunk: {error}"))
+                })?;
+                Ok(chunk.to_vec())
+            },
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to drain encrypted file payload"),
+            "truncated stream must be caught before finish() succeeds: {error}"
+        );
+    }
+
+    #[test]
+    fn encrypted_file_frames_reject_chunk_over_declared_size() {
+        let keys = SessionKeyMaterial {
+            send_key: [64_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [64_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut counters = nekolink_protocol::SessionTrafficCounters::default();
+        let oversized = seal_encrypted_chunk(
+            &keys,
+            &mut counters,
+            "transfer-oversize",
+            "drop/sample.txt",
+            0,
+            b"12345678",
+        );
+        let mut stream = Cursor::new(Vec::new());
+        write_single_file_stream(&mut stream, "drop/sample.txt", 4, &[oversized]);
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            read_encrypted_payload_to_vec,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("encrypted file payload exceeds declared size"),
+            "unexpected error: {error}"
+        );
+    }
+
+    // 修正 auto-round-1 提交信息里的静态论断：finish() 的总长校验（本文件
+    // `encrypted file payload size mismatch` 分支）并非"在公开接收路径上不可达"。
+    // next_frame_offset 以外层 FileFrameHeader.offset 初始化且 read_header 不校验
+    // offset <= size：对端发 offset > size 的外层头时，drain 循环立即退出
+    // （load_next_plaintext_chunk 直接返回 false，read 返回 0），finish() 的
+    // 总长校验随即触发。该分支由恶意/损坏外层头经公开接收路径可达，此测试钉住它。
+    #[test]
+    fn encrypted_file_frames_reject_outer_header_offset_over_declared_size() {
+        let keys = SessionKeyMaterial {
+            send_key: [65_u8; SESSION_TRAFFIC_KEY_LEN],
+            receive_key: [65_u8; SESSION_TRAFFIC_KEY_LEN],
+        };
+        let mut stream = Cursor::new(Vec::new());
+        stream.write_all(&1_u32.to_be_bytes()).unwrap();
+        write_header(
+            &mut stream,
+            &FileFrameHeader {
+                manifest_path: "drop/sample.txt".to_string(),
+                size: 8,
+                sha256: "sha256-placeholder".to_string(),
+                offset: 9,
+            },
+        )
+        .unwrap();
+        stream.set_position(0);
+
+        let error = receive_encrypted_file_frames_with_expected_count(
+            &mut stream,
+            1,
+            &keys,
+            read_encrypted_payload_to_vec,
+        )
+        .unwrap_err();
+
+        assert!(
+            error
+                .to_string()
+                .contains("encrypted file payload size mismatch"),
+            "outer header with offset > size must fail finish() on the public receive path: {error}"
+        );
+    }
+
+    fn seal_encrypted_chunk(
+        keys: &SessionKeyMaterial,
+        counters: &mut nekolink_protocol::SessionTrafficCounters,
+        transfer_id: &str,
+        manifest_path: &str,
+        offset: u64,
+        plaintext: &[u8],
+    ) -> EncryptedFileFrame {
+        let traffic = counters
+            .next_send_header(SESSION_CIPHER_XCHACHA20POLY1305, SessionFrameKind::File)
+            .unwrap();
+        let header = EncryptedFileFrameHeader::new(
+            transfer_id,
+            manifest_path,
+            offset,
+            plaintext.len() as u64,
+            traffic,
+        )
+        .unwrap();
+        EncryptedFileFrame::seal(keys, header, plaintext).unwrap()
+    }
+
+    fn write_single_file_stream(
+        stream: &mut Cursor<Vec<u8>>,
+        manifest_path: &str,
+        size: u64,
+        frames: &[EncryptedFileFrame],
+    ) {
+        stream.write_all(&1_u32.to_be_bytes()).unwrap();
+        write_header(
+            stream,
+            &FileFrameHeader {
+                manifest_path: manifest_path.to_string(),
+                size,
+                sha256: "sha256-placeholder".to_string(),
+                offset: 0,
+            },
+        )
+        .unwrap();
+        for frame in frames {
+            write_encrypted_file_frame(stream, frame).unwrap();
+        }
+        stream.set_position(0);
+    }
+
+    fn read_encrypted_payload_to_vec(
+        _: &FileFrameHeader,
+        reader: &mut dyn Read,
+    ) -> NekoDropResult<Vec<u8>> {
+        let mut plaintext = Vec::new();
+        reader
+            .read_to_end(&mut plaintext)
+            .map_err(|error| NekoDropError::Network(format!("failed to read chunk: {error}")))?;
+        Ok(plaintext)
     }
 
     #[test]
