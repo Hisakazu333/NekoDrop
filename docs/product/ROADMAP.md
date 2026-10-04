@@ -47,8 +47,7 @@ NekoDrop 已经有一个可用的 macOS / Windows 桌面互传主线：
 
 - legacy plain file stream 的迁移或拒绝策略继续收口
 - key rotation、OS keychain / credential-manager 存储和跨平台身份策略
-- iroh runtime
-- relay server
+- 自建 relay server（n0 公共中继已随 iroh transport 接入）
 - Agent command
 - 真实上层应用自动导出 / 导入 skills、session、workspace
 - 手机端互通
@@ -164,17 +163,22 @@ local application
 
 ## transport：iroh / Relay / P2P
 
-iroh 应该作为 NekoLink transport 接入，而不是直接替换 NekoDrop 的 TCP 代码。
+iroh 已作为第二 transport 接入 `nekodrop-network` 的 transport 抽象（[iroh_transport.rs](../../crates/nekodrop-network/src/iroh_transport.rs)，基于 iroh 1.3.0）。接入方式是桥接而不是替换：iroh 双向流桥接为同步 TcpStream，TCP 仍是局域网默认主线，上层协议栈原样复用。
 
-顺序：
+已经接入：
 
-1. 调整 transport trait，支持 async stream / bidirectional stream。
-2. 保持 TCP transport 为默认稳定路径。
-3. 新增实验 `IrohTransport`。
-4. 绑定 device_id 与 iroh public key / endpoint id。
-5. 在 iroh stream 上跑现有 NekoLink envelope。
-6. 在 iroh stream 上跑文件流。
-7. P2P 失败时再考虑 relay fallback。
+- transport 抽象按 `TransportKind` 分发 TCP / iroh，`Endpoint` 支持 iroh node id、relay url 和直连地址列表。
+- 接收端两种模式：纯直连（QUIC + NAT 穿透，禁中继）和 n0 公共中继。
+- 桌面收件按设置 `off` / `direct` / `relay` 启动 iroh 收件，并生成独立的 `transport=iroh` 连接码，与 TCP 收件共用同一入站处理体。
+- sidecar 提供 `receive-iroh`（不做配对确认，仅建议受控环境使用）。
+- iroh 全链路已有 service 层 e2e 测试（连接码 → 发送 → 接收落盘 + SHA-256 校验）。
+
+仍未完成：
+
+- device_id 与 iroh node id 的显式绑定：当前 iroh node id 只用于传输寻址，身份校验仍走既有 session identity 栈。
+- 自建 relay server：relay 模式当前依赖 n0 公共中继。
+- 更多真实 NAT / 网络环境下的实机验证和跨网收件体验收口。
+- iroh 之外的独立 P2P transport。
 
 完成标准：
 
