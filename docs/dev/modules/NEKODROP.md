@@ -72,13 +72,14 @@ NekoDrop 不应该承载所有生态功能，也不应该把 OpenNeko Agent、Ne
 - 接收目录
 - macOS DMG 打包
 - Win11 NSIS / MSI 打包脚本
+- 加密 session（桌面主线，含签名身份绑定；key rotation 仍待接入）
+- iroh 跨网收件（QUIC + NAT 穿透，直连 / n0 公共中继——仅转发密文，连接元数据对中继可见；独立 iroh 连接码）
 
 待接入：
 
-- 加密 session
 - 断点续传完整产品流程
 - 手机端接入
-- iroh / Relay / P2P
+- 自建 Relay 和 iroh 之外的 P2P
 - OpenNeko Agent 指令通道
 - NekoState 状态同步
 

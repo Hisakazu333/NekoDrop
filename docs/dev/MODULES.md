@@ -2,7 +2,7 @@
 
 This document defines how the NekoDrop repository is divided. It is intended for contributors and maintainers.
 
-The current repository contains the NekoDrop desktop product and the early NekoLink protocol code used by that product. Long-term OpenNeko, NekoState, mobile, Relay, and iroh work may integrate with this code later, but those areas should not be mixed into the desktop file transfer path before they are implemented.
+The current repository contains the NekoDrop desktop product and the early NekoLink protocol code used by that product. iroh is already integrated as a second transport inside `nekodrop-network` (see [STATUS.md](../product/STATUS.md)); long-term OpenNeko, NekoState, mobile, and self-hosted Relay work may integrate with this code later, but those areas should not be mixed into the desktop file transfer path before they are implemented.
 
 ## Layers
 
@@ -17,13 +17,13 @@ NekoDrop Storage
   Manifest creation, checksum, safe receive paths, partial files, and resume state
 
 NekoDrop Network
-  TCP file frames, connection codes, discovery, transport abstraction
+  TCP file frames, iroh transport, connection codes, discovery, transport abstraction
 
 NekoLink Protocol
   Message envelope, device identity, encrypted session, replay window, bundle and bridge models
 
 Future Integrations
-  iroh, Relay, mobile apps, NekoState, OpenNeko Agent channels
+  self-hosted relay server, mobile apps, NekoState, OpenNeko Agent channels
 ```
 
 ## Current Repository Strategy
@@ -46,7 +46,7 @@ Until then, keep NekoLink code isolated in `crates/nekolink-protocol` and keep p
 | `apps/desktop` | React UI, desktop interaction, Tauri IPC calls | Protocol rules, file hashing, transport internals |
 | `apps/desktop/src-tauri` | Tauri command handlers, app state, persisted config, device/history stores | Core protocol definitions |
 | `crates/nekolink-protocol` | Envelope, message kinds, capabilities, device identity payloads, encrypted session payloads, replay window, encrypted file frame headers, bundle and local bridge JSON models | TCP sockets, files, UI, Tauri |
-| `crates/nekodrop-network` | Endpoint parsing, connection code, TCP transport, encrypted/plain file frames, discovery models | UI state, receive directory policy |
+| `crates/nekodrop-network` | Endpoint parsing, connection code, TCP transport, iroh transport (direct / n0 public relay, bridged to a synchronous TcpStream), encrypted/plain file frames, discovery models | UI state, receive directory policy |
 | `crates/nekodrop-storage` | Manifest building, SHA-256, safe receive paths, partial files, resume plan inspection, bundle detection and staging | TCP streams, device pairing |
 | `crates/nekodrop-service` | Product workflows built from protocol, network, and storage; send/receive; pairing; staged bundle reports; local bridge handler skeleton | Rendering, component layout |
 | `apps/sidecar` | CLI/sidecar experiments and diagnostics | Main desktop UX |
@@ -81,7 +81,7 @@ The UI and README can only present a feature as available when it is backed by i
 Examples:
 
 - If TCP transfer is implemented, document it as implemented.
-- If iroh has only placeholder types, document it as experimental or planned.
+- If a transport has only placeholder types, document it as experimental or planned.
 - If mobile support is only a future integration target, document it as planned.
 - If OpenNeko Agent messages are reserved in the protocol but not wired into the product, document them as planned.
 
@@ -95,6 +95,7 @@ Implemented in the current desktop path:
 - SHA-256 verification
 - transfer offer / accept / decline
 - TCP file transfer
+- iroh transport for cross-network receiving (QUIC + NAT traversal, direct, or n0 public relay mode — the relay forwards ciphertext only and connection metadata is visible to it), including the `transport=iroh` connection code and sidecar `receive-iroh`
 - TCP partial offset resume foundation
 - send and receive progress
 - send and receive cancellation
@@ -115,8 +116,7 @@ Experimental or planned:
 
 - key rotation and OS keychain / credential-manager storage
 - legacy plain transfer migration or retirement policy
-- iroh transport
-- Relay / P2P transport
+- self-hosted relay server (the n0 public relay is already reachable through iroh) and P2P transports beyond iroh
 - mobile main flow
 - NekoState synchronization
 - OpenNeko Agent command channel
