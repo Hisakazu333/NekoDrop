@@ -103,20 +103,22 @@ Agent 又提前接进来
 - file offer 走统一 Envelope
 - file decision 走统一 Envelope
 - transport error model
+- iroh transport 技术验证（QUIC + NAT 穿透，直连 / n0 公共中继——仅转发密文，连接元数据对中继可见；v0.1.1 已接入）
 
 待补齐：
 
 - capability negotiation
-- iroh 技术验证
-- relay 技术验证
+- 自建 relay 技术验证
 
 验收：
 
 - 当前 TCP 文件传输不退化。
 - 发送逻辑不直接依赖 connection code。
-- 后续 iroh 可以作为新 transport 接入。
+- iroh 已作为新 transport 接入且 TCP 主线不退化。
 
 ## V0.8 Encrypted Session
+
+进度：桌面主线已接入加密 control 与 file frames、签名身份绑定（v0.1.1）；key rotation、OS keychain 存储仍未做。
 
 主模块：
 
@@ -217,6 +219,8 @@ Agent 又提前接进来
 - 手机端权限失败有明确提示。
 
 ## V1.2 iroh Transport
+
+进度：iroh key / endpoint / stream、peer dialing、n0 公共中继 fallback 和 transport selection 已随 iroh transport 接入（v0.1.1）；自建 relay 和更多真实 NAT 场景实机验证仍未做。
 
 主模块：
 
@@ -348,8 +352,9 @@ Agent 又提前接进来
 3. 点设备发送
 4. Trusted Pairing
 5. Transport Abstraction
-6. Encrypted Session
 ```
+
+Encrypted Session 桌面主线已接入（v0.1.1）；剩余的 key rotation、OS keychain 存储见 V0.8 进度。
 
 当前不进入版本范围：
 

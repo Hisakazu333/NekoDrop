@@ -50,7 +50,9 @@ Bluetooth / USB transport
 - `TransportKind`
 - `Endpoint`
 - `TcpTransport`
-- iroh / QUIC / Relay transport 的明确未接入错误
+- iroh transport（`iroh_transport`：QUIC + NAT 穿透，直连 / n0 公共中继——仅转发密文，连接元数据对中继可见；桥接为同步 TcpStream）
+- QUIC / Relay 等未接入 transport 的明确错误
+- encrypted session（桌面主线已接入加密 control 和 file frames；key rotation、OS keychain 存储仍待接入）
 
 待接入：
 
@@ -58,9 +60,7 @@ Bluetooth / USB transport
 - `nekolink-pairing`
 - `nekolink-session`
 - `nekolink-transport`
-- iroh runtime transport
-- encrypted session
-- relay fallback
+- 自建 relay fallback（n0 公共中继已随 iroh transport 接入）
 
 ## 3. 建议 crate 拆分
 
@@ -170,12 +170,12 @@ connect_endpoint(endpoint)
 
 ```text
 tcp
+iroh
 ```
 
 已预留但会返回明确错误：
 
 ```text
-iroh
 quic
 relay
 ```
@@ -198,11 +198,13 @@ NekoLinkTransport
 TcpConnectionCodeTransport
 ```
 
-后续 iroh 也是一个 transport：
+iroh 已接入为第二个 transport：
 
 ```text
 IrohTransport
 ```
+
+实现见 `crates/nekodrop-network/src/iroh_transport.rs`：接收端支持纯直连（禁中继）和 n0 公共中继两种模式，双向流桥接为同步 TcpStream，上层加密 session / 文件帧栈原样复用。
 
 上层 NekoDrop 只依赖：
 
@@ -213,6 +215,8 @@ NekoLinkTransport
 不能依赖具体 TCP 或 iroh 细节。
 
 ## 5. iroh 切换路径
+
+进度：Step 1-3 和 Step 5 已随 iroh transport 接入完成（TCP 已包进 transport 抽象，iroh endpoint 自带 keypair，iroh stream 已跑当前文件帧，有 service 层 e2e 测试）；Step 4 的 device_id 与 iroh public key 显式绑定、Step 6-7（iroh 成为默认、TCP 降级为 fallback）仍未做。
 
 不要一次性把 TCP 删除。
 
